@@ -154,49 +154,61 @@ entity: sensor.wrtsensor_network_scanner
 title: DNS Cache
 ```
 
-### Host stats graphs
+### `history-graph` — CPU
 
-Per-host CPU / RAM / Disk use HA's built-in `history-graph` and `entities` cards — no custom card needed. Entity IDs are derived from the host IP (`sensor.wrtsensor_<ip_with_underscores>_cpu|ram|disk`).
+Per-host CPU % over time using HA's built-in graph card. Entity IDs follow `sensor.wrtsensor_<ip_with_underscores>_cpu`.
 
 ```yaml
-- type: history-graph
-  title: CPU
-  hours_to_show: 8
-  min_y_axis: 0
-  max_y_axis: 100
-  entities:
-    - entity: sensor.wrtsensor_192_0_2_1_cpu
-      name: Gateway
-    - entity: sensor.wrtsensor_192_0_2_22_cpu
-      name: AP1
-    - entity: sensor.wrtsensor_192_0_2_23_cpu
-      name: AP2
-
-- type: history-graph
-  title: RAM
-  hours_to_show: 8
-  min_y_axis: 0
-  max_y_axis: 100
-  entities:
-    - entity: sensor.wrtsensor_192_0_2_1_ram
-      name: Gateway
-    - entity: sensor.wrtsensor_192_0_2_22_ram
-      name: AP1
-    - entity: sensor.wrtsensor_192_0_2_23_ram
-      name: AP2
-
-- type: entities
-  title: Storage
-  entities:
-    - entity: sensor.wrtsensor_192_0_2_1_disk
-      icon: mdi:harddisk
-      name: Gateway - Root
-    - entity: sensor.wrtsensor_192_0_2_22_disk
-      icon: mdi:harddisk
-      name: AP1 - Root
+type: history-graph
+title: CPU
+hours_to_show: 8
+min_y_axis: 0            # lock axis to 0–100 so hosts are comparable
+max_y_axis: 100
+entities:
+  - entity: sensor.wrtsensor_192_0_2_1_cpu
+    name: Gateway
+  - entity: sensor.wrtsensor_192_0_2_22_cpu
+    name: AP1
+  - entity: sensor.wrtsensor_192_0_2_23_cpu
+    name: AP2
 ```
 
-Replace the example IPs with yours. In APs-only mode only the AP rows appear.
+### `history-graph` — RAM
+
+Same pattern as CPU, with `_ram` sensors.
+
+```yaml
+type: history-graph
+title: RAM
+hours_to_show: 8
+min_y_axis: 0
+max_y_axis: 100
+entities:
+  - entity: sensor.wrtsensor_192_0_2_1_ram
+    name: Gateway
+  - entity: sensor.wrtsensor_192_0_2_22_ram
+    name: AP1
+  - entity: sensor.wrtsensor_192_0_2_23_ram
+    name: AP2
+```
+
+### `entities` — Storage
+
+Disk use per host as a static list. Entity IDs follow `sensor.wrtsensor_<ip_with_underscores>_disk`.
+
+```yaml
+type: entities
+title: Storage
+entities:
+  - entity: sensor.wrtsensor_192_0_2_1_disk
+    icon: mdi:harddisk
+    name: Gateway - Root
+  - entity: sensor.wrtsensor_192_0_2_22_disk
+    icon: mdi:harddisk
+    name: AP1 - Root
+```
+
+In APs-only mode, only the AP rows appear.
 
 ## Entities
 
