@@ -37,6 +37,22 @@ def _parse_hosts(raw: str) -> list[str]:
     return [h.strip() for h in raw.split(",") if h.strip()]
 
 
+_ERROR_LABELS = {
+    "cannot_connect": "cannot connect",
+    "no_response": "no response",
+    "ssh_key_not_found": "SSH key file not found",
+    "auth_failed": "SSH authentication failed",
+    "auth_failed_after_provision": "still rejects key after provisioning",
+    "provision_auth_failed": "password authentication failed",
+    "provision_cannot_connect": "cannot connect for provisioning",
+    "pub_key_unreadable": "public key unreadable",
+}
+
+
+def _format_failures(pairs: list[tuple[str, str]]) -> str:
+    return ", ".join(f"{h} — {_ERROR_LABELS.get(k, k)}" for h, k in pairs)
+
+
 async def _test_ssh(
     gateway_host: str, ssh_key_path: str, ssh_port: int = 22
 ) -> str | None:
@@ -114,6 +130,7 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         errors: dict[str, str] = {}
+        placeholders: dict[str, str] = {}
 
         if user_input is not None:
             gateway_host = user_input.get(CONF_GATEWAY_HOST, "").strip()
@@ -137,7 +154,11 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
                     *[_test_ssh(h, ssh_key_path, ssh_port) for h in all_hosts]
                 )
                 needs_provision = any(r == "auth_failed" for r in results)
-                other_errors = [r for r in results if r and r != "auth_failed"]
+                other_failures = [
+                    (h, r)
+                    for h, r in zip(all_hosts, results)
+                    if r and r != "auth_failed"
+                ]
                 if needs_provision:
                     self._pending = {
                         CONF_GATEWAY_HOST: gateway_host,
@@ -146,8 +167,9 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_AP_HOSTS: ap_hosts_raw,
                     }
                     return await self.async_step_provision_key()
-                if other_errors:
-                    errors["base"] = other_errors[0]
+                if other_failures:
+                    errors["base"] = "setup_failed"
+                    placeholders["failures"] = _format_failures(other_failures)
                 else:
                     title = (
                         f"wrtsensor ({gateway_host})"
@@ -182,12 +204,18 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
                 vol.Optional(CONF_AP_HOSTS, default=""): str,
             }
         )
-        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
+        return self.async_show_form(
+            step_id="user",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders=placeholders or None,
+        )
 
     async def async_step_provision_key(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         errors: dict[str, str] = {}
+        placeholders: dict[str, str] = {}
 
         if user_input is not None:
             ssh_user = user_input["ssh_user"].strip()
@@ -198,21 +226,25 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
             ap_hosts = _parse_hosts(self._pending.get(CONF_AP_HOSTS, ""))
             hosts = ([gateway] if gateway else []) + ap_hosts
 
-            for host in hosts:
-                err = await _provision_ssh_key(
-                    host, port, ssh_user, ssh_password, key_path
-                )
-                if err:
-                    errors["base"] = err
-                    break
+            prov_results = await asyncio.gather(
+                *[
+                    _provision_ssh_key(h, port, ssh_user, ssh_password, key_path)
+                    for h in hosts
+                ]
+            )
+            prov_failures = [(h, r) for h, r in zip(hosts, prov_results) if r]
 
-            if not errors:
-                # Verify every host now accepts the key, not just one.
+            if prov_failures:
+                errors["base"] = "provision_failed"
+                placeholders["failures"] = _format_failures(prov_failures)
+            else:
                 post_results = await asyncio.gather(
                     *[_test_ssh(h, key_path, port) for h in hosts]
                 )
-                if any(post_results):
+                post_failures = [(h, r) for h, r in zip(hosts, post_results) if r]
+                if post_failures:
                     errors["base"] = "auth_failed_after_provision"
+                    placeholders["failures"] = _format_failures(post_failures)
                 else:
                     title = (
                         f"wrtsensor ({gateway})"
@@ -231,7 +263,10 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
             }
         )
         return self.async_show_form(
-            step_id="provision_key", data_schema=schema, errors=errors
+            step_id="provision_key",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders=placeholders or None,
         )
 
     @staticmethod
@@ -248,6 +283,7 @@ class WrtsensorOptionsFlow(OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         errors: dict[str, str] = {}
+        placeholders: dict[str, str] = {}
         current = {**self._config_entry.data, **self._config_entry.options}
 
         if user_input is not None:
@@ -267,9 +303,10 @@ class WrtsensorOptionsFlow(OptionsFlow):
                 results = await asyncio.gather(
                     *[_test_ssh(h, ssh_key_path, ssh_port) for h in all_hosts]
                 )
-                first_error = next((r for r in results if r), None)
-                if first_error:
-                    errors["base"] = first_error
+                failures = [(h, r) for h, r in zip(all_hosts, results) if r]
+                if failures:
+                    errors["base"] = "setup_failed"
+                    placeholders["failures"] = _format_failures(failures)
                 else:
                     return self.async_create_entry(title="", data=user_input)
 
@@ -311,4 +348,9 @@ class WrtsensorOptionsFlow(OptionsFlow):
                 ): str,
             }
         )
-        return self.async_show_form(step_id="init", data_schema=schema, errors=errors)
+        return self.async_show_form(
+            step_id="init",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders=placeholders or None,
+        )
