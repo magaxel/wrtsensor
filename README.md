@@ -2,13 +2,26 @@
 
 > ⚠️ **Under heavy development.** Config schema, entity IDs, and behaviour may change without notice. Pin to a specific commit or tag if you need stability.
 
-A lightweight Home Assistant network monitor for a home LAN running OpenWrt. A single Python script SSHes into the router (and any access points) once per minute, collects the complete picture of the network, and pipes it into Home Assistant as a JSON sensor. Lovelace custom cards render device lists, topology maps, event logs, and dnsmasq DNS statistics.
+A lightweight Home Assistant network monitor for a home LAN running OpenWrt. A single Python integration SSHes into the router (and any access points) once per minute, collects the complete picture of the network, and exposes it to Home Assistant as sensors, binary sensors, and device trackers. Lovelace custom cards render device lists, topology maps, event logs, and dnsmasq DNS statistics.
 
-An OpenWrt gateway is required — the scanner pulls DHCP leases, ARP/NDP tables, WAN, and dnsmasq stats from it. Access points are optional: pass zero, one, or many OpenWrt APs as additional arguments to also collect Wi-Fi associations and per-AP host stats.
+An OpenWrt gateway is required — the scanner pulls DHCP leases, ARP/NDP tables, WAN, and dnsmasq stats from it. Access points are optional: zero, one, or many OpenWrt APs can be added to also collect Wi-Fi associations and per-AP host stats.
+
+## Table of contents
+
+- [What it collects](#what-it-collects)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Card configuration](#card-configuration)
+- [Entities](#entities)
+- [Network assumptions](#network-assumptions)
+- [Recorder & logbook exclusion](#recorder--logbook-exclusion)
+- [Troubleshooting](#troubleshooting)
+- [Additional docs](#additional-docs)
+- [License](#license)
 
 ## What it collects
 
-Per scan (every 60 s) the scanner produces a single JSON object with:
+Per scan (every 60 s) the integration produces a single JSON object with:
 
 - **Devices** — MAC, IPv4, IPv6, hostname, vendor (OUI lookup), connection type, online status.
 - **Wi-Fi metrics** — for associated clients: AP, band, signal, noise, SNR, TX/RX PHY rates, expected throughput, per-station byte counters.
@@ -27,10 +40,6 @@ All of this comes from a single 20 s SSH call to the gateway plus parallel SSH c
 
 ## Installation
 
-There are two installation options. **HACS (Option A)** is the recommended approach — everything is configured via UI and the cards auto-register. The **manual path (Option B)** is available if you prefer direct file control or don't use HACS.
-
-### Option A — HACS (recommended)
-
 1. In Home Assistant, open **HACS → Integrations → ⋮ → Custom repositories** and add:
    ```
    https://github.com/magaxel/wrtsensor
@@ -45,71 +54,9 @@ There are two installation options. **HACS (Option A)** is the recommended appro
 
 5. Done — `sensor.wrtsensor_network_scanner` appears immediately, Lovelace cards auto-register. Open **Settings → Options** on the integration to add presence MACs, change scan interval, or update interface names.
 
-> **SSH key prerequisite:** the HA host must be able to SSH into the gateway (and APs) as root with key auth — see step 1 of the manual path below.
+> If key authentication isn't set up yet, the config flow will ask for a password once and provision the public key into `/etc/dropbear/authorized_keys` on each OpenWrt box for you. The password is never stored.
 
----
-
-### Option B — Manual (command_line sensor)
-
-### 1. SSH key — HA → OpenWrt
-
-On the HA host (Terminal add-on or SSH into the HA OS):
-
-```bash
-mkdir -p /config/ssh
-ssh-keygen -t ed25519 -f /config/ssh/id_ed25519 -N ""
-cat /config/ssh/id_ed25519.pub
-```
-
-Copy the printed public key into `/etc/dropbear/authorized_keys` on **each** OpenWrt box (gateway + every AP). Verify:
-
-```bash
-ssh -i /config/ssh/id_ed25519 root@<gateway-ip> uptime
-```
-
-Should return the OpenWrt uptime without a password prompt.
-
-### 2. Deploy the scanner files
-
-Copy this repo's scanner files to `/config/wrtsensor/` on Home Assistant (SMB / Samba share / `scp` / HA file editor — whatever you use):
-
-```
-/config/wrtsensor/diagnose.py
-/config/wrtsensor/openwrt_collector.sh
-```
-
-No need to `chmod +x` — HA runs them via `python3` / `sh -s`. The `oui.db` / `oui.txt` vendor database is **auto-downloaded** from IEEE/Wireshark on first run — no manual setup.
-
-### 3. Wire up the sensors
-
-Add to your `configuration.yaml`:
-
-```yaml
-command_line: !include command_line.yaml
-template: !include templates.yaml
-```
-
-Copy this repo's [`command_line.yaml`](command_line.yaml) and [`templates.yaml`](templates.yaml) to `/config/` and edit the IPs to match your LAN. The command_line sensor runs:
-
-```
-python3 /config/wrtsensor/diagnose.py root@<gateway-ip> root@<ap-ip> [root@<ap-ip> ...]
-```
-
-Restart Home Assistant (or run **Developer Tools → YAML → Check configuration → Restart**). After ~60 s, `sensor.wrtsensor_network_scanner` should appear with a device count and a big JSON `attributes` blob.
-
-### 4. Install the Lovelace cards
-
-Copy the JS files in [`www/`](www/) to `/config/www/`. Then **Settings → Dashboards → Resources → Add resource** for each:
-
-| URL | Type |
-|-----|------|
-| `/local/network-list-card.js` | JavaScript Module |
-| `/local/network-table-card.js` | JavaScript Module |
-| `/local/network-topology-card.js` | JavaScript Module |
-| `/local/network-events-card.js` | JavaScript Module |
-| `/local/dns-stats-card.js` | JavaScript Module |
-
-Append `?v=1` (or any string) to bust the HA companion app's cache when you update a card.
+Prefer not to use HACS? See [docs/manual-install.md](docs/manual-install.md) for the `command_line` sensor path.
 
 ## Card configuration
 
@@ -200,38 +147,7 @@ entity: sensor.wrtsensor_network_scanner
 title: DNS Cache
 ```
 
-## Repository layout
-
-```
-diagnose.py                # Standalone scanner (manual/command_line path)
-openwrt_collector.sh        # Per-AP Wi-Fi association + host-stat collector
-command_line.yaml           # Example command_line sensor definitions (manual path)
-templates.yaml              # Example derived template sensors (manual path)
-www/                        # Lovelace custom cards (manual path — copy to /config/www/)
-  network-list-card.js
-  network-table-card.js
-  network-topology-card.js
-  network-events-card.js
-  dns-stats-card.js
-custom_components/wrtsensor/ # HACS integration (auto-installs everything)
-  __init__.py
-  manifest.json
-  config_flow.py
-  coordinator.py
-  sensor.py
-  binary_sensor.py
-  device_tracker.py
-  const.py
-  strings.json
-  translations/en.json
-  openwrt_collector.sh      # bundled copy — auto-deployed to APs via SFTP
-  www/                      # bundled cards — served via /wrtsensor_static/
-hacs.json
-```
-
-## Home Assistant integration
-
-### HACS integration — entities created automatically
+## Entities
 
 | Entity ID | What it is |
 |-----------|-----------|
@@ -240,7 +156,7 @@ hacs.json
 | `sensor.wrtsensor_wan_upload` | WAN TX rate in Mbit/s |
 | `sensor.wrtsensor_dns_cache_hit` | DNS cache hit % |
 | `sensor.wrtsensor_dns_latency` | Weighted upstream DNS latency in ms |
-| `sensor.wrtsensor_<ip>_cpu` | CPU % per host, e.g. `sensor.wrtsensor_172_16_42_254_cpu` |
+| `sensor.wrtsensor_<ip>_cpu` | CPU % per host, e.g. `sensor.wrtsensor_192_0_2_1_cpu` |
 | `sensor.wrtsensor_<ip>_ram` | RAM % per host |
 | `sensor.wrtsensor_<ip>_disk` | Disk % per host |
 | `binary_sensor.wrtsensor_presence_<mac>` | Online/offline per configured MAC (set in Options) |
@@ -248,35 +164,9 @@ hacs.json
 
 Device tracker entities are named after the device hostname (e.g. `device_tracker.my_phone`) and are disabled by default. HA's scanner entity base class does this to avoid flooding the registry when dozens of devices are discovered. To use a tracker for Person presence, go to **Settings → Entities**, enable "Show disabled entities", find the device, and enable it. The entity can then be added to a Person.
 
-`sensor.wrtsensor_event_log` is a separate `command_line` sensor defined in `command_line.yaml` that tails the JSONL event log at `/dev/shm/netscan_events.json`. It is not part of the integration but must be kept alongside it.
-
-### `command_line.yaml` (manual path)
-
-Defines the `sensor.wrtsensor_network_scanner` command_line sensor that runs the scanner every 60 s (45 s timeout). The `json_attributes` list is an **explicit allowlist** — any new top-level JSON key emitted by the scanner must be added here or Home Assistant silently drops it. Also defines `sensor.wrtsensor_event_log` which tails the JSONL event file (capped at 500 entries per poll).
-
-### `templates.yaml` — derived sensors (manual path)
-
-Template sensors that unpack values out of `sensor.wrtsensor_network_scanner`'s attributes. Not needed when using the HACS integration (which provides dedicated sensor entities instead).
-
-- **Host metrics** per host — CPU%, RAM%, disk% for the gateway and each AP (e.g. `sensor.openwrtgw_used_cpu`, `sensor.kallaren_ap_used_ram`).
-- **WAN** — `sensor.wan_download_mbit`, `sensor.wan_upload_mbit`.
-- **DNS cache** — `sensor.dns_cache_hit_pct`, `sensor.dns_cache_hits_per_sec`, `sensor.dns_cache_misses_per_sec`, `sensor.dns_upstream_latency_ms`.
-- **Device presence** — binary sensors matching specific MACs (e.g. family phones) with `device_class: presence` for person/automation use.
-
-Adding a new per-host template follows the pattern:
-
-```yaml
-- unique_id: <uuid>
-  name: <hostname>_used_cpu
-  unit_of_measurement: "%"
-  state: >-
-    {% set h = state_attr('sensor.wrtsensor_network_scanner', 'host_stats') %}
-    {{ h.get('<ip>', {}).get('cpu') if h else none }}
-```
-
 ## Network assumptions
 
-The scanner expects an OpenWrt gateway reachable over SSH (key-based auth). Any number of OpenWrt access points can be added by appending them to the scanner's argument list — the reference deployment below uses three but one or none will also work.
+The integration expects an OpenWrt gateway reachable over SSH (key-based auth). Any number of OpenWrt access points can be added — the reference deployment uses three but one or none will also work.
 
 | Role | Address (example) |
 |------|-------------------|
@@ -286,13 +176,11 @@ The scanner expects an OpenWrt gateway reachable over SSH (key-based auth). Any 
 | LAN bridge | `br-lan` |
 | WAN interface | `eth0` |
 
-Replace the example addresses with whatever your LAN uses. The script takes the gateway as its first argument and any number of APs as subsequent arguments.
+Replace the example addresses with whatever your LAN uses. The HACS integration multiplexes connections with asyncssh in-process; the standalone `diagnose.py` script uses `ControlMaster=auto / ControlPersist=60`.
 
-SSH uses key-based auth (`id_ed25519`) with connection multiplexing (`ControlMaster=auto / ControlPersist=60`) for low overhead.
+## Recorder & logbook exclusion
 
-## Recorder exclusion
-
-`sensor.wrtsensor_network_scanner` and `sensor.wrtsensor_event_log` carry large JSON blobs as attributes and will bloat the HA database if recorded. Exclude them in `configuration.yaml`:
+`sensor.wrtsensor_network_scanner` and `sensor.wrtsensor_event_log` carry large JSON blobs as attributes and change every scan (every 60 s). Exclude them in `configuration.yaml` to keep the database and logbook trim:
 
 ```yaml
 recorder:
@@ -300,13 +188,7 @@ recorder:
     entities:
       - sensor.wrtsensor_network_scanner
       - sensor.wrtsensor_event_log
-```
 
-## Logbook exclusion
-
-The same two sensors generate a logbook entry every scan (every 60 s) because their state or attributes change constantly. Exclude them to keep the logbook readable:
-
-```yaml
 logbook:
   exclude:
     entities:
@@ -316,54 +198,20 @@ logbook:
 
 ## Troubleshooting
 
-**Sensor stays `unavailable` after restart**
+**Integration shows "Failed to connect"** — SSH key path is wrong or unreadable by HA, or the key isn't in OpenWrt's `authorized_keys`. The config flow offers a password-provisioning step; otherwise set the key up manually (see [manual install — SSH key](docs/manual-install.md#1-ssh-key--ha--openwrt)).
 
-Run the scanner by hand on the HA host to see the raw error:
+**All APs in log as "unreachable"** — APs must be reachable from HA on port 22 with the same key as the gateway. Check with `ssh -i /config/ssh/id_ed25519 root@<ap-ip> uptime` on the HA host.
 
-```bash
-python3 /config/wrtsensor/diagnose.py root@<gateway-ip> root@<ap-ip>
-```
+**Card shows "configuration error"** — the resource URL isn't registered, or the `type:` in the dashboard doesn't match the card's registered name (e.g. `custom:network-table-card`). For HACS installs, cards are auto-served under `/wrtsensor_static/`. Bump the `?v=` query on the resource URL to bust the companion app's JS cache after updates.
 
-Common causes:
+**A device tracker won't show up** — trackers are disabled by default. Enable via **Settings → Entities → Show disabled entities**.
 
-- **SSH key rejected** — permissions wrong (`chmod 600 /config/ssh/id_ed25519`) or public key not in OpenWrt's `authorized_keys`.
-- **Wrong interface names** — defaults are `br-lan` (bridge) and `eth0` (WAN). Edit constants at the top of `diagnose.py` if yours differ.
-- **`openwrt_collector.sh not found`** — the helper script must live next to `diagnose.py` in `/config/wrtsensor/`.
-- **`command_timeout` exceeded** — bump `command_timeout` in `command_line.yaml` (default 45 s); a slow router + many devices can push past that.
+For manual-install specific troubleshooting (diagnose.py, `command_line.yaml`, `json_attributes` allowlist) see [docs/manual-install.md#troubleshooting](docs/manual-install.md#troubleshooting).
 
-**A new top-level JSON key is silently missing in `sensor.wrtsensor_network_scanner`'s attributes**
+## Additional docs
 
-`json_attributes` in `command_line.yaml` is an allowlist. Add the key there and restart.
-
-**Card shows "configuration error"**
-
-- Resource URL not registered, or the `type:` in the dashboard doesn't match the card's registered name (e.g. `custom:network-table-card`).
-- Companion-app JS cache — bump the `?v=` query on the resource URL.
-
-**Event card shows only a handful of events**
-
-The command_line sensor runs `tail -500 /dev/shm/netscan_events.json`. If you need more, raise the limit there. The underlying event log keeps 30 days.
-
-## Development
-
-```bash
-# Lint
-ruff check diagnose.py
-ruff format diagnose.py
-shellcheck openwrt_collector.sh
-biome check www/*.js
-yamllint command_line.yaml templates.yaml
-yamlfmt -dry command_line.yaml templates.yaml
-
-# Run the scanner locally (replace with your gateway + any APs)
-python3 diagnose.py \
-  root@<gateway-ip> root@<ap-ip> [root@<ap-ip> ...]
-
-# Inspect the live event log
-cat /dev/shm/netscan_events.json
-```
-
-The scanner writes state under `/dev/shm` on HA (or `/tmp/netscan` locally): previous-scan device state, MAC vendor cache, DNS cache cache, CPU delta state, and the event log.
+- [Manual installation](docs/manual-install.md) — command_line sensor path for users without HACS.
+- [Development](docs/development.md) — lint/test commands, repository layout, CI.
 
 ## License
 
