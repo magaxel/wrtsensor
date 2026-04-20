@@ -378,3 +378,111 @@ def test_is_random_mac_bad_input():
     assert not _is_random_mac("")
     assert not _is_random_mac("not-a-mac")
     assert not _is_random_mac("ZZ:00:00:00:00:00")
+
+
+# ── Gateway fixture drift tests ────────────────────────────────────────────────
+# Structural assertions that run across every captured OpenWrt version. Their
+# job is not to check numeric values (which differ between captures) but to
+# catch output-format regressions in a new OpenWrt release.
+
+
+def _gateway_lines(version: str, fname: str) -> list[str]:
+    path = OPENWRT_FIXTURES / version / "gateway" / fname
+    if not path.is_file():
+        return []
+    return [ln for ln in path.read_text().splitlines() if ln.strip()]
+
+
+@pytest.mark.parametrize("version", AVAILABLE_VERSIONS)
+def test_parse_leases_from_gateway_fixture(version):
+    lines = _gateway_lines(version, "dhcp.leases")
+    if not lines:
+        pytest.skip(f"no dhcp.leases for {version}")
+    result = parse_leases(lines)
+    assert result, f"no leases parsed from {version}"
+    for mac, entry in result.items():
+        assert mac == mac.upper()
+        assert len(mac.split(":")) == 6
+        assert entry["ip"]
+        assert isinstance(entry["hostname"], str)
+
+
+@pytest.mark.parametrize("version", AVAILABLE_VERSIONS)
+def test_parse_arp_from_gateway_fixture(version):
+    lines = _gateway_lines(version, "ip-neigh.txt")
+    if not lines:
+        pytest.skip(f"no ip-neigh.txt for {version}")
+    states, _stale, ips = parse_arp(lines)
+    assert states, f"no ARP entries parsed from {version}"
+    for mac, state in states.items():
+        assert mac == mac.upper()
+        assert len(mac.split(":")) == 6
+        assert state in {"REACHABLE", "STALE", "DELAY", "PROBE", "NOARP", "PERMANENT"}
+        assert ips[mac].count(".") == 3
+
+
+@pytest.mark.parametrize("version", AVAILABLE_VERSIONS)
+def test_parse_ndp_from_gateway_fixture(version):
+    lines = _gateway_lines(version, "ip-neigh6.txt")
+    if not lines:
+        pytest.skip(f"no ip-neigh6.txt for {version}")
+    result = parse_ndp(lines)
+    # Empty is allowed (LAN could be v4-only). If populated, verify shape.
+    for mac, ip in result.items():
+        assert mac == mac.upper()
+        assert len(mac.split(":")) == 6
+        assert ":" in ip
+        assert not ip.startswith("fe80")  # link-local must be filtered out
+
+
+@pytest.mark.parametrize("version", AVAILABLE_VERSIONS)
+def test_parse_dns_stats_from_gateway_fixture(version):
+    lines = _gateway_lines(version, "logread-dnsmasq.txt")
+    if not lines:
+        pytest.skip(f"no logread-dnsmasq.txt for {version}")
+    result = parse_dns_stats(lines)
+    if result is None:
+        pytest.skip(f"logread for {version} has no cache dump window")
+    assert isinstance(result["hits"], int) and result["hits"] >= 0
+    assert isinstance(result["misses"], int) and result["misses"] >= 0
+    if result.get("servers"):
+        for s in result["servers"]:
+            assert s["addr"]
+            assert isinstance(s["queries"], int)
+            assert isinstance(s["latency_ms"], int)
+
+
+@pytest.mark.parametrize("version", AVAILABLE_VERSIONS)
+def test_parse_hoststat_from_gateway_fixture(version):
+    # The coordinator composes hoststat from three commands; mirror that shape.
+    gw = OPENWRT_FIXTURES / version / "gateway"
+    cpu_path = gw / "proc-stat.txt"
+    mem_path = gw / "proc-meminfo.txt"
+    disk_path = gw / "df-root.txt"
+    if not (cpu_path.is_file() and mem_path.is_file()):
+        pytest.skip(f"no host stat files for {version}")
+
+    cpu_line = cpu_path.read_text().strip().splitlines()[0]
+    total = avail = ""
+    for line in mem_path.read_text().splitlines():
+        parts = line.split()
+        if line.startswith("MemTotal:") and len(parts) > 1:
+            total = parts[1]
+        elif line.startswith("MemAvailable:") and len(parts) > 1:
+            avail = parts[1]
+    composed = [cpu_line, f"{total} {avail}"]
+    if disk_path.is_file():
+        for line in disk_path.read_text().splitlines()[1:]:
+            parts = line.split()
+            if len(parts) >= 5:
+                composed.append(parts[4].rstrip("%"))
+                break
+
+    result = parse_hoststat(composed)
+    assert result is not None
+    assert result["busy"] > 0
+    assert result["idle"] > 0
+    assert result["mem_total"] > 0
+    assert 0 <= result["mem_avail"] <= result["mem_total"]
+    if len(composed) == 3:
+        assert 0 <= result["disk"] <= 100
