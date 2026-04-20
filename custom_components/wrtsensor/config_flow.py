@@ -125,6 +125,7 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         super().__init__()
         self._pending: dict[str, Any] = {}
+        self._is_reconfigure: bool = False
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -211,6 +212,86 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
             description_placeholders=placeholders or None,
         )
 
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Edit gateway + APs + SSH settings in place on an existing entry."""
+        self._is_reconfigure = True
+        entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
+        current = entry.data
+        errors: dict[str, str] = {}
+        placeholders: dict[str, str] = {}
+
+        if user_input is not None:
+            gateway_host = user_input.get(CONF_GATEWAY_HOST, "").strip()
+            ssh_key_path = user_input[CONF_SSH_KEY_PATH].strip()
+            ssh_port = user_input.get(CONF_SSH_PORT, DEFAULT_SSH_PORT)
+            ap_hosts_raw = user_input.get(CONF_AP_HOSTS, "")
+            ap_hosts = _parse_hosts(ap_hosts_raw)
+
+            if not gateway_host and not ap_hosts:
+                errors["base"] = "at_least_one_host"
+            else:
+                all_hosts = ([gateway_host] if gateway_host else []) + ap_hosts
+                results = await asyncio.gather(
+                    *[_test_ssh(h, ssh_key_path, ssh_port) for h in all_hosts]
+                )
+                needs_provision = any(r == "auth_failed" for r in results)
+                other_failures = [
+                    (h, r)
+                    for h, r in zip(all_hosts, results)
+                    if r and r != "auth_failed"
+                ]
+                if needs_provision:
+                    self._pending = {
+                        CONF_GATEWAY_HOST: gateway_host,
+                        CONF_SSH_KEY_PATH: ssh_key_path,
+                        CONF_SSH_PORT: ssh_port,
+                        CONF_AP_HOSTS: ap_hosts_raw,
+                    }
+                    return await self.async_step_provision_key()
+                if other_failures:
+                    errors["base"] = "setup_failed"
+                    placeholders["failures"] = _format_failures(other_failures)
+                else:
+                    new_data = {
+                        **entry.data,
+                        CONF_GATEWAY_HOST: gateway_host,
+                        CONF_SSH_KEY_PATH: ssh_key_path,
+                        CONF_SSH_PORT: ssh_port,
+                        CONF_AP_HOSTS: ap_hosts_raw,
+                    }
+                    return self.async_update_reload_and_abort(
+                        entry, data=new_data, reason="reconfigure_successful"
+                    )
+
+        schema = vol.Schema(
+            {
+                vol.Optional(
+                    CONF_GATEWAY_HOST,
+                    default=current.get(CONF_GATEWAY_HOST, ""),
+                ): str,
+                vol.Required(
+                    CONF_SSH_KEY_PATH,
+                    default=current.get(CONF_SSH_KEY_PATH, DEFAULT_SSH_KEY),
+                ): str,
+                vol.Optional(
+                    CONF_SSH_PORT,
+                    default=current.get(CONF_SSH_PORT, DEFAULT_SSH_PORT),
+                ): vol.All(vol.Coerce(int), vol.Range(min=1, max=65535)),
+                vol.Optional(
+                    CONF_AP_HOSTS,
+                    default=current.get(CONF_AP_HOSTS, ""),
+                ): str,
+            }
+        )
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders=placeholders or None,
+        )
+
     async def async_step_provision_key(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
@@ -246,6 +327,16 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
                     errors["base"] = "auth_failed_after_provision"
                     placeholders["failures"] = _format_failures(post_failures)
                 else:
+                    if self._is_reconfigure:
+                        entry = self.hass.config_entries.async_get_entry(
+                            self.context["entry_id"]
+                        )
+                        new_data = {**entry.data, **self._pending}
+                        return self.async_update_reload_and_abort(
+                            entry,
+                            data=new_data,
+                            reason="reconfigure_successful",
+                        )
                     title = (
                         f"wrtsensor ({gateway})"
                         if gateway

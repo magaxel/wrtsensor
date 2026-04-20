@@ -43,8 +43,34 @@ for _p in [
     "homeassistant.core",
     "homeassistant.helpers",
     "homeassistant.helpers.update_coordinator",
+    "homeassistant.helpers.entity_registry",
 ]:
     _stub(_p)
+
+# Bind child modules as attributes on parents so `from x import y` works.
+sys.modules["homeassistant"].helpers = sys.modules["homeassistant.helpers"]  # type: ignore[attr-defined]
+sys.modules["homeassistant"].components = sys.modules["homeassistant.components"]  # type: ignore[attr-defined]
+sys.modules["homeassistant"].config_entries = sys.modules[
+    "homeassistant.config_entries"
+]  # type: ignore[attr-defined]
+sys.modules["homeassistant"].core = sys.modules["homeassistant.core"]  # type: ignore[attr-defined]
+sys.modules["homeassistant.helpers"].update_coordinator = sys.modules[
+    "homeassistant.helpers.update_coordinator"
+]  # type: ignore[attr-defined]
+sys.modules["homeassistant.helpers"].entity_registry = sys.modules[
+    "homeassistant.helpers.entity_registry"
+]  # type: ignore[attr-defined]
+sys.modules["homeassistant.components"].http = sys.modules[
+    "homeassistant.components.http"
+]  # type: ignore[attr-defined]
+
+# Minimal entity_registry stub — test_init.py replaces these with a functional
+# in-memory registry; default stubs keep other tests' __init__ imports happy.
+_er_default = sys.modules["homeassistant.helpers.entity_registry"]
+if not hasattr(_er_default, "async_get"):
+    _er_default.async_get = lambda hass: None  # type: ignore[attr-defined]
+if not hasattr(_er_default, "async_entries_for_config_entry"):
+    _er_default.async_entries_for_config_entry = lambda reg, eid: []  # type: ignore[attr-defined]
 
 sys.modules["homeassistant.components.http"].StaticPathConfig = object  # type: ignore[attr-defined]
 sys.modules["homeassistant.config_entries"].ConfigEntry = object  # type: ignore[attr-defined]

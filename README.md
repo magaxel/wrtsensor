@@ -65,6 +65,10 @@ All of this comes from a single 20 s SSH call to the gateway plus parallel SSH c
 
 Prefer not to use HACS? See [docs/manual-install.md](docs/manual-install.md) for the `command_line` sensor path.
 
+### Changing gateway or APs
+
+Open the integration in **Settings → Devices & Services**, hit the triple-dot menu → **Reconfigure** to change gateway, APs, SSH key path, or SSH port in place. Every host is re-probed; if authentication fails, the flow prompts for a password and re-provisions the key, same as initial setup. Removing a host prunes its CPU/RAM/Disk sensors automatically on the next reload. The public SSH key stays in `/etc/dropbear/authorized_keys` on the removed device — delete it manually there if you no longer trust the host.
+
 ## Card configuration
 
 All cards take `entity: sensor.wrtsensor_network_scanner` (the event card uses `sensor.wrtsensor_event_log` — see below). Drop these snippets into a dashboard via **Raw configuration editor** or the **+ ADD CARD → Manual** editor.

@@ -27,6 +27,22 @@
           "ssh_user": "SSH username on the OpenWrt device. Default: root.",
           "ssh_password": "SSH password. Used once to provision the key, never stored."
         }
+      },
+      "reconfigure": {
+        "title": "Reconfigure wrtsensor",
+        "description": "Change gateway, access points, SSH key path or SSH port. Every host is re-tested; removing a host prunes its per-host sensors on the next reload.",
+        "data": {
+          "gateway_host": "Gateway IP address (optional)",
+          "ssh_key_path": "SSH private key path",
+          "ssh_port": "SSH port",
+          "ap_hosts": "Access point IPs"
+        },
+        "data_description": {
+          "gateway_host": "Leave empty for APs-only mode. Any OpenWrt box that routes counts as a gateway.",
+          "ssh_key_path": "Absolute path to the SSH private key on the HA host. Example: /config/ssh/id_ed25519",
+          "ssh_port": "SSH port on all OpenWrt hosts. Default: 22.",
+          "ap_hosts": "Comma-separated IPs of OpenWrt access points. At least one host (gateway or AP) is required."
+        }
       }
     },
     "error": {
@@ -43,7 +59,8 @@
       "at_least_one_host": "Enter at least a gateway or one access point."
     },
     "abort": {
-      "already_configured": "This host is already configured"
+      "already_configured": "This host is already configured",
+      "reconfigure_successful": "Configuration updated"
     }
   },
   "options": {

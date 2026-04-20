@@ -38,6 +38,13 @@ if not hasattr(_ce, "ConfigFlow"):
         def _abort_if_unique_id_configured(self):
             pass
 
+        def _abort_if_unique_id_mismatch(self, *, reason=None):
+            pass
+
+        def async_update_reload_and_abort(self, entry, *, data=None, reason):
+            entry.data = data if data is not None else entry.data
+            return {"type": "abort", "reason": reason, "data": entry.data}
+
         def async_show_form(
             self,
             *,
@@ -418,3 +425,174 @@ def test_options_flow_failure_names_host():
         )
     assert result["errors"] == {"base": "setup_failed"}
     assert "192.0.2.22" in result["description_placeholders"]["failures"]
+
+
+# ── Reconfigure flow ──────────────────────────────────────────────────────────
+
+
+def _reconfigure_flow(entry):
+    flow = cf.WrtsensorConfigFlow()
+    flow.context = {"entry_id": "test-entry"}
+    flow.hass = types.SimpleNamespace(
+        config_entries=types.SimpleNamespace(async_get_entry=lambda eid: entry)
+    )
+    return flow
+
+
+def _make_entry(data):
+    return types.SimpleNamespace(data=data, entry_id="test-entry")
+
+
+def test_reconfigure_changes_gateway():
+    entry = _make_entry(
+        {
+            cf.CONF_GATEWAY_HOST: "192.0.2.1",
+            cf.CONF_SSH_KEY_PATH: "/tmp/key",
+            cf.CONF_SSH_PORT: 22,
+            cf.CONF_AP_HOSTS: "192.0.2.22",
+        }
+    )
+    flow = _reconfigure_flow(entry)
+    with patch.object(cf, "_test_ssh", new=AsyncMock(return_value=None)):
+        result = asyncio.run(
+            flow.async_step_reconfigure(
+                {
+                    cf.CONF_GATEWAY_HOST: "192.0.2.99",
+                    cf.CONF_SSH_KEY_PATH: "/tmp/key",
+                    cf.CONF_AP_HOSTS: "192.0.2.22",
+                }
+            )
+        )
+    assert result["type"] == "abort"
+    assert result["reason"] == "reconfigure_successful"
+    assert result["data"][cf.CONF_GATEWAY_HOST] == "192.0.2.99"
+
+
+def test_reconfigure_adds_gateway_to_aps_only():
+    entry = _make_entry(
+        {
+            cf.CONF_GATEWAY_HOST: "",
+            cf.CONF_SSH_KEY_PATH: "/tmp/key",
+            cf.CONF_SSH_PORT: 22,
+            cf.CONF_AP_HOSTS: "192.0.2.22",
+        }
+    )
+    flow = _reconfigure_flow(entry)
+    with patch.object(cf, "_test_ssh", new=AsyncMock(return_value=None)):
+        result = asyncio.run(
+            flow.async_step_reconfigure(
+                {
+                    cf.CONF_GATEWAY_HOST: "192.0.2.1",
+                    cf.CONF_SSH_KEY_PATH: "/tmp/key",
+                    cf.CONF_AP_HOSTS: "192.0.2.22",
+                }
+            )
+        )
+    assert result["reason"] == "reconfigure_successful"
+    assert result["data"][cf.CONF_GATEWAY_HOST] == "192.0.2.1"
+
+
+def test_reconfigure_removes_gateway():
+    entry = _make_entry(
+        {
+            cf.CONF_GATEWAY_HOST: "192.0.2.1",
+            cf.CONF_SSH_KEY_PATH: "/tmp/key",
+            cf.CONF_SSH_PORT: 22,
+            cf.CONF_AP_HOSTS: "192.0.2.22",
+        }
+    )
+    flow = _reconfigure_flow(entry)
+    with patch.object(cf, "_test_ssh", new=AsyncMock(return_value=None)):
+        result = asyncio.run(
+            flow.async_step_reconfigure(
+                {
+                    cf.CONF_GATEWAY_HOST: "",
+                    cf.CONF_SSH_KEY_PATH: "/tmp/key",
+                    cf.CONF_AP_HOSTS: "192.0.2.22",
+                }
+            )
+        )
+    assert result["reason"] == "reconfigure_successful"
+    assert result["data"][cf.CONF_GATEWAY_HOST] == ""
+
+
+def test_reconfigure_auth_failed_runs_provision():
+    entry = _make_entry(
+        {
+            cf.CONF_GATEWAY_HOST: "192.0.2.1",
+            cf.CONF_SSH_KEY_PATH: "/tmp/key",
+            cf.CONF_SSH_PORT: 22,
+            cf.CONF_AP_HOSTS: "192.0.2.22",
+        }
+    )
+    flow = _reconfigure_flow(entry)
+    with patch.object(cf, "_test_ssh", new=AsyncMock(return_value="auth_failed")):
+        result = asyncio.run(
+            flow.async_step_reconfigure(
+                {
+                    cf.CONF_GATEWAY_HOST: "192.0.2.1",
+                    cf.CONF_SSH_KEY_PATH: "/tmp/key",
+                    cf.CONF_AP_HOSTS: "192.0.2.22",
+                }
+            )
+        )
+    assert result["type"] == "form"
+    assert result["step_id"] == "provision_key"
+    assert flow._is_reconfigure is True
+
+
+def test_reconfigure_probe_failure_names_host():
+    entry = _make_entry(
+        {
+            cf.CONF_GATEWAY_HOST: "192.0.2.1",
+            cf.CONF_SSH_KEY_PATH: "/tmp/key",
+            cf.CONF_SSH_PORT: 22,
+            cf.CONF_AP_HOSTS: "192.0.2.22",
+        }
+    )
+    flow = _reconfigure_flow(entry)
+    with patch.object(
+        cf, "_test_ssh", new=AsyncMock(side_effect=[None, "cannot_connect"])
+    ):
+        result = asyncio.run(
+            flow.async_step_reconfigure(
+                {
+                    cf.CONF_GATEWAY_HOST: "192.0.2.1",
+                    cf.CONF_SSH_KEY_PATH: "/tmp/key",
+                    cf.CONF_AP_HOSTS: "192.0.2.22",
+                }
+            )
+        )
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "setup_failed"}
+    assert "192.0.2.22" in result["description_placeholders"]["failures"]
+
+
+def test_reconfigure_provision_completes_via_update_reload_and_abort():
+    """After provisioning succeeds inside reconfigure, completion path is the
+    update-reload-abort helper, not async_create_entry."""
+    entry = _make_entry(
+        {
+            cf.CONF_GATEWAY_HOST: "192.0.2.1",
+            cf.CONF_SSH_KEY_PATH: "/tmp/key",
+            cf.CONF_SSH_PORT: 22,
+            cf.CONF_AP_HOSTS: "192.0.2.22",
+        }
+    )
+    flow = _reconfigure_flow(entry)
+    flow._is_reconfigure = True
+    flow._pending = {
+        cf.CONF_GATEWAY_HOST: "192.0.2.1",
+        cf.CONF_SSH_KEY_PATH: "/tmp/key",
+        cf.CONF_SSH_PORT: 22,
+        cf.CONF_AP_HOSTS: "192.0.2.22",
+    }
+    with (
+        patch.object(cf, "_provision_ssh_key", new=AsyncMock(return_value=None)),
+        patch.object(cf, "_test_ssh", new=AsyncMock(return_value=None)),
+    ):
+        result = asyncio.run(
+            flow.async_step_provision_key({"ssh_user": "root", "ssh_password": "pw"})
+        )
+    assert result["type"] == "abort"
+    assert result["reason"] == "reconfigure_successful"
