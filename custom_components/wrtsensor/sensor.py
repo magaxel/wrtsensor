@@ -27,11 +27,15 @@ async def async_setup_entry(
 
     entities: list[SensorEntity] = [
         WrtsensorNetworkScannerSensor(coordinator, entry),
-        WrtsensorWANDownloadSensor(coordinator, entry),
-        WrtsensorWANUploadSensor(coordinator, entry),
-        WrtsensorDNSHitPctSensor(coordinator, entry),
-        WrtsensorDNSLatencySensor(coordinator, entry),
     ]
+    # Gateway-only sensors: WAN bandwidth + DNS stats require the router.
+    if coordinator._gateway_host:
+        entities += [
+            WrtsensorWANDownloadSensor(coordinator, entry),
+            WrtsensorWANUploadSensor(coordinator, entry),
+            WrtsensorDNSHitPctSensor(coordinator, entry),
+            WrtsensorDNSLatencySensor(coordinator, entry),
+        ]
 
     # Per-host stats: gateway + each AP
     data = coordinator.data or {}

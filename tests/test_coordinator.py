@@ -78,11 +78,13 @@ class _FakeEntry:
         self.options = options or {}
 
 
-def _make_coordinator(*, ap_hosts: str = "") -> WrtsensorCoordinator:
+def _make_coordinator(
+    *, ap_hosts: str = "", gateway_host: str = "192.0.2.1"
+) -> WrtsensorCoordinator:
     hass = _FakeHass()
     entry = _FakeEntry(
         data={
-            "gateway_host": "192.0.2.1",
+            "gateway_host": gateway_host,
             "ssh_key_path": "/tmp/test_key",
             "ap_hosts": ap_hosts,
             "ssh_port": 22,
@@ -222,7 +224,9 @@ def test_ap_unreachable_result_not_partial():
             )
         )
         stack.enter_context(
-            patch.object(c, "_get_ap_info", new=AsyncMock(return_value=("AP1", "")))
+            patch.object(
+                c, "_get_ap_info", new=AsyncMock(return_value=("AP1", "", [], []))
+            )
         )
         stack.enter_context(
             patch.object(c, "_ping_stale", new=AsyncMock(return_value=[]))
@@ -259,7 +263,9 @@ def test_ap_unreachable_gateway_device_still_present():
             )
         )
         stack.enter_context(
-            patch.object(c, "_get_ap_info", new=AsyncMock(return_value=("AP1", "")))
+            patch.object(
+                c, "_get_ap_info", new=AsyncMock(return_value=("AP1", "", [], []))
+            )
         )
         stack.enter_context(
             patch.object(c, "_ping_stale", new=AsyncMock(return_value=[]))
@@ -272,3 +278,64 @@ def test_ap_unreachable_gateway_device_still_present():
 
     macs = {d["mac"] for d in result["devices"]}
     assert _MINIMAL_GW["gw_mac"] in macs
+
+
+# ── APs-only mode (no gateway configured) ────────────────────────────────────
+
+
+def test_aps_only_init_gateway_host_none():
+    c = _make_coordinator(ap_hosts="192.0.2.22", gateway_host="")
+    assert c._gateway_host is None
+
+
+def test_aps_only_collect_gateway_returns_empty():
+    c = _make_coordinator(ap_hosts="192.0.2.22", gateway_host="")
+    result = asyncio.run(c._collect_gateway())
+    assert result == {}
+
+
+def test_aps_only_update_builds_from_ap_neigh():
+    c = _make_coordinator(ap_hosts="192.0.2.22", gateway_host="")
+    ap_arp = [
+        "192.0.2.50 lladdr aa:bb:cc:dd:ee:01 REACHABLE",
+        "192.0.2.51 lladdr aa:bb:cc:dd:ee:02 STALE",
+    ]
+    ap_ndp = ["2001:db8::10 lladdr aa:bb:cc:dd:ee:01 router REACHABLE"]
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch.object(c, "_collect_gateway", new=AsyncMock(return_value={}))
+        )
+        stack.enter_context(
+            patch.object(c, "_collect_wifi", new=AsyncMock(return_value=([], [])))
+        )
+        stack.enter_context(
+            patch.object(
+                c,
+                "_get_ap_info",
+                new=AsyncMock(return_value=("ap1", "2001:db8::22", ap_arp, ap_ndp)),
+            )
+        )
+        result = asyncio.run(c._async_update_data())
+    assert result["wan_ip"] == ""
+    assert result["dns_stats"] is None
+    assert result["_gw_mac"] == ""
+    macs = {d["mac"] for d in result["devices"]}
+    assert "AA:BB:CC:DD:EE:01" in macs
+    assert "AA:BB:CC:DD:EE:02" in macs
+
+
+def test_aps_only_no_prev_no_raise():
+    """APs-only mode must not trigger the 'Gateway unreachable' UpdateFailed path."""
+    c = _make_coordinator(ap_hosts="192.0.2.22", gateway_host="")
+    c._prev_state = {}
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch.object(c, "_collect_wifi", new=AsyncMock(return_value=([], [])))
+        )
+        stack.enter_context(
+            patch.object(
+                c, "_get_ap_info", new=AsyncMock(return_value=("ap1", "", [], []))
+            )
+        )
+        result = asyncio.run(c._async_update_data())
+    assert not result.get("partial")

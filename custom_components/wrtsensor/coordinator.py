@@ -561,7 +561,7 @@ def save_kv_cache(path: Path, cache: dict[str, str]) -> None:
 class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         data = {**entry.data, **entry.options}
-        self._gateway_host = data[CONF_GATEWAY_HOST]
+        self._gateway_host: str | None = data.get(CONF_GATEWAY_HOST, "") or None
         self._ssh_key = data.get(CONF_SSH_KEY_PATH, DEFAULT_SSH_KEY)
         self._ssh_port: int = int(data.get(CONF_SSH_PORT, DEFAULT_SSH_PORT))
         raw_aps = data.get(CONF_AP_HOSTS, "")
@@ -696,7 +696,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
         hosts = self._ap_hosts[:]
         # Also deploy to gateway (it runs the script for gateway-side WiFi)
-        all_hosts = [self._gateway_host, *hosts]
+        all_hosts = ([self._gateway_host] if self._gateway_host else []) + hosts
         await asyncio.gather(
             *[self._deploy_to_host(h) for h in all_hosts], return_exceptions=True
         )
@@ -763,6 +763,8 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # ── Data collection ────────────────────────────────────────────────────────
 
     async def _collect_gateway(self) -> dict[str, Any]:
+        if not self._gateway_host:
+            return {}
         li = self._lan_iface
         wi = self._wan_iface
         dhcp = DEFAULT_DHCP_LEASES
@@ -828,18 +830,30 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "dns": dns_info,
         }
 
-    async def _get_ap_info(self, host: str) -> tuple[str, str]:
+    async def _get_ap_info(self, host: str) -> tuple[str, str, list[str], list[str]]:
         li = self._lan_iface
-        out = await self._ssh_run(
-            host,
-            f"cat /proc/sys/kernel/hostname; ip addr show {li} 2>/dev/null | grep ' inet6 ' | grep -v ' fe80' | awk '{{split($2,a,\"/\"); print a[1]}}'",
-            timeout=8,
+        cmd = (
+            "echo '---HOST---'; cat /proc/sys/kernel/hostname; "
+            f"echo '---IP6---'; ip addr show {li} 2>/dev/null | grep ' inet6 ' | grep -v ' fe80' | awk '{{split($2,a,\"/\"); print a[1]}}'; "
+            f"echo '---ARP---'; ip -4 neigh show dev {li} 2>/dev/null; "
+            "echo '---NDP---'; "
+            f"ip -6 neigh show dev {li} 2>/dev/null | grep -v '^fe80'"
         )
-        lines = out.strip().splitlines()
-        hostname = lines[0].strip() if lines else host
+        out = await self._ssh_run(host, cmd, timeout=10)
+        sections: dict[str, list[str]] = {}
+        current: str | None = None
+        for line in out.splitlines():
+            m = re.match(r"^---([A-Z0-9]+)---$", line)
+            if m:
+                current = m.group(1)
+                sections[current] = []
+            elif current:
+                sections[current].append(line)
+        host_lines = [ln.strip() for ln in sections.get("HOST", []) if ln.strip()]
+        hostname = host_lines[0] if host_lines else host
         ip6 = ""
-        for line in lines[1:]:
-            addr = line.strip()
+        for raw in sections.get("IP6", []):
+            addr = raw.strip()
             if not addr:
                 continue
             try:
@@ -853,7 +867,9 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 break
             if not ip6:
                 ip6 = addr
-        return hostname or host, ip6
+        arp_lines = [ln for ln in sections.get("ARP", []) if ln.strip()]
+        ndp_lines = [ln for ln in sections.get("NDP", []) if ln.strip()]
+        return hostname or host, ip6, arp_lines, ndp_lines
 
     async def _collect_wifi(
         self, host: str, ap_name: str
@@ -1128,8 +1144,9 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Collect gateway data
         gw_data = await self._collect_gateway()
-        if not gw_data:
-            # Gateway unreachable — serve cached device list
+        gateway_absent = self._gateway_host is None
+        if not gw_data and not gateway_absent:
+            # Gateway configured but unreachable — serve cached device list
             if self._prev_state:
                 cached_devices = [
                     Device(
@@ -1162,9 +1179,16 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 }
             raise UpdateFailed("Gateway unreachable")
 
-        leases = parse_leases(gw_data["leases"])
-        arp_states, stale, arp_ips = parse_arp(gw_data["arp"])
-        ndp = parse_ndp(gw_data["ndp"])
+        if gw_data:
+            leases = parse_leases(gw_data["leases"])
+            arp_states, stale, arp_ips = parse_arp(gw_data["arp"])
+            ndp = parse_ndp(gw_data["ndp"])
+        else:
+            leases = {}
+            arp_states = {}
+            stale = set()
+            arp_ips = {}
+            ndp = {}
 
         # Ping stale devices
         stale_ips = []
@@ -1175,7 +1199,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 or self._prev_state[mac].miss < DISCONNECT_MISS_THRESHOLD
             ):
                 stale_ips.append(ip)
-        if stale_ips:
+        if stale_ips and gw_data:
             refreshed = await self._ping_stale(stale_ips)
             if refreshed:
                 arp_states, stale, arp_ips = parse_arp(refreshed)
@@ -1190,7 +1214,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ] + [
             arp_ips[mac] for mac in arp_only_macs if arp_ips[mac] not in self._dns_cache
         ]
-        if missing_ips:
+        if missing_ips and gw_data:
             resolved = await self._resolve_hostnames(missing_ips)
             for mac, info in leases.items():
                 if not info["hostname"] and info["ip"] in resolved:
@@ -1212,13 +1236,31 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             for host, result in zip(self._ap_hosts, ap_info_results):
                 if isinstance(result, Exception):
                     name_map[host] = host
-                else:
-                    hostname, ip6 = result
-                    name_map[host] = hostname or host
-                    if ip6:
-                        ap_ip6_map[host] = ip6
+                    continue
+                hostname, ip6, ap_arp_lines, ap_ndp_lines = result
+                name_map[host] = hostname or host
+                if ip6:
+                    ap_ip6_map[host] = ip6
+                # Gateway-less mode: union per-AP neigh tables into master maps.
+                # Prefer REACHABLE over STALE when same MAC seen on multiple APs.
+                if gateway_absent:
+                    ap_states, ap_stale, ap_arp_ips = parse_arp(ap_arp_lines)
+                    for mac, state in ap_states.items():
+                        if mac not in arp_states or (
+                            arp_states[mac] != "REACHABLE" and state == "REACHABLE"
+                        ):
+                            arp_states[mac] = state
+                    stale |= ap_stale - {
+                        m for m, s in arp_states.items() if s == "REACHABLE"
+                    }
+                    for mac, ip in ap_arp_ips.items():
+                        arp_ips.setdefault(mac, ip)
+                    for mac, ip6_addr in parse_ndp(ap_ndp_lines).items():
+                        ndp.setdefault(mac, ip6_addr)
 
-        wifi_tasks = [self._collect_wifi(self._gateway_host, "Gateway")]
+        wifi_tasks: list = []
+        if self._gateway_host:
+            wifi_tasks.append(self._collect_wifi(self._gateway_host, "Gateway"))
         for host in self._ap_hosts:
             wifi_tasks.append(self._collect_wifi(host, name_map.get(host, host)))
         wifi_results = await asyncio.gather(*wifi_tasks, return_exceptions=True)
@@ -1227,15 +1269,19 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         alive_ap_ips: list[str] = []
         ap_hoststats: dict[str, list[str]] = {}
 
-        gw_wifi_result = wifi_results[0]
-        if not isinstance(gw_wifi_result, Exception):
-            entries, hoststat = gw_wifi_result
-            all_wifi.extend(entries)
-            if hoststat:
-                ap_hoststats[self._gateway_host] = hoststat
+        idx = 0
+        if self._gateway_host:
+            gw_wifi_result = wifi_results[idx]
+            idx += 1
+            if not isinstance(gw_wifi_result, Exception):
+                entries, hoststat = gw_wifi_result
+                all_wifi.extend(entries)
+                if hoststat:
+                    ap_hoststats[self._gateway_host] = hoststat
 
-        for i, host in enumerate(self._ap_hosts):
-            result = wifi_results[i + 1]
+        for host in self._ap_hosts:
+            result = wifi_results[idx]
+            idx += 1
             if isinstance(result, Exception):
                 continue
             entries, hoststat = result
@@ -1248,10 +1294,17 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Inject AP IPv6 into NDP
         for ap_host, ap_ip6 in ap_ip6_map.items():
+            matched = False
             for mac, info in leases.items():
                 if info["ip"] == ap_host:
                     ndp[mac] = ap_ip6
+                    matched = True
                     break
+            if not matched:
+                for mac, ip in arp_ips.items():
+                    if ip == ap_host:
+                        ndp[mac] = ap_ip6
+                        break
 
         # Vendor lookup
         all_macs = (
@@ -1263,9 +1316,14 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
         # WAN bandwidth
-        rx_rate, tx_rate, wan_rx_total, wan_tx_total, wan_bw_since = (
-            self._compute_wan_rates(gw_data["rx_bytes"], gw_data["tx_bytes"])
-        )
+        if gw_data:
+            rx_rate, tx_rate, wan_rx_total, wan_tx_total, wan_bw_since = (
+                self._compute_wan_rates(gw_data["rx_bytes"], gw_data["tx_bytes"])
+            )
+        else:
+            rx_rate = tx_rate = None
+            wan_rx_total = wan_tx_total = 0
+            wan_bw_since = int(time.time())
 
         # Per-device bandwidth
         wifi_bytes: dict[str, dict[str, int]] = {}
@@ -1282,25 +1340,30 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ip_to_mac = {info["ip"]: mac for mac, info in leases.items() if info.get("ip")}
         ip_to_mac.update({ip: mac for mac, ip in arp_ips.items()})
         wired_bytes: dict[str, dict[str, int]] = {}
-        for ip, bw in parse_conntrack(gw_data.get("conntrack", [])).items():
+        conntrack_lines = gw_data.get("conntrack", []) if gw_data else []
+        for ip, bw in parse_conntrack(conntrack_lines).items():
             wmac = ip_to_mac.get(ip)
             if wmac and wmac not in wifi_bytes:
                 wired_bytes[wmac] = bw
         device_rates, device_accum = self._compute_device_rates(wifi_bytes, wired_bytes)
 
         # Build device list
+        gw_mac = gw_data.get("gw_mac", "") if gw_data else ""
+        gw_ip = gw_data.get("gw_ip", "") if gw_data else ""
+        gw_hostname = gw_data.get("gw_hostname", "") if gw_data else ""
+        gw_ip6 = gw_data.get("gw_ip6", "") if gw_data else ""
         devices = build_devices(
             leases,
             arp_states,
             stale,
             all_wifi,
             self._vendor_cache,
-            gw_data["gw_mac"],
-            gw_data["gw_ip"],
-            gw_data["gw_hostname"],
+            gw_mac,
+            gw_ip,
+            gw_hostname,
             alive_ap_ips,
             ndp=ndp,
-            gw_ip6=gw_data["gw_ip6"],
+            gw_ip6=gw_ip6,
             arp_ips=arp_ips,
             arp_hostnames=arp_hostnames,
             prev_state=self._prev_state,
@@ -1325,7 +1388,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if d.hostname and d.hostname in ap_rx:
                 d.rx_bps = ap_rx[d.hostname]
                 d.tx_bps = ap_tx.get(d.hostname, 0)
-            elif d.mac == gw_data["gw_mac"]:
+            elif gw_mac and d.mac == gw_mac:
                 d.rx_bps = rx_rate
                 d.tx_bps = tx_rate
                 d.rx_total = wan_rx_total
@@ -1351,13 +1414,16 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             min_interval_s=self.update_interval.total_seconds() * 2,
             disconnect_miss_threshold=self._disconnect_threshold_miss,
         )
-        wan_events = self._detect_wan_events(
-            gw_data.get("wan_ip", ""),
-            gw_data.get("wan_ip6", "") or gw_data.get("gw_ip6", ""),
-            gw_data.get("gw_mac", ""),
-            gw_data.get("gw_hostname", "gw"),
-            ts,
-        )
+        if gw_data:
+            wan_events = self._detect_wan_events(
+                gw_data.get("wan_ip", ""),
+                gw_data.get("wan_ip6", "") or gw_data.get("gw_ip6", ""),
+                gw_data.get("gw_mac", ""),
+                gw_data.get("gw_hostname", "gw"),
+                ts,
+            )
+        else:
+            wan_events = []
         all_events = wan_events + events
         new_state = prune_old_state(new_state)
 
@@ -1374,14 +1440,15 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Host stats
         host_stats: dict[str, dict[str, Any]] = {}
-        gw_stats = self._compute_host_stats(
-            self._gateway_host, parse_hoststat(gw_data.get("hoststat", []))
-        )
-        if gw_stats:
-            host_stats[self._gateway_host] = {
-                "hostname": gw_data.get("gw_hostname", "gateway"),
-                **gw_stats,
-            }
+        if self._gateway_host and gw_data:
+            gw_stats = self._compute_host_stats(
+                self._gateway_host, parse_hoststat(gw_data.get("hoststat", []))
+            )
+            if gw_stats:
+                host_stats[self._gateway_host] = {
+                    "hostname": gw_data.get("gw_hostname", "gateway"),
+                    **gw_stats,
+                }
         for host in self._ap_hosts:
             stats = self._compute_host_stats(
                 host, parse_hoststat(ap_hoststats.get(host, []))
@@ -1396,13 +1463,18 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 }
 
         # DNS stats
-        dns_stats = self._compute_dns_rates(parse_dns_stats(gw_data.get("dns", [])))
+        if gw_data:
+            dns_stats = self._compute_dns_rates(parse_dns_stats(gw_data.get("dns", [])))
+        else:
+            dns_stats = None
 
         return {
             "device_count": sum(1 for d in devices if d.online),
             "scan_duration": round(time.time() - scan_start, 2),
-            "wan_ip": gw_data["wan_ip"],
-            "wan_ip6": gw_data["wan_ip6"] or gw_data["gw_ip6"],
+            "wan_ip": gw_data.get("wan_ip", "") if gw_data else "",
+            "wan_ip6": (gw_data.get("wan_ip6") or gw_data.get("gw_ip6", ""))
+            if gw_data
+            else "",
             "wan_rx_rate": rx_rate,
             "wan_tx_rate": tx_rate,
             "host_stats": host_stats,
@@ -1410,7 +1482,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "devices": [asdict(d) for d in devices],
             "partial": False,
             # Pass through for entity platform use
-            "_gw_mac": gw_data["gw_mac"],
-            "_gw_hostname": gw_data["gw_hostname"],
+            "_gw_mac": gw_mac,
+            "_gw_hostname": gw_hostname,
             "_ap_hosts": self._ap_hosts,
         }

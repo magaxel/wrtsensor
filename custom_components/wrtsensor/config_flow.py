@@ -116,39 +116,52 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            gateway_host = user_input[CONF_GATEWAY_HOST].strip()
+            gateway_host = user_input.get(CONF_GATEWAY_HOST, "").strip()
             ssh_key_path = user_input[CONF_SSH_KEY_PATH].strip()
             ssh_port = user_input.get(CONF_SSH_PORT, DEFAULT_SSH_PORT)
+            ap_hosts_raw = user_input.get(CONF_AP_HOSTS, "")
+            ap_hosts = _parse_hosts(ap_hosts_raw)
 
-            await self.async_set_unique_id(gateway_host)
-            self._abort_if_unique_id_configured()
-
-            error = await _test_ssh(gateway_host, ssh_key_path, ssh_port)
-            if error == "auth_failed":
-                self._pending = {
-                    CONF_GATEWAY_HOST: gateway_host,
-                    CONF_SSH_KEY_PATH: ssh_key_path,
-                    CONF_SSH_PORT: ssh_port,
-                    CONF_AP_HOSTS: user_input.get(CONF_AP_HOSTS, ""),
-                }
-                return await self.async_step_provision_key()
-            if error:
-                errors["base"] = error
+            if not gateway_host and not ap_hosts:
+                errors["base"] = "at_least_one_host"
             else:
-                return self.async_create_entry(
-                    title=f"wrtsensor ({gateway_host})",
-                    data={
+                unique_id = gateway_host or ap_hosts[0]
+                await self.async_set_unique_id(unique_id)
+                self._abort_if_unique_id_configured()
+
+                test_host = gateway_host or ap_hosts[0]
+                error = await _test_ssh(test_host, ssh_key_path, ssh_port)
+                if error == "auth_failed":
+                    self._pending = {
                         CONF_GATEWAY_HOST: gateway_host,
                         CONF_SSH_KEY_PATH: ssh_key_path,
                         CONF_SSH_PORT: ssh_port,
-                        CONF_AP_HOSTS: user_input.get(CONF_AP_HOSTS, ""),
-                    },
-                )
+                        CONF_AP_HOSTS: ap_hosts_raw,
+                    }
+                    return await self.async_step_provision_key()
+                if error:
+                    errors["base"] = error
+                else:
+                    title = (
+                        f"wrtsensor ({gateway_host})"
+                        if gateway_host
+                        else f"wrtsensor (APs: {ap_hosts_raw})"
+                    )
+                    return self.async_create_entry(
+                        title=title,
+                        data={
+                            CONF_GATEWAY_HOST: gateway_host,
+                            CONF_SSH_KEY_PATH: ssh_key_path,
+                            CONF_SSH_PORT: ssh_port,
+                            CONF_AP_HOSTS: ap_hosts_raw,
+                        },
+                    )
 
         schema = vol.Schema(
             {
-                vol.Required(
+                vol.Optional(
                     CONF_GATEWAY_HOST,
+                    default="",
                     description={"suggested_value": "192.168.1.1"},
                 ): str,
                 vol.Required(
@@ -174,9 +187,9 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
             ssh_password = user_input["ssh_password"]
             key_path = self._pending[CONF_SSH_KEY_PATH]
             port = self._pending[CONF_SSH_PORT]
-            hosts = [self._pending[CONF_GATEWAY_HOST]] + _parse_hosts(
-                self._pending.get(CONF_AP_HOSTS, "")
-            )
+            gateway = self._pending.get(CONF_GATEWAY_HOST, "")
+            ap_hosts = _parse_hosts(self._pending.get(CONF_AP_HOSTS, ""))
+            hosts = ([gateway] if gateway else []) + ap_hosts
 
             for host in hosts:
                 err = await _provision_ssh_key(
@@ -187,14 +200,18 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
                     break
 
             if not errors:
-                error = await _test_ssh(
-                    self._pending[CONF_GATEWAY_HOST], key_path, port
-                )
+                test_host = gateway or ap_hosts[0]
+                error = await _test_ssh(test_host, key_path, port)
                 if error:
                     errors["base"] = "auth_failed_after_provision"
                 else:
+                    title = (
+                        f"wrtsensor ({gateway})"
+                        if gateway
+                        else f"wrtsensor (APs: {self._pending.get(CONF_AP_HOSTS, '')})"
+                    )
                     return self.async_create_entry(
-                        title=f"wrtsensor ({self._pending[CONF_GATEWAY_HOST]})",
+                        title=title,
                         data=self._pending,
                     )
 
@@ -225,18 +242,24 @@ class WrtsensorOptionsFlow(OptionsFlow):
         current = {**self._config_entry.data, **self._config_entry.options}
 
         if user_input is not None:
-            gateway_host = current[CONF_GATEWAY_HOST]
+            gateway_host = current.get(CONF_GATEWAY_HOST, "")
+            ap_hosts_raw = user_input.get(CONF_AP_HOSTS, current.get(CONF_AP_HOSTS, ""))
+            ap_hosts = _parse_hosts(ap_hosts_raw)
             ssh_key_path = user_input.get(
                 CONF_SSH_KEY_PATH, current.get(CONF_SSH_KEY_PATH, DEFAULT_SSH_KEY)
             )
             ssh_port = user_input.get(
                 CONF_SSH_PORT, current.get(CONF_SSH_PORT, DEFAULT_SSH_PORT)
             )
-            error = await _test_ssh(gateway_host, ssh_key_path, ssh_port)
-            if error:
-                errors["base"] = error
+            if not gateway_host and not ap_hosts:
+                errors["base"] = "at_least_one_host"
             else:
-                return self.async_create_entry(title="", data=user_input)
+                test_host = gateway_host or ap_hosts[0]
+                error = await _test_ssh(test_host, ssh_key_path, ssh_port)
+                if error:
+                    errors["base"] = error
+                else:
+                    return self.async_create_entry(title="", data=user_input)
 
         schema = vol.Schema(
             {

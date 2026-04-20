@@ -2,18 +2,18 @@
   "config": {
     "step": {
       "user": {
-        "title": "wrtsensor — Connect to OpenWrt gateway",
+        "title": "wrtsensor — Connect to OpenWrt",
         "data": {
-          "gateway_host": "Gateway IP address",
+          "gateway_host": "Gateway IP address (optional)",
           "ssh_key_path": "SSH private key path",
           "ssh_port": "SSH port",
           "ap_hosts": "Access point IPs"
         },
         "data_description": {
-          "gateway_host": "IP address of the OpenWrt router that acts as your gateway. This host must be reachable over SSH from Home Assistant.",
+          "gateway_host": "IP address of the OpenWrt router that acts as your gateway. Leave empty if you only have OpenWrt access points behind a non-OpenWrt router. A single combined OpenWrt box (routing + Wi-Fi) counts as a gateway — enter its IP here.",
           "ssh_key_path": "Absolute path to the SSH private key on the HA host used to authenticate as root. Example: /config/ssh/id_ed25519",
           "ssh_port": "SSH port on all OpenWrt hosts (gateway and APs). Default: 22.",
-          "ap_hosts": "Comma-separated IPs of additional OpenWrt access points. Leave empty if you only have a gateway. Example: 192.168.1.22,192.168.1.23"
+          "ap_hosts": "Comma-separated IPs of OpenWrt access points. At least one host (gateway or AP) is required. Example: 192.168.1.22,192.168.1.23"
         }
       },
       "provision_key": {
@@ -32,15 +32,16 @@
     "error": {
       "ssh_key_not_found": "SSH key file not found at the specified path",
       "auth_failed": "SSH authentication failed — check key and root access",
-      "cannot_connect": "Cannot connect to gateway — check IP and network",
-      "no_response": "Connected but gateway returned no hostname",
+      "cannot_connect": "Cannot connect — check IP and network",
+      "no_response": "Connected but host returned no hostname",
       "pub_key_unreadable": "Cannot read public key from the private key file",
       "provision_auth_failed": "Password authentication failed — check username and password",
       "provision_cannot_connect": "Cannot connect to device for provisioning — check IP and network",
-      "auth_failed_after_provision": "Key was provisioned but authentication still failed — try reloading the integration"
+      "auth_failed_after_provision": "Key was provisioned but authentication still failed — try reloading the integration",
+      "at_least_one_host": "Enter at least a gateway or one access point."
     },
     "abort": {
-      "already_configured": "This gateway is already configured"
+      "already_configured": "This host is already configured"
     }
   },
   "options": {
@@ -72,8 +73,9 @@
     "error": {
       "ssh_key_not_found": "SSH key file not found at the specified path",
       "auth_failed": "SSH authentication failed",
-      "cannot_connect": "Cannot connect to gateway",
-      "no_response": "Gateway returned no hostname"
+      "cannot_connect": "Cannot connect",
+      "no_response": "Host returned no hostname",
+      "at_least_one_host": "Enter at least a gateway or one access point."
     }
   }
 }

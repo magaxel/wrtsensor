@@ -4,7 +4,13 @@
 
 A lightweight Home Assistant network monitor for a home LAN running OpenWrt. A single Python integration SSHes into the router (and any access points) once per minute, collects the complete picture of the network, and exposes it to Home Assistant as sensors, binary sensors, and device trackers. Lovelace custom cards render device lists, topology maps, event logs, and dnsmasq DNS statistics.
 
-An OpenWrt gateway is required — the scanner pulls DHCP leases, ARP/NDP tables, WAN, and dnsmasq stats from it. Access points are optional: zero, one, or many OpenWrt APs can be added to also collect Wi-Fi associations and per-AP host stats.
+Three topologies are supported:
+
+- **Gateway + APs** — the full picture: DHCP leases, ARP/NDP, WAN, dnsmasq stats, Wi-Fi associations, per-host stats.
+- **Gateway only** — one OpenWrt box that routes and does Wi-Fi. Enter its IP in the gateway field; it counts as both gateway *and* AP for Wi-Fi collection.
+- **APs only** — OpenWrt access points behind a non-OpenWrt router. Leave gateway empty; devices are discovered from each AP's `ip neigh` on `br-lan`. WAN, DNS, and conntrack-bandwidth sensors are not created in this mode.
+
+At least one host (gateway or AP) must be configured.
 
 ## Table of contents
 
@@ -51,7 +57,7 @@ All of this comes from a single 20 s SSH call to the gateway plus parallel SSH c
 
 3. Go to **Settings → Devices & Services → Add Integration** and search for **wrtsensor**.
 
-4. Enter your gateway IP, SSH key path (default `/config/ssh/id_ed25519`), and optionally any AP IPs (comma-separated).
+4. Enter your gateway IP (optional), SSH key path (default `/config/ssh/id_ed25519`), and any AP IPs (comma-separated). At least one of gateway or APs must be set — leaving gateway empty enables APs-only mode.
 
 5. Done — `sensor.wrtsensor_network_scanner` appears immediately, Lovelace cards auto-register. Open **Settings → Options** on the integration to add presence MACs, change scan interval, or update interface names.
 
@@ -167,15 +173,19 @@ Device tracker entities are named after the device hostname (e.g. `device_tracke
 
 ## Network assumptions
 
-The integration expects an OpenWrt gateway reachable over SSH (key-based auth). Any number of OpenWrt access points can be added — the reference deployment uses three but one or none will also work.
+The integration expects at least one OpenWrt host reachable over SSH (key-based auth). Gateway and APs are both optional on their own — but at least one must be set.
 
 | Role | Address (example) |
 |------|-------------------|
-| Gateway — **required** | `192.0.2.1` |
+| Gateway — optional | `192.0.2.1` |
 | AP — optional | `192.0.2.10` |
 | AP — optional (more as needed) | `192.0.2.11`, `192.0.2.12`, … |
 | LAN bridge | `br-lan` |
 | WAN interface | `eth0` |
+
+A single OpenWrt box that routes *and* does Wi-Fi counts as a gateway — enter its IP in the gateway field and leave the AP list empty.
+
+WAN bandwidth, DNS cache, and conntrack-derived per-device bandwidth are only collected when a gateway is configured. In APs-only mode, devices are discovered via each AP's own `ip -4/-6 neigh show dev br-lan` output; DHCP hostnames are not available since the non-OpenWrt router holds them.
 
 Replace the example addresses with whatever your LAN uses. The HACS integration multiplexes connections with asyncssh in-process; the standalone `diagnose.py` script uses `ControlMaster=auto / ControlPersist=60`.
 
