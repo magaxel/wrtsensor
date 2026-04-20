@@ -1,0 +1,726 @@
+import {
+  css,
+  html,
+  LitElement,
+  nothing,
+} from "https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js";
+
+const CARD_VERSION = "2.1.0";
+const CARD_TYPE = "network-table-card";
+const EDITOR_TYPE = `${CARD_TYPE}-editor`;
+
+// ── formatters ────────────────────────────────────────────────────────────────
+
+function fmtBytes(bytes) {
+  if (bytes == null) return "—";
+  if (bytes >= 1e12) return `${(bytes / 1e12).toFixed(2)} TB`;
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(2)} GB`;
+  if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(1)} MB`;
+  if (bytes >= 1e3) return `${Math.round(bytes / 1e3)} KB`;
+  return `${bytes} B`;
+}
+
+function fmtAge(ts) {
+  if (ts == null) return "—";
+  const secs = Math.floor(Date.now() / 1000) - ts;
+  if (secs < 120) return "just now";
+  if (secs < 3600) return `${Math.floor(secs / 60)}m`;
+  if (secs < 86400) return `${Math.floor(secs / 3600)}h`;
+  if (secs < 86400 * 2) return "1 day";
+  return `${Math.floor(secs / 86400)} days`;
+}
+
+function fmtMbps(bps) {
+  if (bps == null) return "—";
+  const m = (bps * 8) / 1e6;
+  return m >= 10 ? m.toFixed(0) : m >= 1 ? m.toFixed(1) : m.toFixed(2);
+}
+
+function ipSortKey(ip) {
+  const p = (ip || "").split(".");
+  if (p.length !== 4) return "999.999.999.999";
+  return p.map((n) => String(parseInt(n, 10) || 0).padStart(3, "0")).join(".");
+}
+
+// ── columns ───────────────────────────────────────────────────────────────────
+
+const ARROW_DOWN = html`<span class="dl">↓</span>`;
+const ARROW_UP = html`<span class="ul">↑</span>`;
+
+const ALL_COLS = [
+  { key: "ip", label: "IP", filterable: true, filterKey: "ip" },
+  { key: "ip6", label: "IPv6", filterable: true, filterKey: "ip6" },
+  { key: "ip6_enabled", label: "IPv6", filterable: false },
+  { key: "hostname", label: "Hostname", filterable: true, filterKey: "host" },
+  { key: "vendor", label: "Vendor", filterable: true, filterKey: "vendor" },
+  { key: "mac", label: "MAC", filterable: true, filterKey: "mac" },
+  { key: "connection", label: "", filterable: false },
+  { key: "ap", label: "AP", filterable: true, filterKey: "ap" },
+  { key: "band", label: "Band", filterable: true, filterKey: "band" },
+  { key: "tx_rate", label: "TX (Mbit/s)", filterable: false },
+  { key: "signal", label: "Signal (dBm)", filterable: false },
+  { key: "rx_bps", label: "↓ Mbit/s", labelTpl: html`${ARROW_DOWN} Mbit/s`, filterable: false },
+  { key: "tx_bps", label: "↑ Mbit/s", labelTpl: html`${ARROW_UP} Mbit/s`, filterable: false },
+  { key: "noise", label: "Noise (dBm)", filterable: false },
+  { key: "snr", label: "SNR (dB)", filterable: false },
+  { key: "rx_rate", label: "RX (Mbit/s)", filterable: false },
+  { key: "exp_tput", label: "Exp. (Mbit/s)", filterable: false },
+  { key: "rx_total", label: "↓ Total", labelTpl: html`${ARROW_DOWN} Total`, filterable: false },
+  { key: "tx_total", label: "↑ Total", labelTpl: html`${ARROW_UP} Total`, filterable: false },
+  { key: "first_seen", label: "Discovered", filterable: false },
+  { key: "bw_since", label: "BW since", filterable: false },
+];
+
+const DEFAULT_COLS = [
+  "ip",
+  "ip6_enabled",
+  "hostname",
+  "vendor",
+  "mac",
+  "connection",
+  "ap",
+  "band",
+  "tx_rate",
+  "signal",
+];
+
+const COL_DISPLAY_NAME = {
+  ip: "IP",
+  ip6: "IPv6 (full address)",
+  ip6_enabled: "IPv6 (enabled indicator)",
+  hostname: "Hostname",
+  vendor: "Vendor",
+  mac: "MAC",
+  connection: "Connection",
+  ap: "AP",
+  band: "Band",
+  tx_rate: "TX (Mbit/s)",
+  signal: "Signal (dBm)",
+  rx_bps: "↓ Download (Mbit/s)",
+  tx_bps: "↑ Upload (Mbit/s)",
+  noise: "Noise floor (dBm)",
+  snr: "SNR (dB)",
+  rx_rate: "RX PHY rate (Mbit/s)",
+  exp_tput: "Expected throughput (Mbit/s)",
+  rx_total: "↓ Total downloaded",
+  tx_total: "↑ Total uploaded",
+  first_seen: "Discovered (time since first seen)",
+  bw_since: "BW since (time tracking started)",
+};
+
+// ── card ──────────────────────────────────────────────────────────────────────
+
+class NetworkTableCard extends LitElement {
+  static properties = {
+    hass: { attribute: false },
+    _config: { state: true },
+    _filters: { state: true },
+    _sortKey: { state: true },
+    _sortDir: { state: true },
+    _activeFilterCol: { state: true },
+  };
+
+  constructor() {
+    super();
+    this._filters = {};
+    this._sortKey = "ip";
+    this._sortDir = "asc";
+    this._activeFilterCol = null;
+  }
+
+  static styles = css`
+    :host {
+      display: block;
+    }
+    .wrap {
+      overflow-x: auto;
+      padding: 0 16px 16px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85em;
+      white-space: nowrap;
+    }
+    th {
+      text-align: left;
+      padding: 6px 6px;
+      border-bottom: 1px solid var(--divider-color, #333);
+      color: var(--secondary-text-color, #888);
+      font-weight: 500;
+      font-size: 0.8em;
+      vertical-align: bottom;
+    }
+    th.th-sortable {
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+    th.th-sortable:hover {
+      color: var(--primary-color, #009ac7);
+    }
+    th.th-sorted-asc,
+    th.th-sorted-desc {
+      color: var(--primary-color, #009ac7);
+    }
+    th[data-filter] .th-label {
+      cursor: text;
+      border-bottom: 1px dashed transparent;
+    }
+    th[data-filter] .th-label:hover {
+      border-bottom-color: currentColor;
+    }
+    th.th-filter-active .th-label {
+      font-style: italic;
+      color: var(--primary-color, #009ac7);
+    }
+    .th-sort-ind {
+      font-size: 0.85em;
+      opacity: 0.3;
+    }
+    th.th-sortable:hover .th-sort-ind,
+    th.th-sorted-asc .th-sort-ind,
+    th.th-sorted-desc .th-sort-ind {
+      opacity: 1;
+    }
+    th input {
+      background: transparent;
+      border: none;
+      border-bottom: 1px solid var(--primary-color, #009ac7);
+      color: var(--primary-text-color);
+      font-size: 1em;
+      font-weight: 500;
+      font-family: inherit;
+      padding: 0;
+      outline: none;
+      width: 100%;
+      box-sizing: border-box;
+      min-width: 40px;
+    }
+    th input::placeholder {
+      color: #555;
+      font-style: italic;
+      font-weight: normal;
+    }
+    td {
+      padding: 3px 6px;
+      border-bottom: 1px solid var(--divider-color, #1a1a1a);
+      vertical-align: middle;
+      user-select: text;
+    }
+    td.mono {
+      font-family: monospace;
+      font-size: 0.9em;
+    }
+    td.ellipsis {
+      max-width: 12em;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    tr.row-offline td {
+      opacity: 0.4;
+    }
+    .small {
+      font-size: 0.85em;
+    }
+    .dim {
+      color: #333;
+    }
+    .dl {
+      color: #4caf50;
+    }
+    .ul {
+      color: #ff9800;
+    }
+    .ic-green {
+      color: #4caf50;
+    }
+    .ic-orange {
+      color: #ff9800;
+    }
+    .ic-deep-orange {
+      color: #ff5722;
+    }
+    .ic-red {
+      color: #f44336;
+    }
+    .msg {
+      padding: 16px;
+      color: var(--secondary-text-color);
+      font-size: 0.9em;
+    }
+  `;
+
+  setConfig(config) {
+    if (!config?.entity) throw new Error("entity required");
+    const cols =
+      Array.isArray(config.columns) && config.columns.length
+        ? config.columns.filter((k) => ALL_COLS.some((c) => c.key === k))
+        : DEFAULT_COLS;
+    this._config = {
+      entity: config.entity,
+      title: config.title ?? "Network",
+      show_offline: config.show_offline ?? false,
+      columns: cols,
+    };
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    this._escHandler = (e) => {
+      if (e.key !== "Escape") return;
+      if (this.renderRoot?.activeElement?.tagName === "INPUT") return;
+      if (Object.values(this._filters).some(Boolean)) {
+        this._filters = {};
+        this._activeFilterCol = null;
+      }
+    };
+    document.addEventListener("keydown", this._escHandler);
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this._escHandler) document.removeEventListener("keydown", this._escHandler);
+  }
+
+  updated(changed) {
+    if (changed.has("_activeFilterCol") && this._activeFilterCol) {
+      const input = this.renderRoot.querySelector(`th[data-col="${this._activeFilterCol}"] input`);
+      if (input) {
+        input.focus();
+        input.select();
+      }
+    }
+  }
+
+  render() {
+    if (!this._config) return nothing;
+    if (!this.hass) {
+      return html`<ha-card><div class="msg">Loading…</div></ha-card>`;
+    }
+    const state = this.hass.states[this._config.entity];
+    if (!state) {
+      return html`<ha-card .header=${this._config.title}>
+        <div class="msg">Entity not found: ${this._config.entity}</div>
+      </ha-card>`;
+    }
+    if (state.state === "unavailable" || state.state === "unknown") {
+      return html`<ha-card .header=${this._config.title}>
+        <div class="msg">${this._config.entity} is ${state.state}</div>
+      </ha-card>`;
+    }
+
+    const all = state.attributes?.devices ?? [];
+    const visible = this._config.show_offline ? all : all.filter((d) => d.online !== false);
+    const cols = ALL_COLS.filter((c) => this._config.columns.includes(c.key));
+    const sorted = this._sortDevices(visible);
+    const filtered = sorted.filter((d) => this._matchesFilters(d));
+
+    return html`
+      <ha-card .header=${this._config.title}>
+        <div class="wrap">
+          <table>
+            <thead>
+              <tr>
+                ${cols.map((c) => this._renderHeader(c))}
+              </tr>
+            </thead>
+            <tbody>
+              ${filtered.map((d) => this._renderRow(d, cols))}
+            </tbody>
+          </table>
+        </div>
+      </ha-card>
+    `;
+  }
+
+  _renderHeader(col) {
+    const sorted = this._sortKey === col.key;
+    const sortedClass = sorted ? `th-sorted-${this._sortDir}` : "";
+    const sortInd = sorted ? (this._sortDir === "asc" ? "▲" : "▼") : "↕";
+
+    if (this._activeFilterCol === col.key && col.filterable) {
+      const val = this._filters[col.filterKey] || "";
+      return html`<th
+        class="th-sortable ${sortedClass}"
+        data-col=${col.key}
+      >
+        <input
+          type="text"
+          .value=${val}
+          @input=${(e) => this._onFilterInput(col.filterKey, e.target.value)}
+          @keydown=${(e) => this._onFilterKeydown(e)}
+          @blur=${() => (this._activeFilterCol = null)}
+        />
+      </th>`;
+    }
+
+    const filterVal = col.filterable ? this._filters[col.filterKey] || "" : "";
+    const filterActive = filterVal ? "th-filter-active" : "";
+    const labelContent = filterVal ? filterVal : (col.labelTpl ?? col.label);
+
+    if (!col.filterable) {
+      return html`<th
+        class="th-sortable ${sortedClass}"
+        data-col=${col.key}
+        @click=${() => this._handleSortClick(col.key)}
+      >
+        ${labelContent} <span class="th-sort-ind">${sortInd}</span>
+      </th>`;
+    }
+
+    return html`<th
+      class="th-sortable ${sortedClass} ${filterActive}"
+      data-col=${col.key}
+      data-filter=${col.filterKey}
+      @click=${() => this._handleSortClick(col.key)}
+    >
+      <span class="th-label" @click=${(e) => this._activateFilter(e, col.key)}
+        >${labelContent}</span
+      >
+      <span class="th-sort-ind">${sortInd}</span>
+    </th>`;
+  }
+
+  _activateFilter(e, key) {
+    e.stopPropagation();
+    this._activeFilterCol = key;
+  }
+
+  _onFilterInput(filterKey, value) {
+    this._filters = { ...this._filters, [filterKey]: value };
+  }
+
+  _onFilterKeydown(e) {
+    if (e.key === "Escape") {
+      this._filters = {};
+      this._activeFilterCol = null;
+    } else if (e.key === "Enter") {
+      e.target.blur();
+    }
+  }
+
+  _handleSortClick(key) {
+    if (this._activeFilterCol) return;
+    if (this._sortKey === key) {
+      this._sortDir = this._sortDir === "asc" ? "desc" : "asc";
+    } else {
+      this._sortKey = key;
+      this._sortDir = "asc";
+    }
+  }
+
+  _renderRow(d, cols) {
+    const offlineCls = d.online === false ? "row-offline" : "";
+    return html`<tr class=${offlineCls}>
+      ${cols.map((c) => this._renderCell(c, d))}
+    </tr>`;
+  }
+
+  _renderCell(col, d) {
+    let cls = "";
+    if (col.key === "ip" || col.key === "mac") cls = "mono";
+    else if (col.key === "vendor") cls = "ellipsis";
+    const title = col.key === "vendor" ? d.vendor || "" : nothing;
+    return html`<td class=${cls} title=${title}>
+      ${this._cellContent(col, d)}
+    </td>`;
+  }
+
+  _cellContent(col, d) {
+    switch (col.key) {
+      case "ip":
+        return d.ip || d.ip6 || "—";
+      case "ip6":
+        return d.ip6 ? html`<span class="mono small">${d.ip6}</span>` : "—";
+      case "ip6_enabled":
+        return d.ip6
+          ? html`<ha-icon
+              icon="mdi:check-circle"
+              class="ic-green"
+              title=${d.ip6}
+            ></ha-icon>`
+          : html`<span class="dim">—</span>`;
+      case "hostname":
+        return d.hostname || "—";
+      case "vendor":
+        return d.vendor || "—";
+      case "mac":
+        return d.mac || "—";
+      case "connection":
+        if (d.connection === "wifi") return this._signalIcon(d.signal);
+        if (d.connection === "wired") return html`<ha-icon icon="mdi:ethernet"></ha-icon>`;
+        return "—";
+      case "ap":
+        return d.ap || "—";
+      case "band":
+        return d.band || "—";
+      case "tx_rate":
+        return d.tx_rate != null ? String(d.tx_rate) : "—";
+      case "signal":
+        return d.signal != null ? String(d.signal) : "—";
+      case "rx_bps":
+        return fmtMbps(d.rx_bps);
+      case "tx_bps":
+        return fmtMbps(d.tx_bps);
+      case "noise":
+        return d.noise != null ? String(d.noise) : "—";
+      case "snr":
+        return d.snr != null ? String(d.snr) : "—";
+      case "rx_rate":
+        return d.rx_rate != null ? String(d.rx_rate) : "—";
+      case "exp_tput":
+        return d.exp_tput != null ? String(d.exp_tput) : "—";
+      case "rx_total": {
+        const t = d.bw_since
+          ? `since ${new Date(d.bw_since * 1000).toLocaleDateString()}`
+          : nothing;
+        return html`<span title=${t}>${fmtBytes(d.rx_total)}</span>`;
+      }
+      case "tx_total": {
+        const t = d.bw_since
+          ? `since ${new Date(d.bw_since * 1000).toLocaleDateString()}`
+          : nothing;
+        return html`<span title=${t}>${fmtBytes(d.tx_total)}</span>`;
+      }
+      case "first_seen": {
+        if (!d.first_seen) return "—";
+        const full = new Date(d.first_seen * 1000).toLocaleString();
+        return html`<span title=${full}>${fmtAge(d.first_seen)}</span>`;
+      }
+      case "bw_since": {
+        if (!d.bw_since) return "—";
+        const full = new Date(d.bw_since * 1000).toLocaleString();
+        return html`<span title=${full}>${fmtAge(d.bw_since)}</span>`;
+      }
+      default:
+        return "—";
+    }
+  }
+
+  _signalIcon(sig) {
+    const s = Number(sig);
+    if (Number.isNaN(s)) return html`<ha-icon icon="mdi:wifi"></ha-icon>`;
+    if (s > -60)
+      return html`<ha-icon
+        icon="mdi:wifi-strength-4"
+        class="ic-green"
+      ></ha-icon>`;
+    if (s > -70)
+      return html`<ha-icon
+        icon="mdi:wifi-strength-3"
+        class="ic-orange"
+      ></ha-icon>`;
+    if (s > -75)
+      return html`<ha-icon
+        icon="mdi:wifi-strength-2"
+        class="ic-deep-orange"
+      ></ha-icon>`;
+    return html`<ha-icon icon="mdi:wifi-strength-1" class="ic-red"></ha-icon>`;
+  }
+
+  _sortValue(d, key) {
+    switch (key) {
+      case "ip":
+        return ipSortKey(d.ip || d.ip6 || "");
+      case "ip6":
+        return d.ip6 || "zzz";
+      case "ip6_enabled":
+        return d.ip6 ? 1 : 0;
+      case "hostname":
+        return (d.hostname || "zzz").toLowerCase();
+      case "vendor":
+        return (d.vendor || "zzz").toLowerCase();
+      case "mac":
+        return d.mac || "";
+      case "connection":
+        return d.connection || "";
+      case "ap":
+        return (d.ap || "zzz").toLowerCase();
+      case "band":
+        return d.band || "";
+      case "tx_rate":
+        return d.tx_rate ?? -1;
+      case "signal":
+        return d.signal ?? -Infinity;
+      case "rx_bps":
+        return d.rx_bps ?? -1;
+      case "tx_bps":
+        return d.tx_bps ?? -1;
+      case "noise":
+        return d.noise ?? Infinity;
+      case "snr":
+        return d.snr ?? -1;
+      case "rx_rate":
+        return d.rx_rate ?? -1;
+      case "exp_tput":
+        return d.exp_tput ?? -1;
+      case "rx_total":
+        return d.rx_total ?? -1;
+      case "tx_total":
+        return d.tx_total ?? -1;
+      case "first_seen":
+        return d.first_seen ?? Infinity;
+      case "bw_since":
+        return d.bw_since ?? Infinity;
+      default:
+        return "";
+    }
+  }
+
+  _sortDevices(devices) {
+    const key = this._sortKey;
+    if (!key) return devices;
+    return [...devices].sort((a, b) => {
+      const av = this._sortValue(a, key);
+      const bv = this._sortValue(b, key);
+      const cmp =
+        typeof av === "number" && typeof bv === "number"
+          ? av - bv
+          : String(av).localeCompare(String(bv));
+      return this._sortDir === "asc" ? cmp : -cmp;
+    });
+  }
+
+  _matchesFilters(d) {
+    for (const col of ALL_COLS) {
+      if (!col.filterable) continue;
+      const val = this._filters[col.filterKey];
+      if (!val) continue;
+      let target = "";
+      switch (col.filterKey) {
+        case "ip":
+          target = d.ip || d.ip6 || "";
+          break;
+        case "ip6":
+          target = d.ip6 || "";
+          break;
+        case "host":
+          target = d.hostname || "";
+          break;
+        case "vendor":
+          target = d.vendor || "";
+          break;
+        case "mac":
+          target = d.mac || "";
+          break;
+        case "ap":
+          target = d.ap || "";
+          break;
+        case "band":
+          target = d.band || "";
+          break;
+      }
+      if (!String(target).toLowerCase().includes(val.toLowerCase())) return false;
+    }
+    return true;
+  }
+
+  static getConfigElement() {
+    return document.createElement(EDITOR_TYPE);
+  }
+
+  static getStubConfig() {
+    return { entity: "sensor.network_scanner", title: "Network" };
+  }
+
+  getCardSize() {
+    return 6;
+  }
+}
+
+// ── editor ────────────────────────────────────────────────────────────────────
+
+class NetworkTableCardEditor extends LitElement {
+  static properties = {
+    hass: { attribute: false },
+    _config: { state: true },
+  };
+
+  setConfig(config) {
+    this._config = config;
+  }
+
+  _schema() {
+    return [
+      {
+        name: "entity",
+        required: true,
+        selector: { entity: { domain: "sensor" } },
+      },
+      { name: "title", selector: { text: {} } },
+      { name: "show_offline", selector: { boolean: {} } },
+      {
+        name: "columns",
+        selector: {
+          select: {
+            multiple: true,
+            mode: "list",
+            options: ALL_COLS.map((col) => ({
+              value: col.key,
+              label: COL_DISPLAY_NAME[col.key] ?? col.label ?? col.key,
+            })),
+          },
+        },
+      },
+    ];
+  }
+
+  _computeLabel = (s) => {
+    const labels = {
+      entity: "Entity",
+      title: "Title",
+      show_offline: "Show offline devices (dimmed)",
+      columns: "Columns",
+    };
+    return labels[s.name] ?? s.name;
+  };
+
+  _valueChanged = (ev) => {
+    this.dispatchEvent(
+      new CustomEvent("config-changed", {
+        detail: { config: { ...this._config, ...ev.detail.value } },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  };
+
+  render() {
+    if (!this.hass || !this._config) return nothing;
+    const data = {
+      entity: this._config.entity ?? "",
+      title: this._config.title ?? "Network",
+      show_offline: this._config.show_offline ?? false,
+      columns: this._config.columns?.length ? this._config.columns : DEFAULT_COLS,
+    };
+    return html`
+      <ha-form
+        .hass=${this.hass}
+        .data=${data}
+        .schema=${this._schema()}
+        .computeLabel=${this._computeLabel}
+        @value-changed=${this._valueChanged}
+      ></ha-form>
+    `;
+  }
+}
+
+// ── registration ──────────────────────────────────────────────────────────────
+
+customElements.define(EDITOR_TYPE, NetworkTableCardEditor);
+customElements.define(CARD_TYPE, NetworkTableCard);
+
+window.customCards = window.customCards || [];
+window.customCards.push({
+  type: CARD_TYPE,
+  name: "Network Table",
+  description: "Filterable network device table from network_scanner sensor (Lit, mobile-friendly)",
+  preview: false,
+});
+
+console.info(
+  `%c NETWORK-TABLE-CARD %c v${CARD_VERSION} `,
+  "color: white; background: #009ac7; font-weight: 700;",
+  "color: #009ac7; background: white; font-weight: 700;",
+);

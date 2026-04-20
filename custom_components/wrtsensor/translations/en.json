@@ -1,0 +1,79 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "wrtsensor — Connect to OpenWrt gateway",
+        "data": {
+          "gateway_host": "Gateway IP address",
+          "ssh_key_path": "SSH private key path",
+          "ssh_port": "SSH port",
+          "ap_hosts": "Access point IPs"
+        },
+        "data_description": {
+          "gateway_host": "IP address of the OpenWrt router that acts as your gateway. This host must be reachable over SSH from Home Assistant.",
+          "ssh_key_path": "Absolute path to the SSH private key on the HA host used to authenticate as root. Example: /config/ssh/id_ed25519",
+          "ssh_port": "SSH port on all OpenWrt hosts (gateway and APs). Default: 22.",
+          "ap_hosts": "Comma-separated IPs of additional OpenWrt access points. Leave empty if you only have a gateway. Example: 192.168.1.22,192.168.1.23"
+        }
+      },
+      "provision_key": {
+        "title": "Add SSH key to OpenWrt devices",
+        "description": "Key authentication failed. Enter credentials to automatically add the public key to each OpenWrt device. The password is not stored.",
+        "data": {
+          "ssh_user": "Username",
+          "ssh_password": "Password"
+        },
+        "data_description": {
+          "ssh_user": "SSH username on the OpenWrt device. Default: root.",
+          "ssh_password": "SSH password. Used once to provision the key, never stored."
+        }
+      }
+    },
+    "error": {
+      "ssh_key_not_found": "SSH key file not found at the specified path",
+      "auth_failed": "SSH authentication failed — check key and root access",
+      "cannot_connect": "Cannot connect to gateway — check IP and network",
+      "no_response": "Connected but gateway returned no hostname",
+      "pub_key_unreadable": "Cannot read public key from the private key file",
+      "provision_auth_failed": "Password authentication failed — check username and password",
+      "provision_cannot_connect": "Cannot connect to device for provisioning — check IP and network",
+      "auth_failed_after_provision": "Key was provisioned but authentication still failed — try reloading the integration"
+    },
+    "abort": {
+      "already_configured": "This gateway is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "wrtsensor options",
+        "data": {
+          "ssh_key_path": "SSH private key path",
+          "ssh_port": "SSH port",
+          "ap_hosts": "Access point IPs",
+          "scan_interval": "Scan interval (seconds)",
+          "lan_iface": "LAN bridge interface",
+          "wan_iface": "WAN interface",
+          "disconnect_threshold_s": "Disconnect threshold (seconds)",
+          "presence_macs": "Presence MACs"
+        },
+        "data_description": {
+          "ssh_key_path": "Absolute path to the SSH private key on the HA host. Example: /config/ssh/id_ed25519",
+          "ssh_port": "SSH port on all OpenWrt hosts (gateway and APs). Default: 22.",
+          "ap_hosts": "Comma-separated IPs of OpenWrt access points to collect Wi-Fi associations and host stats from. Example: 192.168.1.22,192.168.1.23",
+          "scan_interval": "How often to poll the gateway and APs. Minimum 30 s, maximum 3600 s. Default: 60 s.",
+          "lan_iface": "Bridge interface used for the LAN on OpenWrt. Default: br-lan. Change only if your router uses a different name.",
+          "wan_iface": "WAN-facing interface on the gateway used to read RX/TX byte counters. Default: eth0.",
+          "disconnect_threshold_s": "How long a device must be absent before a disconnect event is recorded. Default: 120 s (2 missed scans at 60 s interval).",
+          "presence_macs": "Comma-separated MAC addresses to track as presence binary sensors. Each MAC becomes a binary_sensor.wrtsensor_presence_* entity. Example: aa:bb:cc:dd:ee:ff,11:22:33:44:55:66"
+        }
+      }
+    },
+    "error": {
+      "ssh_key_not_found": "SSH key file not found at the specified path",
+      "auth_failed": "SSH authentication failed",
+      "cannot_connect": "Cannot connect to gateway",
+      "no_response": "Gateway returned no hostname"
+    }
+  }
+}

@@ -1,0 +1,85 @@
+# templates.yaml — wrtsensor example template sensors
+#
+# Derived sensors that unpack the JSON attributes on sensor.network_scanner.
+# Drop this in /config/templates.yaml (or !include from configuration.yaml)
+# and duplicate the per-host blocks for each gateway/AP IP you run.
+
+- sensor:
+    # --------------------- Host stats (gateway) ---------------------
+    # Repeat the cpu/ram/disk triple for every AP — change the IP key
+    # and rename the sensor to match (e.g. ap1_used_cpu).
+    - unique_id: wrtsensor_gw_used_cpu
+      name: gw_used_cpu
+      unit_of_measurement: "%"
+      state: >-
+        {% set h = state_attr('sensor.network_scanner', 'host_stats') %}
+        {{ h.get('192.0.2.1', {}).get('cpu') if h else none }}
+
+    - unique_id: wrtsensor_gw_used_ram
+      name: gw_used_ram
+      unit_of_measurement: "%"
+      state: >-
+        {% set h = state_attr('sensor.network_scanner', 'host_stats') %}
+        {{ h.get('192.0.2.1', {}).get('ram') if h else none }}
+
+    - unique_id: wrtsensor_gw_used_disk
+      name: gw_used_disk
+      unit_of_measurement: "%"
+      state: >-
+        {% set h = state_attr('sensor.network_scanner', 'host_stats') %}
+        {{ h.get('192.0.2.1', {}).get('disk') if h else none }}
+
+    # --------------------- WAN throughput ---------------------
+    - unique_id: wrtsensor_wan_download_mbit
+      name: wan_download_mbit
+      unit_of_measurement: "Mbit/s"
+      state: >-
+        {% set rx = state_attr('sensor.network_scanner', 'wan_rx_rate') %}
+        {{ (rx * 8 / 1000000) | round(2) if rx is not none else none }}
+
+    - unique_id: wrtsensor_wan_upload_mbit
+      name: wan_upload_mbit
+      unit_of_measurement: "Mbit/s"
+      state: >-
+        {% set tx = state_attr('sensor.network_scanner', 'wan_tx_rate') %}
+        {{ (tx * 8 / 1000000) | round(2) if tx is not none else none }}
+
+    # --------------------- DNS cache stats ---------------------
+    - unique_id: wrtsensor_dns_cache_hit_pct
+      name: dns_cache_hit_pct
+      unit_of_measurement: "%"
+      state: >-
+        {% set d = state_attr('sensor.network_scanner', 'dns_stats') %}
+        {{ d.get('hit_pct') if d else none }}
+
+    - unique_id: wrtsensor_dns_cache_hits_per_sec
+      name: dns_cache_hits_per_sec
+      unit_of_measurement: "q/s"
+      state: >-
+        {% set d = state_attr('sensor.network_scanner', 'dns_stats') %}
+        {{ d.get('hits_per_sec') if d else none }}
+
+    - unique_id: wrtsensor_dns_cache_misses_per_sec
+      name: dns_cache_misses_per_sec
+      unit_of_measurement: "q/s"
+      state: >-
+        {% set d = state_attr('sensor.network_scanner', 'dns_stats') %}
+        {{ d.get('misses_per_sec') if d else none }}
+
+    - unique_id: wrtsensor_dns_upstream_latency_ms
+      name: dns_upstream_latency_ms
+      unit_of_measurement: "ms"
+      state: >-
+        {% set d = state_attr('sensor.network_scanner', 'dns_stats') %}
+        {{ d.get('avg_latency_ms') if d else none }}
+
+  # --------------------- Device presence (binary) ---------------------
+  # Matches a specific MAC in the devices list. Copy per-device.
+  binary_sensor:
+    - unique_id: wrtsensor_presence_example
+      name: example_device_present
+      device_class: presence
+      state: >-
+        {% set devices = state_attr('sensor.network_scanner', 'devices') or [] %}
+        {{ devices | selectattr('mac', 'eq', 'aa:bb:cc:dd:ee:ff')
+                   | selectattr('online', 'eq', true) | list | count > 0 }}

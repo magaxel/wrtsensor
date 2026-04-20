@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Tool caches
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Scanner runtime artifacts (auto-generated / downloaded)
+oui.db
+oui.txt
+.netscan_*
+
+# Local state dir (only present when running the scanner locally)
+/tmp/netscan/
+
+# Secrets — SSH keys must never be committed
+ssh/
+id_ed25519
+id_ed25519.pub
+
+# Ad-hoc backups
+*.backup.js
+*.bak
+*.orig
+
+# Claude Code project instructions (local only)
+CLAUDE.md
+.claude/

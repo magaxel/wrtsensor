@@ -1,0 +1,1 @@
+custom_components/wrtsensor/openwrt_collector.sh

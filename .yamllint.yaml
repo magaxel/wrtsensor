@@ -1,0 +1,10 @@
+extends: default
+
+rules:
+  # HA Jinja2 templates make long lines unavoidable
+  line-length: disable
+  # HA YAML fragments are included via !include, not standalone documents
+  document-start: disable
+  # Allow one blank line between top-level entries
+  empty-lines:
+    max: 1

@@ -1,0 +1,52 @@
+# command_line.yaml — wrtsensor example configuration
+#
+# Drop this in /config/command_line.yaml (or !include from configuration.yaml).
+# Replace the example IPs with your gateway + AP addresses.
+#
+# The first argument after wrtsensor.py is the gateway. Any number of APs
+# can follow (zero, one, or many). Example uses one gateway + three APs.
+
+- sensor:
+    unique_id: wrtsensor_network_scanner
+    name: "Network Scanner"
+    command: >-
+      python3 /config/wrtsensor/wrtsensor.py
+      root@192.0.2.1
+      root@192.0.2.10
+      root@192.0.2.11
+      root@192.0.2.12
+    scan_interval: 60
+    command_timeout: 45
+    value_template: "{{ value_json.device_count }}"
+    # json_attributes is an explicit allowlist — any new top-level JSON
+    # key emitted by wrtsensor.py must be added here or HA silently drops it.
+    json_attributes:
+      - devices
+      - device_count
+      - wan_ip
+      - wan_ip6
+      - wan_rx_rate
+      - wan_tx_rate
+      - host_stats
+      - dns_stats
+      - scan_duration
+      - partial
+
+- sensor:
+    unique_id: wrtsensor_event_log
+    name: "Network Event Log"
+    command: >-
+      if [ -f /dev/shm/netscan_events.json ] && [ -s /dev/shm/netscan_events.json ]; then
+        COUNT=$(wc -l < /dev/shm/netscan_events.json);
+        EVENTS=$(tail -500 /dev/shm/netscan_events.json |
+          /usr/bin/awk 'BEGIN{printf "["} NR>1{printf ","} {printf "%s",$0} END{printf "]"}');
+        printf '{"event_count":%d,"events":%s}' "$COUNT" "$EVENTS";
+      else
+        echo '{"event_count":0,"events":[]}';
+      fi
+    scan_interval: 60
+    command_timeout: 5
+    value_template: "{{ value_json.event_count | default(0) }}"
+    json_attributes:
+      - events
+      - event_count
