@@ -1,0 +1,96 @@
+Station D8:00:00:00:00:02 (on phy0-ap0)
+	authorized:	yes
+	authenticated:	yes
+	associated:	yes
+	preamble:	long
+	WMM/WME:	yes
+	MFP:		no
+	TDLS peer:	no
+	inactive time:	140 ms
+	rx bytes:	75971078
+	rx packets:	279734
+	tx bytes:	64474793
+	tx packets:	260352
+	tx retries:	310
+	tx failed:	295
+	rx drop misc:	7
+	signal:  	-47 [-50, -53, -52] dBm
+	signal avg:	-47 [-51, -53, -51] dBm
+	tx bitrate:	433.3 MBit/s VHT-MCS 9 80MHz short GI VHT-NSS 1
+	tx duration:	124564646 us
+	rx bitrate:	433.3 MBit/s VHT-MCS 9 80MHz short GI VHT-NSS 1
+	rx duration:	0 us
+	airtime weight: 256
+	expected throughput:	364.796Mbps
+	DTIM period:	2
+	beacon interval:100
+	short slot time:yes
+	connected time:	35583 seconds
+	associated at [boottime]:	1307887.566s
+	associated at:	1776646193261 ms
+	current time:	1776681776645 ms
+
+Station 20:00:00:00:00:01 (on phy0-ap0)
+	authorized:	yes
+	authenticated:	yes
+	associated:	yes
+	preamble:	long
+	WMM/WME:	yes
+	MFP:		no
+	TDLS peer:	no
+	inactive time:	220 ms
+	rx bytes:	46692709
+	rx packets:	180776
+	tx bytes:	46300503
+	tx packets:	180538
+	tx retries:	1487
+	tx failed:	5682
+	rx drop misc:	239
+	signal:  	-61 [-70, -62, -72] dBm
+	signal avg:	-56 [-65, -57, -67] dBm
+	tx bitrate:	234.0 MBit/s VHT-MCS 5 80MHz VHT-NSS 1
+	tx duration:	88896453 us
+	rx bitrate:	117.0 MBit/s VHT-MCS 3 80MHz VHT-NSS 1
+	rx duration:	0 us
+	airtime weight: 256
+	expected throughput:	202.796Mbps
+	DTIM period:	2
+	beacon interval:100
+	short slot time:yes
+	connected time:	30169 seconds
+	associated at [boottime]:	1313301.310s
+	associated at:	1776651607005 ms
+	current time:	1776681776646 ms
+
+Station 2E:00:00:00:00:01 (on phy0-ap0)
+	authorized:	yes
+	authenticated:	yes
+	associated:	yes
+	preamble:	long
+	WMM/WME:	yes
+	MFP:		no
+	TDLS peer:	no
+	inactive time:	570 ms
+	rx bytes:	2633138
+	rx packets:	12230
+	tx bytes:	10273572
+	tx packets:	11847
+	tx retries:	5
+	tx failed:	12
+	rx drop misc:	0
+	signal:  	-51 [-52, -61, -59] dBm
+	signal avg:	-52 [-55, -60, -59] dBm
+	tx bitrate:	234.0 MBit/s VHT-MCS 5 80MHz VHT-NSS 1
+	tx duration:	15479301 us
+	rx bitrate:	6.0 MBit/s
+	rx duration:	0 us
+	airtime weight: 256
+	expected throughput:	202.796Mbps
+	DTIM period:	2
+	beacon interval:100
+	short slot time:yes
+	connected time:	2435 seconds
+	associated at [boottime]:	1341035.561s
+	associated at:	1776679341257 ms
+	current time:	1776681776647 ms
+

@@ -1,0 +1,67 @@
+2001:db8::31 lladdr D8:00:00:00:00:03 router STALE 
+2001:db8::25 lladdr 38:00:00:00:00:02 STALE 
+fe80::e lladdr 3E:00:00:00:00:01 STALE 
+fe80::17 lladdr C4:00:00:00:00:01 STALE 
+2001:db8::19 lladdr 3C:00:00:00:00:01 REACHABLE 
+2001:db8::22 lladdr 20:00:00:00:00:02 REACHABLE 
+2001:db8::10 lladdr 2E:00:00:00:00:01 STALE 
+2001:db8::29 FAILED 
+fe80::d lladdr 38:00:00:00:00:01 STALE 
+fe80::1b lladdr 20:00:00:00:00:02 STALE 
+2001:db8::61 lladdr 3C:00:00:00:00:01 REACHABLE 
+fe80::b lladdr 20:00:00:00:00:01 STALE 
+2001:db8::2d FAILED 
+fe80::20 lladdr FC:00:00:00:00:06 router STALE 
+2001:db8::62 lladdr 2E:00:00:00:00:01 STALE 
+2001:db8::e lladdr D8:00:00:00:00:03 router REACHABLE 
+2001:db8::68 lladdr 2E:00:00:00:00:01 STALE 
+2001:db8::17 FAILED 
+fe80::a lladdr 18:00:00:00:00:01 STALE 
+fe80::1f lladdr FC:00:00:00:00:03 router STALE 
+2001:db8::2e FAILED 
+2001:db8::63 lladdr D8:00:00:00:00:03 router STALE 
+2001:db8::2a lladdr C4:00:00:00:00:01 STALE 
+2001:db8::65 lladdr 38:00:00:00:00:02 STALE 
+2001:db8::2b FAILED 
+2001:db8::14 FAILED 
+2001:db8::6a lladdr C4:00:00:00:00:01 STALE 
+2001:db8::2c lladdr 2E:00:00:00:00:01 STALE 
+2001:db8::12 lladdr 48:00:00:00:00:01 REACHABLE 
+fe80::1c lladdr F6:00:00:00:00:02 STALE 
+2001:db8::69 lladdr AC:00:00:00:00:01 router STALE 
+2001:db8::67 lladdr 2E:00:00:00:00:01 STALE 
+fe80::14 lladdr 08:00:00:00:00:01 STALE 
+2001:db8::1c lladdr AC:00:00:00:00:01 router STALE 
+fe80::12 lladdr 3C:00:00:00:00:01 STALE 
+2001:db8::60 lladdr 38:00:00:00:00:01 STALE 
+2001:db8::66 lladdr 48:00:00:00:00:01 STALE 
+2001:db8::15 FAILED 
+fe80::f lladdr 44:00:00:00:00:01 STALE 
+fe80::19 lladdr D8:00:00:00:00:01 REACHABLE 
+fe80::10 lladdr 58:00:00:00:00:01 STALE 
+2001:db8::26 lladdr 08:00:00:00:00:01 STALE 
+2001:db8::13 lladdr 48:00:00:00:00:01 STALE 
+fe80::1a lladdr D8:00:00:00:00:02 STALE 
+2001:db8::64 lladdr AC:00:00:00:00:01 router STALE 
+2001:db8::11 FAILED 
+2001:db8::5f lladdr 48:00:00:00:00:01 STALE 
+2001:db8::20 lladdr 58:00:00:00:00:01 STALE 
+fe80::21 lladdr FC:00:00:00:00:09 router STALE 
+2001:db8::1e lladdr 38:00:00:00:00:02 REACHABLE 
+2001:db8::30 lladdr D8:00:00:00:00:01 STALE 
+2001:db8::1b lladdr AC:00:00:00:00:01 router STALE 
+2001:db8::16 lladdr 44:00:00:00:00:01 STALE 
+fe80::c lladdr 2E:00:00:00:00:01 STALE 
+2001:db8::6b lladdr D8:00:00:00:00:03 router STALE 
+2001:db8::28 lladdr 20:00:00:00:00:01 STALE 
+2001:db8::18 lladdr D8:00:00:00:00:02 STALE 
+fe80::18 lladdr 48:00:00:00:00:01 STALE 
+2001:db8::2f FAILED 
+fe80::15 lladdr 38:00:00:00:00:02 STALE 
+2001:db8::1a FAILED 
+fe80::13 lladdr 90:00:00:00:00:01 STALE 
+2001:db8::27 FAILED 
+fe80::16 lladdr AC:00:00:00:00:01 router REACHABLE 
+fe80::11 lladdr D8:00:00:00:00:03 router REACHABLE 
+2001:db8::f lladdr AC:00:00:00:00:01 router REACHABLE 
+2001:db8::1d FAILED 

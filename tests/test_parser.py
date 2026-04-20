@@ -1,7 +1,9 @@
-"""Tests for coordinator parsing functions using real AP fixture output."""
+"""Tests for coordinator parsing functions using captured AP fixture output."""
 
 import sys
 from pathlib import Path
+
+import pytest
 
 # conftest.py loads the coordinator; grab it from sys.modules
 coord = sys.modules["custom_components.wrtsensor.coordinator"]
@@ -16,20 +18,22 @@ parse_dns_stats = coord.parse_dns_stats
 _is_random_mac = parser._is_random_mac
 
 FIXTURES = Path(__file__).parent / "fixtures"
+OPENWRT_FIXTURES = FIXTURES / "openwrt"
+
+# Pin concrete-value tests to this version — update when re-capturing.
+PINNED_VERSION = "25.12.2"
+
+# All captured versions — structural tests run across every version.
+AVAILABLE_VERSIONS = sorted(d.name for d in OPENWRT_FIXTURES.iterdir() if d.is_dir())
 
 
-# ── parse_wifi_output ──────────────────────────────────────────────────────────
-
-
-def _fixture_output(name: str) -> str:
-    return (FIXTURES / name).read_text()
+def _collector_output(ap: str, version: str = PINNED_VERSION) -> str:
+    return (OPENWRT_FIXTURES / version / ap / "collector-output.txt").read_text()
 
 
 class TestParseWifiOutputAP3:
     def setup_method(self):
-        self.entries, self.hoststat = parse_wifi_output(
-            _fixture_output("AP3.txt"), "AP3"
-        )
+        self.entries, self.hoststat = parse_wifi_output(_collector_output("ap3"), "AP3")
 
     def test_device_count(self):
         assert len(self.entries) == 3
@@ -95,7 +99,7 @@ class TestParseWifiOutputAP3:
 
 class TestParseWifiOutputAP2:
     def setup_method(self):
-        self.entries, _ = parse_wifi_output(_fixture_output("AP2.txt"), "AP2")
+        self.entries, _ = parse_wifi_output(_collector_output("ap2"), "AP2")
 
     def test_device_count(self):
         assert len(self.entries) == 6
@@ -109,24 +113,48 @@ class TestParseWifiOutputAP2:
         # 48:00:00:00:00:0B is on SSID "NetB", rest on "NetA"
         by_mac = {e["mac"]: e for e in self.entries}
         assert by_mac["48:00:00:00:00:0B"]["essid"] == "NetB"
-        assert by_mac["2E:9C:EB:78:78:7B"]["essid"] == "NetA"
+        assert by_mac["2E:00:00:00:00:01"]["essid"] == "NetA"
 
     def test_low_byte_counters(self):
-        # 2E:9C:EB:78:78:7B has very low byte counters
+        # 2E:00:00:00:00:01 has very low byte counters
         by_mac = {e["mac"]: e for e in self.entries}
-        assert by_mac["2E:9C:EB:78:78:7B"]["sta_ul_bytes"] == 3720849
-        assert by_mac["2E:9C:EB:78:78:7B"]["sta_dl_bytes"] == 3719870
+        assert by_mac["2E:00:00:00:00:01"]["sta_ul_bytes"] == 3720849
+        assert by_mac["2E:00:00:00:00:01"]["sta_dl_bytes"] == 3719870
 
 
 class TestParseWifiOutputAP1:
     def setup_method(self):
-        self.entries, _ = parse_wifi_output(_fixture_output("AP1.txt"), "AP1")
+        self.entries, _ = parse_wifi_output(_collector_output("ap1"), "AP1")
 
     def test_device_count(self):
         assert len(self.entries) == 5
 
     def test_all_have_ap_name(self):
         assert all(e["ap"] == "AP1" for e in self.entries)
+
+
+# ── Structural checks across every captured OpenWrt version ──────────────────
+
+
+@pytest.mark.parametrize("version", AVAILABLE_VERSIONS)
+@pytest.mark.parametrize("ap", ["ap1", "ap2", "ap3"])
+def test_collector_output_parses_across_versions(version, ap):
+    """Every captured collector output must yield well-formed entries on any OpenWrt version."""
+    path = OPENWRT_FIXTURES / version / ap / "collector-output.txt"
+    if not path.exists():
+        pytest.skip(f"no {ap} capture for {version}")
+    entries, hoststat = parse_wifi_output(path.read_text(), ap.upper())
+    assert entries, f"no entries parsed from {version}/{ap}"
+    for e in entries:
+        assert e["mac"] == e["mac"].upper()
+        assert len(e["mac"].split(":")) == 6
+        assert e["band"] in {"2.4GHz", "5GHz", "6GHz", "unknown"}
+        assert isinstance(e["essid"], str)
+        assert isinstance(e["signal"], int)
+        assert e["ap"] == ap.upper()
+    # STAT line always emitted by the collector
+    assert hoststat, f"no hoststat from {version}/{ap}"
+    assert hoststat[0].startswith("cpu")
 
 
 def test_parse_wifi_empty():
@@ -328,7 +356,7 @@ def test_parse_dns_stats_uses_last_dump():
 
 def test_is_random_mac_locally_administered():
     # Bit 1 of first octet set → locally administered / random
-    assert _is_random_mac("2E:9C:EB:78:78:7B")  # 0x2E = 0b00101110, bit1=1
+    assert _is_random_mac("2E:00:00:00:00:01")  # 0x2E = 0b00101110, bit1=1
     assert _is_random_mac("4A:BB:CC:DD:EE:FF")  # 0x4A = 0b01001010, bit1=1
     assert _is_random_mac("72:11:22:33:44:55")  # 0x72 = 0b01110010, bit1=1
 

@@ -34,6 +34,9 @@ ssh/
 id_ed25519
 id_ed25519.pub
 
+# Fixture sanitiser audit map (real→fake mapping, never commit)
+.sanitise-map.json
+
 # Ad-hoc backups
 *.backup.js
 *.bak

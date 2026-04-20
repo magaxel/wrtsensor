@@ -1,0 +1,5 @@
+48:00:00:00:00:01  -42 dBm / -102 dBm (SNR 60)  20 ms ago
+	RX: 702.0 MBit/s, VHT-MCS 8, 80MHz, VHT-NSS 2  12912453 Pkts.
+	TX: 780.0 MBit/s, VHT-MCS 8, 80MHz, VHT-NSS 2  46660865 Pkts.
+	expected throughput: 633.9 MBit/s
+

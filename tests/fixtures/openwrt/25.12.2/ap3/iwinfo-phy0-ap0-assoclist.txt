@@ -1,0 +1,15 @@
+D8:00:00:00:00:02  -47 dBm / -102 dBm (SNR 55)  10 ms ago
+	RX: 433.3 MBit/s, VHT-MCS 9, 80MHz, VHT-NSS 1    279729 Pkts.
+	TX: 433.3 MBit/s, VHT-MCS 9, 80MHz, VHT-NSS 1    260347 Pkts.
+	expected throughput: 373.6 MBit/s
+
+20:00:00:00:00:01  -56 dBm / -102 dBm (SNR 46)  240 ms ago
+	RX: 175.5 MBit/s, VHT-MCS 4, 80MHz, VHT-NSS 1    180752 Pkts.
+	TX: 325.0 MBit/s, VHT-MCS 7, 80MHz, VHT-NSS 1    180514 Pkts.
+	expected throughput: 284.6 MBit/s
+
+2E:00:00:00:00:01  -53 dBm / -102 dBm (SNR 49)  3080 ms ago
+	RX: 6.0 MBit/s     12227 Pkts.
+	TX: 234.0 MBit/s, VHT-MCS 5, 80MHz, VHT-NSS 1     11846 Pkts.
+	expected throughput: 207.7 MBit/s
+

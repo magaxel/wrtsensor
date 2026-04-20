@@ -1,0 +1,42 @@
+phy0-ap0 ESSID: "NetA"
+         Access Point: FC:00:00:00:00:05
+         Mode: Master  Channel: 104 (5.520 GHz)  HT Mode: VHT80
+         Center Channel 1: 106 2: unknown
+         Tx-Power: 26 dBm  Link Quality: 58/70
+         Signal: -52 dBm  Noise: -102 dBm
+         Bit Rate: 310.2 MBit/s
+         Encryption: WPA-PSK / FT-PSK (CCMP)
+         Type: nl80211  HW Mode(s): 802.11ac/n
+         Hardware: 0x168c:0x003c 0x0000:0x0000 [Qualcomm Atheros QCA9880]
+         TX power offset: none
+         Channel offset: none
+         Supports VAPs: yes  PHY name: phy0
+
+phy0-ap1 ESSID: "NetB"
+         Access Point: FE:00:00:00:00:01
+         Mode: Master  Channel: 104 (5.520 GHz)  HT Mode: VHT80
+         Center Channel 1: 106 2: unknown
+         Tx-Power: 26 dBm  Link Quality: 68/70
+         Signal: -42 dBm  Noise: -102 dBm
+         Bit Rate: 780.0 MBit/s
+         Encryption: SAE / FT-SAE / WPA-PSK / WPA-PSK-SHA256 / FT-PSK (CCMP)
+         Type: nl80211  HW Mode(s): 802.11ac/n
+         Hardware: 0x168c:0x003c 0x0000:0x0000 [Qualcomm Atheros QCA9880]
+         TX power offset: none
+         Channel offset: none
+         Supports VAPs: yes  PHY name: phy0
+
+phy1-ap0 ESSID: "NetA"
+         Access Point: FC:00:00:00:00:04
+         Mode: Master  Channel: 11 (2.462 GHz)  HT Mode: HT20
+         Center Channel 1: 11 2: unknown
+         Tx-Power: 20 dBm  Link Quality: 40/70
+         Signal: -70 dBm  Noise: -95 dBm
+         Bit Rate: 72.2 MBit/s
+         Encryption: WPA-PSK / FT-PSK (CCMP)
+         Type: nl80211  HW Mode(s): 802.11n/g/b
+         Hardware: embedded [Qualcomm Atheros QCA9560]
+         TX power offset: none
+         Channel offset: none
+         Supports VAPs: yes  PHY name: phy1
+

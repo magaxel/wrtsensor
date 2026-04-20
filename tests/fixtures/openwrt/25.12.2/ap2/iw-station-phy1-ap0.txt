@@ -1,0 +1,128 @@
+Station D8:00:00:00:00:03 (on phy1-ap0)
+	authorized:	yes
+	authenticated:	yes
+	associated:	yes
+	preamble:	long
+	WMM/WME:	yes
+	MFP:		no
+	TDLS peer:	no
+	inactive time:	50 ms
+	rx bytes:	612995418
+	rx packets:	5906842
+	tx bytes:	2572037179
+	tx packets:	5926618
+	tx retries:	409271
+	tx failed:	75
+	rx drop misc:	7
+	signal:  	-54 [-55, -61, -65, -62] dBm
+	signal avg:	-54 [-54, -61, -65, -61] dBm
+	tx bitrate:	433.3 MBit/s VHT-MCS 9 80MHz short GI VHT-NSS 1
+	tx duration:	729506770 us
+	rx bitrate:	433.3 MBit/s VHT-MCS 9 80MHz short GI VHT-NSS 1
+	rx duration:	594914937 us
+	airtime weight: 256
+	expected throughput:	283.355Mbps
+	DTIM period:	2
+	beacon interval:100
+	short slot time:yes
+	connected time:	621885 seconds
+	associated at [boottime]:	1177253.636s
+	associated at:	1776059877399 ms
+	current time:	1776681761964 ms
+
+Station 90:00:00:00:00:01 (on phy1-ap0)
+	authorized:	yes
+	authenticated:	yes
+	associated:	yes
+	preamble:	long
+	WMM/WME:	yes
+	MFP:		no
+	TDLS peer:	no
+	inactive time:	5000 ms
+	rx bytes:	177408694
+	rx packets:	634037
+	tx bytes:	103392539
+	tx packets:	696745
+	tx retries:	990576
+	tx failed:	763
+	rx drop misc:	0
+	signal:  	-63 [-75, -68, -71, -64] dBm
+	signal avg:	-63 [-75, -67, -71, -65] dBm
+	tx bitrate:	65.0 MBit/s VHT-MCS 1 80MHz short GI VHT-NSS 1
+	tx duration:	481082252 us
+	rx bitrate:	433.3 MBit/s VHT-MCS 9 80MHz short GI VHT-NSS 1
+	rx duration:	78925091 us
+	airtime weight: 256
+	expected throughput:	50.719Mbps
+	DTIM period:	2
+	beacon interval:100
+	short slot time:yes
+	connected time:	621793 seconds
+	associated at [boottime]:	1177345.422s
+	associated at:	1776059969186 ms
+	current time:	1776681761965 ms
+
+Station AC:00:00:00:00:01 (on phy1-ap0)
+	authorized:	yes
+	authenticated:	yes
+	associated:	yes
+	preamble:	long
+	WMM/WME:	yes
+	MFP:		no
+	TDLS peer:	no
+	inactive time:	40 ms
+	rx bytes:	395378870
+	rx packets:	3784259
+	tx bytes:	1297669074
+	tx packets:	3651670
+	tx retries:	518846
+	tx failed:	62
+	rx drop misc:	6
+	signal:  	-65 [-70, -67, -75, -70] dBm
+	signal avg:	-64 [-69, -67, -75, -70] dBm
+	tx bitrate:	433.3 MBit/s VHT-MCS 9 80MHz short GI VHT-NSS 1
+	tx duration:	497857165 us
+	rx bitrate:	433.3 MBit/s VHT-MCS 9 80MHz short GI VHT-NSS 1
+	rx duration:	390802060 us
+	airtime weight: 256
+	expected throughput:	261.565Mbps
+	DTIM period:	2
+	beacon interval:100
+	short slot time:yes
+	connected time:	464245 seconds
+	associated at [boottime]:	1334893.222s
+	associated at:	1776217516986 ms
+	current time:	1776681761965 ms
+
+Station D8:00:00:00:00:01 (on phy1-ap0)
+	authorized:	yes
+	authenticated:	yes
+	associated:	yes
+	preamble:	long
+	WMM/WME:	yes
+	MFP:		no
+	TDLS peer:	no
+	inactive time:	450 ms
+	rx bytes:	30574094
+	rx packets:	180308
+	tx bytes:	43709121
+	tx packets:	171906
+	tx retries:	250037
+	tx failed:	1991
+	rx drop misc:	77694
+	signal:  	-70 [-75, -74, -75, -74] dBm
+	signal avg:	-69 [-74, -74, -76, -73] dBm
+	tx bitrate:	390.0 MBit/s VHT-MCS 9 80MHz VHT-NSS 1
+	tx duration:	84542791 us
+	rx bitrate:	292.5 MBit/s VHT-MCS 7 80MHz VHT-NSS 1
+	rx duration:	20570974 us
+	airtime weight: 256
+	expected throughput:	101.897Mbps
+	DTIM period:	2
+	beacon interval:100
+	short slot time:yes
+	connected time:	31693 seconds
+	associated at [boottime]:	1767445.935s
+	associated at:	1776650069698 ms
+	current time:	1776681761966 ms
+

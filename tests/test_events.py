@@ -381,7 +381,7 @@ def test_miss_resets_on_reconnect():
 # ── remap_random_macs ─────────────────────────────────────────────────────────
 
 # 2E:... is locally-administered (0x2E & 0x02 = 2); 38:... is globally-administered
-RANDOM_MAC = "2E:9C:EB:78:78:7B"
+RANDOM_MAC = "2E:00:00:00:00:01"
 RANDOM_MAC2 = "4A:BB:CC:DD:EE:FF"
 GLOBAL_MAC = "38:00:00:00:00:01"
 CANONICAL = "AA:BB:CC:DD:EE:01"  # first-seen canonical (itself random, stored in prev)

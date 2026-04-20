@@ -1,0 +1,14 @@
+10: br-lan: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP qlen 1000
+    link/ether FC:00:00:00:00:09 brd ff:ff:ff:ff:ff:ff
+    inet 192.0.2.70/24 brd 192.0.2.98 scope global br-lan
+       valid_lft forever preferred_lft forever
+    inet6 2001:db8::6e/64 scope global dynamic noprefixroute 
+       valid_lft 5334sec preferred_lft 2634sec
+    inet6 2001:db8::34/64 scope global dynamic noprefixroute 
+       valid_lft 5334sec preferred_lft 2634sec
+    inet6 2001:db8::70/128 scope global dynamic noprefixroute 
+       valid_lft 42332sec preferred_lft 42332sec
+    inet6 2001:db8::21/128 scope global dynamic noprefixroute 
+       valid_lft 4532sec preferred_lft 1832sec
+    inet6 fe80::21/64 scope link 
+       valid_lft forever preferred_lft forever

@@ -1,0 +1,14 @@
+phy1-ap1 ESSID: "NetB"
+         Access Point: FE:00:00:00:00:02
+         Mode: Master  Channel: 56 (5.280 GHz)  HT Mode: VHT80
+         Center Channel 1: 58 2: unknown
+         Tx-Power: 20 dBm  Link Quality: 70/70
+         Signal: 0 dBm  Noise: -92 dBm
+         Bit Rate: unknown
+         Encryption: SAE / FT-SAE / WPA-PSK / WPA-PSK-SHA256 / FT-PSK (CCMP)
+         Type: nl80211  HW Mode(s): 802.11ac/n
+         Hardware: 0x14c3:0x7615 0x7615:0x14c3 [MediaTek MT7615E]
+         TX power offset: none
+         Channel offset: none
+         Supports VAPs: yes  PHY name: phy1
+

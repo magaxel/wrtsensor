@@ -1,0 +1,14 @@
+phy0-ap0 ESSID: "NetA"
+         Access Point: FC:00:00:00:00:0A
+         Mode: Master  Channel: 6 (2.437 GHz)  HT Mode: HT20
+         Center Channel 1: 6 2: unknown
+         Tx-Power: 20 dBm  Link Quality: 53/70
+         Signal: -57 dBm  Noise: -100 dBm
+         Bit Rate: 54.0 MBit/s
+         Encryption: WPA-PSK / FT-PSK (CCMP)
+         Type: nl80211  HW Mode(s): 802.11n/g/b
+         Hardware: 0x14c3:0x7603 0x14c3:0x7603 [MediaTek MT7603E]
+         TX power offset: none
+         Channel offset: none
+         Supports VAPs: yes  PHY name: phy0
+

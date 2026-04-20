@@ -1,0 +1,33 @@
+Station C4:00:00:00:00:01 (on phy1-ap0)
+	authorized:	yes
+	authenticated:	yes
+	associated:	yes
+	preamble:	short
+	WMM/WME:	yes
+	MFP:		no
+	TDLS peer:	no
+	inactive time:	4440 ms
+	rx bytes:	1896770
+	rx packets:	5173
+	tx bytes:	388636
+	tx packets:	3147
+	tx retries:	3907
+	tx failed:	24
+	rx drop misc:	0
+	signal:  	-23 [-27, -30, -27] dBm
+	signal avg:	-22 [-27, -30, -25] dBm
+	tx bitrate:	52.0 MBit/s MCS 5
+	tx duration:	524801 us
+	rx bitrate:	65.0 MBit/s MCS 7
+	rx duration:	410368 us
+	airtime weight: 256
+	expected throughput:	28.106Mbps
+	DTIM period:	2
+	beacon interval:100
+	short preamble:	yes
+	short slot time:yes
+	connected time:	15917 seconds
+	associated at [boottime]:	1783205.804s
+	associated at:	1776665832795 ms
+	current time:	1776681749561 ms
+

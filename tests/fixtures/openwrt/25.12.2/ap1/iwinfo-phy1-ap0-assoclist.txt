@@ -1,0 +1,5 @@
+C4:00:00:00:00:01  -22 dBm / -95 dBm (SNR 73)  3850 ms ago
+	RX: 65.0 MBit/s, MCS 7, unknownMHz      5173 Pkts.
+	TX: 52.0 MBit/s, MCS 5, unknownMHz      3147 Pkts.
+	expected throughput: 28.8 MBit/s
+

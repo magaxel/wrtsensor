@@ -1,0 +1,5 @@
+C8:00:00:00:00:01  -57 dBm / -100 dBm (SNR 43)  420 ms ago
+	RX: 54.0 MBit/s    201816 Pkts.
+	TX: 54.0 MBit/s    201643 Pkts.
+	expected throughput: 19.6 MBit/s
+

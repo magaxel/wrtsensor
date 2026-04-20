@@ -1,0 +1,12 @@
+Mon Apr 20 12:41:43 2026 daemon.info dnsmasq[1]: server 2001:db8::42#53: queries sent 11567, retried 1, failed 0, nxdomain replies 2, avg. latency 22ms
+Mon Apr 20 12:41:53 2026 daemon.info dnsmasq-dhcp[1]: DHCPREQUEST(br-lan) 192.0.2.73 D0:00:00:00:00:01
+Mon Apr 20 12:41:53 2026 daemon.info dnsmasq-dhcp[1]: DHCPACK(br-lan) 192.0.2.73 D0:00:00:00:00:01 host-20
+Mon Apr 20 12:42:19 2026 daemon.info dnsmasq[1]: time 1776681739
+Mon Apr 20 12:42:19 2026 daemon.info dnsmasq[1]: cache size 10000, 0/20433 cache insertions re-used unexpired cache entries.
+Mon Apr 20 12:42:19 2026 daemon.info dnsmasq[1]: queries forwarded 97413, queries answered locally 173995
+Mon Apr 20 12:42:19 2026 daemon.info dnsmasq[1]: pool memory in use 5856, max 28032, allocated 28800
+Mon Apr 20 12:42:19 2026 daemon.info dnsmasq[1]: child processes for TCP requests: in use 0, highest since last SIGUSR1 3, max allowed 20.
+Mon Apr 20 12:42:19 2026 daemon.info dnsmasq[1]: server 192.0.2.11#53: queries sent 56738, retried 2, failed 0, nxdomain replies 116, avg. latency 20ms
+Mon Apr 20 12:42:19 2026 daemon.info dnsmasq[1]: server 192.0.2.10#53: queries sent 37047, retried 0, failed 0, nxdomain replies 85, avg. latency 21ms
+Mon Apr 20 12:42:19 2026 daemon.info dnsmasq[1]: server 2001:db8::43#53: queries sent 16078, retried 1, failed 0, nxdomain replies 20, avg. latency 25ms
+Mon Apr 20 12:42:19 2026 daemon.info dnsmasq[1]: server 2001:db8::42#53: queries sent 11568, retried 1, failed 0, nxdomain replies 2, avg. latency 22ms

@@ -1,0 +1,14 @@
+phy1-ap0 ESSID: "NetA"
+         Access Point: FC:00:00:00:00:04
+         Mode: Master  Channel: 11 (2.462 GHz)  HT Mode: HT20
+         Center Channel 1: 11 2: unknown
+         Tx-Power: 20 dBm  Link Quality: 40/70
+         Signal: -70 dBm  Noise: -95 dBm
+         Bit Rate: 72.2 MBit/s
+         Encryption: WPA-PSK / FT-PSK (CCMP)
+         Type: nl80211  HW Mode(s): 802.11n/g/b
+         Hardware: embedded [Qualcomm Atheros QCA9560]
+         TX power offset: none
+         Channel offset: none
+         Supports VAPs: yes  PHY name: phy1
+
