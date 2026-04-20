@@ -36,7 +36,7 @@ All of this comes from a single 20 s SSH call to the gateway plus parallel SSH c
 
 - **Home Assistant** — Python 3.11+ (built in on HA OS).
 - **HACS** — install [HACS](https://hacs.xyz/) first; it's how wrtsensor is distributed.
-- **OpenWrt** — recent release (tested on 22.03+). Stock packages are enough: `busybox`, `ip`, `iwinfo`, `dnsmasq`, `logread`.
+- **OpenWrt** — tested on 25.12.2. Older releases may work but are untested. Stock packages are enough: `busybox`, `ip`, `iwinfo`, `dnsmasq`, `logread`.
 - **Network** — SSH from HA host to every OpenWrt box (gateway + APs). Port 22 by default; any port works (configurable in the integration's Options).
 
 ## Installation
