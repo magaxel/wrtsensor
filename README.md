@@ -36,7 +36,7 @@ All of this comes from a single 20 s SSH call to the gateway plus parallel SSH c
 
 - **Home Assistant** — any install with a `/config` directory (OS/Supervised/Container). Needs Python 3.11+ (built in on HA OS).
 - **OpenWrt** — recent release (tested on 22.03+). Stock packages are enough: `busybox`, `ip`, `iwinfo`, `dnsmasq`, `logread`.
-- **Network** — SSH from HA host to every OpenWrt box (gateway + APs), port 22 open.
+- **Network** — SSH from HA host to every OpenWrt box (gateway + APs). Port 22 by default; any port works (configurable in the integration's Options).
 
 ## Installation
 
@@ -200,7 +200,7 @@ logbook:
 
 **Integration shows "Failed to connect"** — SSH key path is wrong or unreadable by HA, or the key isn't in OpenWrt's `authorized_keys`. The config flow offers a password-provisioning step; otherwise set the key up manually (see [manual install — SSH key](docs/manual-install.md#1-ssh-key--ha--openwrt)).
 
-**All APs in log as "unreachable"** — APs must be reachable from HA on port 22 with the same key as the gateway. Check with `ssh -i /config/ssh/id_ed25519 root@<ap-ip> uptime` on the HA host.
+**All APs in log as "unreachable"** — APs must be reachable from HA over SSH with the same key as the gateway, on the SSH port configured for the integration (default 22; change in the integration's Options). Check with `ssh -i /config/ssh/id_ed25519 -p <port> root@<ap-ip> uptime` on the HA host.
 
 **Card shows "configuration error"** — the resource URL isn't registered, or the `type:` in the dashboard doesn't match the card's registered name (e.g. `custom:network-table-card`). For HACS installs, cards are auto-served under `/wrtsensor_static/`. Bump the `?v=` query on the resource URL to bust the companion app's JS cache after updates.
 
