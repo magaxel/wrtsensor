@@ -154,6 +154,50 @@ entity: sensor.wrtsensor_network_scanner
 title: DNS Cache
 ```
 
+### Host stats graphs
+
+Per-host CPU / RAM / Disk use HA's built-in `history-graph` and `entities` cards — no custom card needed. Entity IDs are derived from the host IP (`sensor.wrtsensor_<ip_with_underscores>_cpu|ram|disk`).
+
+```yaml
+- type: history-graph
+  title: CPU
+  hours_to_show: 8
+  min_y_axis: 0
+  max_y_axis: 100
+  entities:
+    - entity: sensor.wrtsensor_192_0_2_1_cpu
+      name: Gateway
+    - entity: sensor.wrtsensor_192_0_2_22_cpu
+      name: AP1
+    - entity: sensor.wrtsensor_192_0_2_23_cpu
+      name: AP2
+
+- type: history-graph
+  title: RAM
+  hours_to_show: 8
+  min_y_axis: 0
+  max_y_axis: 100
+  entities:
+    - entity: sensor.wrtsensor_192_0_2_1_ram
+      name: Gateway
+    - entity: sensor.wrtsensor_192_0_2_22_ram
+      name: AP1
+    - entity: sensor.wrtsensor_192_0_2_23_ram
+      name: AP2
+
+- type: entities
+  title: Storage
+  entities:
+    - entity: sensor.wrtsensor_192_0_2_1_disk
+      icon: mdi:harddisk
+      name: Gateway - Root
+    - entity: sensor.wrtsensor_192_0_2_22_disk
+      icon: mdi:harddisk
+      name: AP1 - Root
+```
+
+Replace the example IPs with yours. In APs-only mode only the AP rows appear.
+
 ## Entities
 
 | Entity ID | What it is |
