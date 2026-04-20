@@ -129,9 +129,16 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
                 await self.async_set_unique_id(unique_id)
                 self._abort_if_unique_id_configured()
 
-                test_host = gateway_host or ap_hosts[0]
-                error = await _test_ssh(test_host, ssh_key_path, ssh_port)
-                if error == "auth_failed":
+                all_hosts = ([gateway_host] if gateway_host else []) + ap_hosts
+                # Probe every host so a single working gateway can't mask an AP
+                # with a missing key. Any auth_failed → provision; any other
+                # error → surface it and stop.
+                results = await asyncio.gather(
+                    *[_test_ssh(h, ssh_key_path, ssh_port) for h in all_hosts]
+                )
+                needs_provision = any(r == "auth_failed" for r in results)
+                other_errors = [r for r in results if r and r != "auth_failed"]
+                if needs_provision:
                     self._pending = {
                         CONF_GATEWAY_HOST: gateway_host,
                         CONF_SSH_KEY_PATH: ssh_key_path,
@@ -139,8 +146,8 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_AP_HOSTS: ap_hosts_raw,
                     }
                     return await self.async_step_provision_key()
-                if error:
-                    errors["base"] = error
+                if other_errors:
+                    errors["base"] = other_errors[0]
                 else:
                     title = (
                         f"wrtsensor ({gateway_host})"
@@ -200,9 +207,11 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
                     break
 
             if not errors:
-                test_host = gateway or ap_hosts[0]
-                error = await _test_ssh(test_host, key_path, port)
-                if error:
+                # Verify every host now accepts the key, not just one.
+                post_results = await asyncio.gather(
+                    *[_test_ssh(h, key_path, port) for h in hosts]
+                )
+                if any(post_results):
                     errors["base"] = "auth_failed_after_provision"
                 else:
                     title = (
@@ -254,10 +263,13 @@ class WrtsensorOptionsFlow(OptionsFlow):
             if not gateway_host and not ap_hosts:
                 errors["base"] = "at_least_one_host"
             else:
-                test_host = gateway_host or ap_hosts[0]
-                error = await _test_ssh(test_host, ssh_key_path, ssh_port)
-                if error:
-                    errors["base"] = error
+                all_hosts = ([gateway_host] if gateway_host else []) + ap_hosts
+                results = await asyncio.gather(
+                    *[_test_ssh(h, ssh_key_path, ssh_port) for h in all_hosts]
+                )
+                first_error = next((r for r in results if r), None)
+                if first_error:
+                    errors["base"] = first_error
                 else:
                     return self.async_create_entry(title="", data=user_input)
 
