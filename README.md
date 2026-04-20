@@ -1,5 +1,7 @@
 # wrtsensor
 
+> ⚠️ **Under heavy development.** Config schema, entity IDs, and behaviour may change without notice. Pin to a specific commit or tag if you need stability.
+
 A lightweight Home Assistant network monitor for a home LAN running OpenWrt. A single Python script SSHes into the router (and any access points) once per minute, collects the complete picture of the network, and pipes it into Home Assistant as a JSON sensor. Lovelace custom cards render device lists, topology maps, event logs, and dnsmasq DNS statistics.
 
 An OpenWrt gateway is required — the scanner pulls DHCP leases, ARP/NDP tables, WAN, and dnsmasq stats from it. Access points are optional: pass zero, one, or many OpenWrt APs as additional arguments to also collect Wi-Fi associations and per-AP host stats.
