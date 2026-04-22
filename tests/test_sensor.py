@@ -134,3 +134,36 @@ def test_network_scanner_attributes_no_data():
     """Empty coordinator.data returns an empty dict, not an error."""
     assert _make_sensor(None).extra_state_attributes == {}
     assert _make_sensor({}).extra_state_attributes == {}
+
+
+# ── WrtsensorEventLogSensor ───────────────────────────────────────────────────
+
+WrtsensorEventLogSensor = sys.modules[_sensor_name].WrtsensorEventLogSensor
+
+
+def _make_event_log_sensor(data: dict | None) -> WrtsensorEventLogSensor:
+    return WrtsensorEventLogSensor(_FakeCoordinator(data), _FakeEntry())
+
+
+def test_event_log_sensor_state():
+    """State equals event_count from coordinator data."""
+    sensor = _make_event_log_sensor({"event_count": 42, "events": []})
+    assert sensor.state == 42
+
+
+def test_event_log_sensor_attributes():
+    """Attributes expose events list and event_count."""
+    events = [
+        {"ts": "2026-01-01T00:00:00Z", "type": "join", "mac": "aa:bb:cc:dd:ee:ff"}
+    ]
+    sensor = _make_event_log_sensor({"event_count": 1, "events": events})
+    attrs = sensor.extra_state_attributes
+    assert attrs["event_count"] == 1
+    assert attrs["events"] == events
+
+
+def test_event_log_sensor_no_data():
+    """Returns zero state and empty events when coordinator has no data."""
+    sensor = _make_event_log_sensor(None)
+    assert sensor.state == 0
+    assert sensor.extra_state_attributes == {"events": [], "event_count": 0}

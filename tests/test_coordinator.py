@@ -57,7 +57,10 @@ class _FakeHass:
         self.config_entries = _FakeConfigEntries()
 
     async def async_add_executor_job(self, fn, *args):
-        return None  # skip all file I/O in tests
+        # _read_event_log must return a (list, int) tuple; all other file I/O is skipped
+        if getattr(fn, "__name__", "") == "_read_event_log":
+            return [], 0
+        return None
 
     def async_create_task(self, coro):
         coro.close()

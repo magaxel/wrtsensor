@@ -1137,6 +1137,25 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             json.dumps({mac: asdict(e) for mac, e in state.items()}),
         )
 
+    def _read_event_log(self, n: int = 500) -> tuple[list[dict[str, Any]], int]:
+        """Return (recent_events, total_count) from the event log file."""
+        if not self._event_log_path.exists():
+            return [], 0
+        try:
+            lines = [
+                ln for ln in self._event_log_path.read_text().splitlines() if ln.strip()
+            ]
+        except OSError:
+            return [], 0
+        total = len(lines)
+        recent: list[dict[str, Any]] = []
+        for ln in lines[-n:]:
+            try:
+                recent.append(json.loads(ln))
+            except json.JSONDecodeError:
+                continue
+        return recent, total
+
     # ── Main update ───────────────────────────────────────────────────────────
 
     async def _async_update_data(self) -> dict[str, Any]:
@@ -1165,6 +1184,9 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )
                     for e in self._prev_state.values()
                 ]
+                recent_events, event_count = await self.hass.async_add_executor_job(
+                    self._read_event_log
+                )
                 return {
                     "device_count": sum(1 for d in cached_devices if d.online),
                     "scan_duration": round(time.time() - scan_start, 2),
@@ -1176,6 +1198,8 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "dns_stats": None,
                     "devices": [asdict(d) for d in cached_devices],
                     "partial": True,
+                    "events": recent_events,
+                    "event_count": event_count,
                 }
             raise UpdateFailed("Gateway unreachable")
 
@@ -1437,6 +1461,9 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self.hass.async_add_executor_job(self._save_state, new_state)
         await self.hass.async_add_executor_job(self._append_events, all_events)
         await self.hass.async_add_executor_job(self._prune_events)
+        recent_events, event_count = await self.hass.async_add_executor_job(
+            self._read_event_log
+        )
 
         # Host stats
         host_stats: dict[str, dict[str, Any]] = {}
@@ -1481,6 +1508,8 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "dns_stats": dns_stats,
             "devices": [asdict(d) for d in devices],
             "partial": False,
+            "events": recent_events,
+            "event_count": event_count,
             # Pass through for entity platform use
             "_gw_mac": gw_mac,
             "_gw_hostname": gw_hostname,
