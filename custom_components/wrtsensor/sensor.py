@@ -55,7 +55,7 @@ def _device_info(entry: ConfigEntry) -> DeviceInfo:
         identifiers={(DOMAIN, entry.entry_id)},
         name="wrtsensor",
         manufacturer="wrtsensor",
-        model="OpenWrt Network Monitor",
+        model="OpenWrt Network Sensor",
         sw_version="1.0.0",
     )
 
@@ -78,6 +78,8 @@ class WrtsensorNetworkScannerSensor(_WrtsensorBase):
 
     def __init__(self, coordinator: WrtsensorCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry)
+        # Intentionally global (no entry_id prefix) so users migrating from the
+        # command_line sensor retain their existing entity registration.
         self._attr_unique_id = "wrtsensor_network_scanner"
 
     @property
@@ -88,9 +90,25 @@ class WrtsensorNetworkScannerSensor(_WrtsensorBase):
         devices = data.get("devices", [])
         return sum(1 for d in devices if d.get("online"))
 
+    _COMPAT_KEYS = (
+        "devices",
+        "device_count",
+        "wan_ip",
+        "wan_ip6",
+        "wan_rx_rate",
+        "wan_tx_rate",
+        "host_stats",
+        "dns_stats",
+        "scan_duration",
+        "partial",
+    )
+
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        return self.coordinator.data or {}
+        data = self.coordinator.data
+        if not data:
+            return {}
+        return {k: data[k] for k in self._COMPAT_KEYS if k in data}
 
 
 class WrtsensorWANDownloadSensor(_WrtsensorBase):

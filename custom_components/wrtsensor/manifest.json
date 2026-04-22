@@ -1,6 +1,6 @@
 {
   "domain": "wrtsensor",
-  "name": "wrtsensor",
+  "name": "OpenWrt Network Sensor",
   "codeowners": ["@magaxel"],
   "config_flow": true,
   "dependencies": ["http"],
@@ -8,5 +8,5 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/magaxel/wrtsensor/issues",
   "requirements": ["asyncssh>=2.14.0"],
-  "version": "0.1.0"
+  "version": "1.0.0"
 }
