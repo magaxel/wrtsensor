@@ -219,6 +219,7 @@ In APs-only mode, only the AP rows appear.
 | Entity ID | What it is |
 |-----------|-----------|
 | `sensor.wrtsensor_network_scanner` | Main sensor — device count as state, full JSON blob as attributes. All cards read from this. |
+| `sensor.wrtsensor_event_log` | Event log — event count as state, last 500 events as attributes. Used by the events card. |
 | `sensor.wrtsensor_wan_download` | WAN RX rate in Mbit/s |
 | `sensor.wrtsensor_wan_upload` | WAN TX rate in Mbit/s |
 | `sensor.wrtsensor_dns_cache_hit` | DNS cache hit % |
