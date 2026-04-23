@@ -7,7 +7,7 @@ from typing import Any
 
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -24,6 +24,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: WrtsensorCoordinator = hass.data[DOMAIN][entry.entry_id]
+    tracked_hosts: set[str] = set()
 
     entities: list[SensorEntity] = [
         WrtsensorNetworkScannerSensor(coordinator, entry),
@@ -38,27 +39,42 @@ async def async_setup_entry(
             WrtsensorDNSLatencySensor(coordinator, entry),
         ]
 
-    # Per-host stats: gateway + each AP
-    data = coordinator.data or {}
-    host_stats = data.get("host_stats", {})
-    for hostname in host_stats:
-        entities += [
-            WrtsensorHostCPUSensor(coordinator, entry, hostname),
-            WrtsensorHostRAMSensor(coordinator, entry, hostname),
-            WrtsensorHostDiskSensor(coordinator, entry, hostname),
-        ]
-
     async_add_entities(entities)
+
+    @callback
+    def _handle_coordinator_update() -> None:
+        data = coordinator.data or {}
+        new_entities: list[SensorEntity] = []
+        for host_key in data.get("host_stats", {}):
+            if host_key in tracked_hosts:
+                continue
+            tracked_hosts.add(host_key)
+            new_entities.extend(
+                [
+                    WrtsensorHostCPUSensor(coordinator, entry, host_key),
+                    WrtsensorHostRAMSensor(coordinator, entry, host_key),
+                    WrtsensorHostDiskSensor(coordinator, entry, host_key),
+                ]
+            )
+        if new_entities:
+            async_add_entities(new_entities)
+
+    entry.async_on_unload(coordinator.async_add_listener(_handle_coordinator_update))
+    _handle_coordinator_update()
 
 
 def _device_info(entry: ConfigEntry) -> DeviceInfo:
     return DeviceInfo(
         identifiers={(DOMAIN, entry.entry_id)},
-        name="wrtsensor",
+        name=_entry_title(entry),
         manufacturer="wrtsensor",
         model="OpenWrt Network Sensor",
         sw_version="1.0.0",
     )
+
+
+def _entry_title(entry: ConfigEntry) -> str:
+    return getattr(entry, "title", None) or "wrtsensor"
 
 
 class _WrtsensorBase(CoordinatorEntity[WrtsensorCoordinator], SensorEntity):
@@ -73,15 +89,13 @@ class _WrtsensorBase(CoordinatorEntity[WrtsensorCoordinator], SensorEntity):
 class WrtsensorNetworkScannerSensor(_WrtsensorBase):
     """Compatibility sensor — matches the legacy command_line sensor schema exactly."""
 
-    _attr_has_entity_name = False  # produces entity_id sensor.network_scanner, not sensor.wrtsensor_network_scanner
-    _attr_name = "Network Scanner"
+    _attr_has_entity_name = False
     _attr_icon = "mdi:lan"
 
     def __init__(self, coordinator: WrtsensorCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry)
-        # Intentionally global (no entry_id prefix) so users migrating from the
-        # command_line sensor retain their existing entity registration.
-        self._attr_unique_id = "wrtsensor_network_scanner"
+        self._attr_name = f"{_entry_title(entry)} Network Scanner"
+        self._attr_unique_id = f"{entry.entry_id}_network_scanner"
 
     @property
     def state(self) -> int | None:
@@ -120,6 +134,7 @@ class WrtsensorEventLogSensor(_WrtsensorBase):
 
     def __init__(self, coordinator: WrtsensorCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry)
+        self._attr_name = f"{_entry_title(entry)} Event Log"
         self._attr_unique_id = f"{entry.entry_id}_event_log"
 
     @property

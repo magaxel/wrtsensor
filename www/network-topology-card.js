@@ -910,7 +910,7 @@ class NetworkTopologyCard extends HTMLElement {
     return document.createElement("network-topology-card-editor");
   }
   static getStubConfig() {
-    return { entity: "sensor.network_scanner", title: "Network Map", gateway_hostname: "gw" };
+    return { entity: "", title: "Network Map", gateway_hostname: "gw" };
   }
 }
 

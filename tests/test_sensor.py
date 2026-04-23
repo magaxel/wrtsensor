@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import sys
 import types
@@ -39,6 +40,9 @@ _entity_mod.DeviceInfo = _DeviceInfo  # type: ignore[attr-defined]
 _ep_mod = _stub("homeassistant.helpers.entity_platform")
 _ep_mod.AddEntitiesCallback = object  # type: ignore[attr-defined]
 
+_core_mod = _stub("homeassistant.core")
+_core_mod.callback = lambda fn: fn  # type: ignore[attr-defined]
+
 # CoordinatorEntity stub — stores coordinator so self.coordinator works
 _uc = sys.modules["homeassistant.helpers.update_coordinator"]
 
@@ -72,10 +76,31 @@ WrtsensorNetworkScannerSensor = sys.modules[_sensor_name].WrtsensorNetworkScanne
 class _FakeCoordinator:
     def __init__(self, data: dict | None) -> None:
         self.data = data
+        self._gateway_host = None
+        self._listeners: list[object] = []
+
+    def async_add_listener(self, listener):
+        self._listeners.append(listener)
+
+        def _remove():
+            self._listeners.remove(listener)
+
+        return _remove
+
+    def fire_update(self) -> None:
+        for listener in list(self._listeners):
+            listener()
 
 
 class _FakeEntry:
     entry_id = "test-entry"
+    title = "My Router"
+
+    def __init__(self) -> None:
+        self._unloaders: list[object] = []
+
+    def async_on_unload(self, unloader) -> None:
+        self._unloaders.append(unloader)
 
 
 def _make_sensor(data: dict | None) -> WrtsensorNetworkScannerSensor:
@@ -134,6 +159,64 @@ def test_network_scanner_attributes_no_data():
     """Empty coordinator.data returns an empty dict, not an error."""
     assert _make_sensor(None).extra_state_attributes == {}
     assert _make_sensor({}).extra_state_attributes == {}
+
+
+def test_network_scanner_unique_id_is_entry_scoped():
+    sensor_a = WrtsensorNetworkScannerSensor(_FakeCoordinator({}), _FakeEntry())
+    entry_b = _FakeEntry()
+    entry_b.entry_id = "other-entry"
+    entry_b.title = "Guest Router"
+    sensor_b = WrtsensorNetworkScannerSensor(_FakeCoordinator({}), entry_b)
+
+    assert sensor_a._attr_unique_id == "test-entry_network_scanner"
+    assert sensor_b._attr_unique_id == "other-entry_network_scanner"
+    assert sensor_a._attr_unique_id != sensor_b._attr_unique_id
+
+
+async def _setup_platform_with_hosts(host_stats: dict) -> tuple[list[object], _FakeCoordinator]:
+    added: list[object] = []
+    coordinator = _FakeCoordinator({"host_stats": host_stats})
+    entry = _FakeEntry()
+    hass = types.SimpleNamespace(data={"wrtsensor": {entry.entry_id: coordinator}})
+
+    def _add_entities(new_entities):
+        added.extend(list(new_entities))
+
+    await sys.modules[_sensor_name].async_setup_entry(hass, entry, _add_entities)
+    return added, coordinator
+
+
+def test_async_setup_entry_adds_initial_host_sensors():
+    added, _ = asyncio.run(_setup_platform_with_hosts({"192.0.2.1": {"cpu": 1.0}}))
+
+    host_entities = [e for e in added if getattr(e, "_hostname", None) == "192.0.2.1"]
+    assert len(host_entities) == 3
+    assert {type(e).__name__ for e in host_entities} == {
+        "WrtsensorHostCPUSensor",
+        "WrtsensorHostRAMSensor",
+        "WrtsensorHostDiskSensor",
+    }
+
+
+def test_async_setup_entry_adds_new_host_sensors_on_update():
+    added, coordinator = asyncio.run(_setup_platform_with_hosts({}))
+
+    coordinator.data = {"host_stats": {"192.0.2.22": {"cpu": 2.0}}}
+    coordinator.fire_update()
+
+    host_entities = [e for e in added if getattr(e, "_hostname", None) == "192.0.2.22"]
+    assert len(host_entities) == 3
+
+
+def test_async_setup_entry_does_not_duplicate_host_sensors():
+    added, coordinator = asyncio.run(_setup_platform_with_hosts({}))
+
+    coordinator.data = {"host_stats": {"192.0.2.22": {"cpu": 2.0}}}
+    coordinator.fire_update()
+    coordinator.fire_update()
+
+    host_entities = [e for e in added if getattr(e, "_hostname", None) == "192.0.2.22"]
+    assert len(host_entities) == 3
 
 
 # ── WrtsensorEventLogSensor ───────────────────────────────────────────────────
