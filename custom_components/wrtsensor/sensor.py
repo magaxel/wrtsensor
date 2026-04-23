@@ -94,7 +94,7 @@ class WrtsensorNetworkScannerSensor(_WrtsensorBase):
 
     def __init__(self, coordinator: WrtsensorCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry)
-        self._attr_name = f"{_entry_title(entry)} Network Scanner"
+        self._attr_name = "Network Scanner"
         self._attr_unique_id = f"{entry.entry_id}_network_scanner"
 
     @property
@@ -134,7 +134,7 @@ class WrtsensorEventLogSensor(_WrtsensorBase):
 
     def __init__(self, coordinator: WrtsensorCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry)
-        self._attr_name = f"{_entry_title(entry)} Event Log"
+        self._attr_name = "Event Log"
         self._attr_unique_id = f"{entry.entry_id}_event_log"
 
     @property
