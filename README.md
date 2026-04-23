@@ -59,7 +59,15 @@ All of this comes from a single 20 s SSH call to the gateway plus parallel SSH c
 
 4. Enter your gateway IP (optional), SSH key path (default `/config/ssh/id_ed25519`), and any AP IPs (comma-separated). At least one of gateway or APs must be set — leaving gateway empty enables APs-only mode.
 
-5. Done — `sensor.wrtsensor_network_scanner` appears immediately, Lovelace cards auto-register. Open **Settings → Options** on the integration to add presence MACs, change scan interval, or update interface names.
+5. Done — wrtsensor creates one scanner sensor and one event-log sensor per config entry. Their exact entity IDs depend on the entry title, so pick them from the entity picker in the UI rather than assuming a fixed `sensor.wrtsensor_*` name.
+
+6. Add the Lovelace resources manually in **Settings → Dashboards → Resources**:
+
+   - `/wrtsensor_static/network-list-card.js?v=1.0.0` — JavaScript Module
+   - `/wrtsensor_static/network-table-card.js?v=1.0.0` — JavaScript Module
+   - `/wrtsensor_static/network-topology-card.js?v=1.0.0` — JavaScript Module
+   - `/wrtsensor_static/network-events-card.js?v=1.0.0` — JavaScript Module
+   - `/wrtsensor_static/dns-stats-card.js?v=1.0.0` — JavaScript Module
 
 > If key authentication isn't set up yet, the config flow will ask for a password once and provision the public key into `/etc/dropbear/authorized_keys` on each OpenWrt box for you. The password is never stored.
 
@@ -71,7 +79,7 @@ Open the integration in **Settings → Devices & Services**, hit the triple-dot 
 
 ## Card configuration
 
-All cards take `entity: sensor.wrtsensor_network_scanner` (the event card uses `sensor.wrtsensor_event_log` — see below). Drop these snippets into a dashboard via **Raw configuration editor** or the **+ ADD CARD → Manual** editor.
+Each wrtsensor config entry creates its own scanner and event-log entities. Use the entity picker in the card editor, or replace the example IDs below with the entity IDs created for your entry. Drop these snippets into a dashboard via **Raw configuration editor** or the **+ ADD CARD → Manual** editor.
 
 ### `network-list-card`
 
@@ -79,7 +87,7 @@ Compact, searchable, sortable device list. Each row expands to show Wi-Fi metric
 
 ```yaml
 type: custom:network-list-card
-entity: sensor.wrtsensor_network_scanner
+entity: sensor.my_router_network_scanner
 title: Devices
 show_offline: false      # default false — offline devices are hidden
 max_height: 560          # px; 0 = fill container in sections/grid layouts
@@ -100,7 +108,7 @@ Wider tabular variant — better for widescreen dashboards.
 
 ```yaml
 type: custom:network-table-card
-entity: sensor.wrtsensor_network_scanner
+entity: sensor.my_router_network_scanner
 title: Network
 show_offline: false
 columns:
@@ -122,7 +130,7 @@ SVG topology map showing the gateway, APs, and clients.
 
 ```yaml
 type: custom:network-topology-card
-entity: sensor.wrtsensor_network_scanner
+entity: sensor.my_router_network_scanner
 title: Network Map
 gateway_hostname: gw     # label shown on the gateway node
 col_width: 200           # px between AP columns
@@ -136,7 +144,7 @@ Filterable event log. Groups events by date, shows per-day count, live search, t
 
 ```yaml
 type: custom:network-events-card
-entity: sensor.wrtsensor_event_log
+entity: sensor.my_router_event_log
 title: Network Events
 max_height: 560
 show_search: true        # hide search bar by setting false
@@ -154,7 +162,7 @@ dnsmasq cache statistics.
 
 ```yaml
 type: custom:dns-stats-card
-entity: sensor.wrtsensor_network_scanner
+entity: sensor.my_router_network_scanner
 title: DNS Cache
 ```
 
@@ -218,16 +226,16 @@ In APs-only mode, only the AP rows appear.
 
 | Entity ID | What it is |
 |-----------|-----------|
-| `sensor.wrtsensor_network_scanner` | Main sensor — device count as state, full JSON blob as attributes. All cards read from this. |
-| `sensor.wrtsensor_event_log` | Event log — event count as state, last 500 events as attributes. Used by the events card. |
-| `sensor.wrtsensor_wan_download` | WAN RX rate in Mbit/s |
-| `sensor.wrtsensor_wan_upload` | WAN TX rate in Mbit/s |
-| `sensor.wrtsensor_dns_cache_hit` | DNS cache hit % |
-| `sensor.wrtsensor_dns_latency` | Weighted upstream DNS latency in ms |
-| `sensor.wrtsensor_<ip>_cpu` | CPU % per host, e.g. `sensor.wrtsensor_192_0_2_1_cpu` |
-| `sensor.wrtsensor_<ip>_ram` | RAM % per host |
-| `sensor.wrtsensor_<ip>_disk` | Disk % per host |
-| `binary_sensor.wrtsensor_presence_<mac>` | Online/offline per configured MAC (set in Options) |
+| `sensor.<entry>_network_scanner` | Main sensor for one config entry — device count as state, full JSON blob as attributes. |
+| `sensor.<entry>_event_log` | Event log for one config entry — event count as state, last 500 events as attributes. |
+| `sensor.<entry>_wan_download` | WAN RX rate in Mbit/s |
+| `sensor.<entry>_wan_upload` | WAN TX rate in Mbit/s |
+| `sensor.<entry>_dns_cache_hit` | DNS cache hit % |
+| `sensor.<entry>_dns_latency` | Weighted upstream DNS latency in ms |
+| `sensor.<host>_cpu` | CPU % per host, e.g. `sensor.192_0_2_1_cpu` |
+| `sensor.<host>_ram` | RAM % per host |
+| `sensor.<host>_disk` | Disk % per host |
+| `binary_sensor.<entry>_presence_<mac>` | Online/offline per configured MAC (set in Options) |
 | `device_tracker.<hostname>` | home/not_home tracker per discovered device — **disabled by default** |
 
 Device tracker entities are named after the device hostname (e.g. `device_tracker.my_phone`) and are disabled by default. HA's scanner entity base class does this to avoid flooding the registry when dozens of devices are discovered. To use a tracker for Person presence, go to **Settings → Entities**, enable "Show disabled entities", find the device, and enable it. The entity can then be added to a Person.
@@ -252,20 +260,20 @@ Replace the example addresses with whatever your LAN uses. The HACS integration 
 
 ## Recorder & logbook exclusion
 
-`sensor.wrtsensor_network_scanner` and `sensor.wrtsensor_event_log` carry large JSON blobs as attributes and change every scan (every 60 s). Exclude them in `configuration.yaml` to keep the database and logbook trim:
+The per-entry `*_network_scanner` and `*_event_log` entities carry large JSON blobs as attributes and change every scan (every 60 s). Exclude the specific entities created for your entry in `configuration.yaml` to keep the database and logbook trim:
 
 ```yaml
 recorder:
   exclude:
     entities:
-      - sensor.wrtsensor_network_scanner
-      - sensor.wrtsensor_event_log
+      - sensor.my_router_network_scanner
+      - sensor.my_router_event_log
 
 logbook:
   exclude:
     entities:
-      - sensor.wrtsensor_network_scanner
-      - sensor.wrtsensor_event_log
+      - sensor.my_router_network_scanner
+      - sensor.my_router_event_log
 ```
 
 ## Troubleshooting

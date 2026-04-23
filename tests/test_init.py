@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import sys
 import types
@@ -167,3 +168,60 @@ def test_prune_handles_missing_data():
     _prune(hass=None, entry=entry, coordinator=coordinator)
 
     assert "sensor.wrtsensor_live_cpu" in _singleton_registry._entries
+
+
+def test_setup_entry_does_not_touch_lovelace_storage():
+    calls: list[str] = []
+
+    class _FakeCoordinator:
+        def __init__(self, hass, entry):
+            self.data = {"host_stats": {}}
+
+        async def async_setup(self):
+            return None
+
+        async def async_config_entry_first_refresh(self):
+            return None
+
+    class _FakeConfigEntries:
+        async def async_forward_entry_setups(self, entry, platforms):
+            calls.append(f"forward:{','.join(platforms)}")
+
+    class _FakeHass:
+        def __init__(self) -> None:
+            self.data = {}
+            self.config_entries = _FakeConfigEntries()
+
+        async def async_add_executor_job(self, fn, *args):
+            calls.append(getattr(fn, "__name__", "executor"))
+            return None
+
+    class _FakeEntry:
+        entry_id = "entry-1"
+
+        def add_update_listener(self, listener):
+            return listener
+
+        def async_on_unload(self, callback):
+            calls.append("unload")
+
+    async def _fake_register_static_path(hass):
+        calls.append("static")
+
+    original_coordinator = _init_mod.WrtsensorCoordinator
+    original_register = _init_mod._register_static_path
+    original_prune = _init_mod._prune_orphaned_host_entities
+    try:
+        _init_mod.WrtsensorCoordinator = _FakeCoordinator
+        _init_mod._register_static_path = _fake_register_static_path
+        _init_mod._prune_orphaned_host_entities = lambda hass, entry, coordinator: calls.append("prune")
+
+        asyncio.run(_init_mod.async_setup_entry(_FakeHass(), _FakeEntry()))
+    finally:
+        _init_mod.WrtsensorCoordinator = original_coordinator
+        _init_mod._register_static_path = original_register
+        _init_mod._prune_orphaned_host_entities = original_prune
+
+    assert "static" in calls
+    assert "prune" in calls
+    assert all(call != "_register_lovelace_resources" for call in calls)

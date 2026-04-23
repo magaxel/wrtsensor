@@ -690,7 +690,7 @@ class NetworkEventsCard extends HTMLElement {
     return document.createElement("network-events-card-editor");
   }
   static getStubConfig() {
-    return { entity: "sensor.network_event_log", title: "Network Events" };
+    return { entity: "", title: "Network Events" };
   }
 }
 

@@ -891,7 +891,7 @@ class NetworkListCard extends LitElement {
   }
 
   static getStubConfig() {
-    return { entity: "sensor.network_scanner", title: "Network" };
+    return { entity: "", title: "Network" };
   }
 }
 
