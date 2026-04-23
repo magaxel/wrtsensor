@@ -220,7 +220,26 @@ class WrtsensorDNSLatencySensor(_WrtsensorBase):
         return dns.get("latency_ms")
 
 
-class WrtsensorHostCPUSensor(_WrtsensorBase):
+class _WrtsensorHostBase(_WrtsensorBase):
+    """Base for per-host sensors; overrides device_info to show hardware model."""
+
+    _hostname: str
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        host_data = (
+            (self.coordinator.data or {}).get("host_stats", {}).get(self._hostname, {})
+        )
+        model = host_data.get("model") or "OpenWrt"
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"{self._entry.entry_id}_{self._hostname}")},
+            name=self._hostname,
+            manufacturer="OpenWrt",
+            model=model,
+        )
+
+
+class WrtsensorHostCPUSensor(_WrtsensorHostBase):
     _attr_native_unit_of_measurement = "%"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:cpu-64-bit"
@@ -244,7 +263,7 @@ class WrtsensorHostCPUSensor(_WrtsensorBase):
         return data.get("host_stats", {}).get(self._hostname, {}).get("cpu")
 
 
-class WrtsensorHostRAMSensor(_WrtsensorBase):
+class WrtsensorHostRAMSensor(_WrtsensorHostBase):
     _attr_native_unit_of_measurement = "%"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:memory"
@@ -268,7 +287,7 @@ class WrtsensorHostRAMSensor(_WrtsensorBase):
         return data.get("host_stats", {}).get(self._hostname, {}).get("ram")
 
 
-class WrtsensorHostDiskSensor(_WrtsensorBase):
+class WrtsensorHostDiskSensor(_WrtsensorHostBase):
     _attr_native_unit_of_measurement = "%"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:harddisk"

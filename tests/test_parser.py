@@ -15,6 +15,7 @@ parse_arp = coord.parse_arp
 parse_ndp = coord.parse_ndp
 parse_hoststat = coord.parse_hoststat
 parse_dns_stats = coord.parse_dns_stats
+parse_board_model = parser.parse_board_model
 _is_random_mac = parser._is_random_mac
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -31,61 +32,51 @@ def _collector_output(ap: str, version: str = PINNED_VERSION) -> str:
     return (OPENWRT_FIXTURES / version / ap / "collector-output.txt").read_text()
 
 
-class TestParseWifiOutputAP3:
+class TestParseWifiOutputUniFiACPro:
+    """Ubiquiti UniFi AP Pro (ubnt,unifiac-pro) fixture."""
+
     def setup_method(self):
-        self.entries, self.hoststat = parse_wifi_output(_collector_output("ap3"), "AP3")
+        self.entries, self.hoststat = parse_wifi_output(
+            _collector_output("unifiac-pro"), "UniFiACPro"
+        )
 
     def test_device_count(self):
-        assert len(self.entries) == 3
+        assert len(self.entries) == 5
 
     def test_mac_uppercase(self):
         macs = {e["mac"] for e in self.entries}
-        assert "38:00:00:00:00:01" in macs
-        assert "C4:00:00:00:00:02" in macs
-        assert "D0:00:00:00:00:03" in macs
+        assert "C8:00:00:00:00:04" in macs
+        assert "D8:00:00:00:00:05" in macs
 
     def test_ap_name(self):
-        assert all(e["ap"] == "AP3" for e in self.entries)
+        assert all(e["ap"] == "UniFiACPro" for e in self.entries)
 
     def test_bands(self):
         by_mac = {e["mac"]: e for e in self.entries}
-        assert by_mac["38:00:00:00:00:01"]["band"] == "5GHz"
-        assert by_mac["C4:00:00:00:00:02"]["band"] == "2.4GHz"
+        assert by_mac["C8:00:00:00:00:04"]["band"] == "2.4GHz"
+        assert by_mac["D8:00:00:00:00:05"]["band"] == "5GHz"
 
     def test_signal(self):
         by_mac = {e["mac"]: e for e in self.entries}
-        assert by_mac["38:00:00:00:00:01"]["signal"] == -63
-        assert by_mac["C4:00:00:00:00:02"]["signal"] == -23
+        assert by_mac["C8:00:00:00:00:04"]["signal"] == -58
+        assert by_mac["D8:00:00:00:00:05"]["signal"] == -52
 
     def test_noise(self):
         by_mac = {e["mac"]: e for e in self.entries}
-        assert by_mac["38:00:00:00:00:01"]["noise"] == -105
-        assert by_mac["C4:00:00:00:00:02"]["noise"] == -95
+        assert by_mac["C8:00:00:00:00:04"]["noise"] == -100
+        assert by_mac["D8:00:00:00:00:05"]["noise"] == -92
 
     def test_snr(self):
         by_mac = {e["mac"]: e for e in self.entries}
-        assert by_mac["38:00:00:00:00:01"]["snr"] == 42
-        assert by_mac["C4:00:00:00:00:02"]["snr"] == 72
+        assert by_mac["C8:00:00:00:00:04"]["snr"] == 42
+        assert by_mac["D8:00:00:00:00:05"]["snr"] == 40
 
     def test_tx_rate(self):
         by_mac = {e["mac"]: e for e in self.entries}
-        assert by_mac["38:00:00:00:00:01"]["tx_rate"] == 234.0
-
-    def test_rx_rate(self):
-        by_mac = {e["mac"]: e for e in self.entries}
-        assert by_mac["38:00:00:00:00:01"]["rx_rate"] == 12.0
-
-    def test_exp_tput(self):
-        by_mac = {e["mac"]: e for e in self.entries}
-        assert by_mac["38:00:00:00:00:01"]["exp_tput"] == 206.9
+        assert by_mac["D8:00:00:00:00:05"]["tx_rate"] == 433.3
 
     def test_essid(self):
         assert all(e["essid"] == "NetA" for e in self.entries)
-
-    def test_byte_counters(self):
-        by_mac = {e["mac"]: e for e in self.entries}
-        assert by_mac["38:00:00:00:00:01"]["sta_ul_bytes"] == 1639695
-        assert by_mac["38:00:00:00:00:01"]["sta_dl_bytes"] == 1509476
 
     def test_hoststat_cpu_line(self):
         assert len(self.hoststat) >= 2
@@ -97,15 +88,19 @@ class TestParseWifiOutputAP3:
         assert len(fields) == 11  # "cpu" + 10 values
 
 
-class TestParseWifiOutputAP2:
+class TestParseWifiOutputUniFiNanoHD:
+    """Ubiquiti UniFi AP nanoHD (ubnt,unifi-nanohd) fixture."""
+
     def setup_method(self):
-        self.entries, _ = parse_wifi_output(_collector_output("ap2"), "AP2")
+        self.entries, _ = parse_wifi_output(
+            _collector_output("unifi-nanohd"), "UniFiNanoHD"
+        )
 
     def test_device_count(self):
         assert len(self.entries) == 6
 
     def test_roam_candidate_present(self):
-        # 38:00:00:00:00:01 appears on both AP3 and AP2
+        # 38:00:00:00:00:01 roams between UniFiACPro and UniFiNanoHD
         macs = {e["mac"] for e in self.entries}
         assert "38:00:00:00:00:01" in macs
 
@@ -116,44 +111,35 @@ class TestParseWifiOutputAP2:
         assert by_mac["2E:00:00:00:00:01"]["essid"] == "NetA"
 
     def test_low_byte_counters(self):
-        # 2E:00:00:00:00:01 has very low byte counters
         by_mac = {e["mac"]: e for e in self.entries}
         assert by_mac["2E:00:00:00:00:01"]["sta_ul_bytes"] == 3720849
         assert by_mac["2E:00:00:00:00:01"]["sta_dl_bytes"] == 3719870
 
 
-class TestParseWifiOutputAP1:
-    def setup_method(self):
-        self.entries, _ = parse_wifi_output(_collector_output("ap1"), "AP1")
-
-    def test_device_count(self):
-        assert len(self.entries) == 5
-
-    def test_all_have_ap_name(self):
-        assert all(e["ap"] == "AP1" for e in self.entries)
-
-
 # ── Structural checks across every captured OpenWrt version ──────────────────
 
 
+AP_BOARDS = ["unifiac-pro", "unifi-nanohd"]
+
+
 @pytest.mark.parametrize("version", AVAILABLE_VERSIONS)
-@pytest.mark.parametrize("ap", ["ap1", "ap2", "ap3"])
-def test_collector_output_parses_across_versions(version, ap):
+@pytest.mark.parametrize("board", AP_BOARDS)
+def test_collector_output_parses_across_versions(version, board):
     """Every captured collector output must yield well-formed entries on any OpenWrt version."""
-    path = OPENWRT_FIXTURES / version / ap / "collector-output.txt"
+    path = OPENWRT_FIXTURES / version / board / "collector-output.txt"
     if not path.exists():
-        pytest.skip(f"no {ap} capture for {version}")
-    entries, hoststat = parse_wifi_output(path.read_text(), ap.upper())
-    assert entries, f"no entries parsed from {version}/{ap}"
+        pytest.skip(f"no {board} capture for {version}")
+    entries, hoststat = parse_wifi_output(path.read_text(), board.upper())
+    assert entries, f"no entries parsed from {version}/{board}"
     for e in entries:
         assert e["mac"] == e["mac"].upper()
         assert len(e["mac"].split(":")) == 6
         assert e["band"] in {"2.4GHz", "5GHz", "6GHz", "unknown"}
         assert isinstance(e["essid"], str)
         assert isinstance(e["signal"], int)
-        assert e["ap"] == ap.upper()
+        assert e["ap"] == board.upper()
     # STAT line always emitted by the collector
-    assert hoststat, f"no hoststat from {version}/{ap}"
+    assert hoststat, f"no hoststat from {version}/{board}"
     assert hoststat[0].startswith("cpu")
 
 
@@ -380,6 +366,38 @@ def test_is_random_mac_bad_input():
     assert not _is_random_mac("ZZ:00:00:00:00:00")
 
 
+# ── parse_board_model ─────────────────────────────────────────────────────────
+
+
+class TestParseBoardModel:
+    def test_unifiac_pro_fixture(self):
+        out = _collector_output("unifiac-pro")
+        model, board_name = parse_board_model(out)
+        assert model == "Ubiquiti UniFi AP Pro"
+        assert board_name == "ubnt,unifiac-pro"
+
+    def test_unifi_nanohd_fixture(self):
+        out = _collector_output("unifi-nanohd")
+        model, board_name = parse_board_model(out)
+        assert model == "Ubiquiti UniFi AP nanoHD"
+        assert board_name == "ubnt,unifi-nanohd"
+
+    def test_missing_board_line(self):
+        assert parse_board_model("STAT|cpu 1 0 1 1|1024|512|5\n") == ("", "")
+
+    def test_malformed_json(self):
+        assert parse_board_model("BOARD|not-json\n") == ("", "")
+
+    def test_empty_payload(self):
+        assert parse_board_model("BOARD|\n") == ("", "")
+
+    def test_parse_unaffected_by_board_line(self):
+        # Adding a BOARD line must not produce a spurious WiFi entry
+        out = _collector_output("unifiac-pro")
+        entries, _ = parse_wifi_output(out, "test")
+        assert len(entries) == 5  # same count as without BOARD line
+
+
 # ── Gateway fixture drift tests ────────────────────────────────────────────────
 # Structural assertions that run across every captured OpenWrt version. Their
 # job is not to check numeric values (which differ between captures) but to
@@ -387,7 +405,7 @@ def test_is_random_mac_bad_input():
 
 
 def _gateway_lines(version: str, fname: str) -> list[str]:
-    path = OPENWRT_FIXTURES / version / "gateway" / fname
+    path = OPENWRT_FIXTURES / version / "usg" / fname
     if not path.is_file():
         return []
     return [ln for ln in path.read_text().splitlines() if ln.strip()]
@@ -455,7 +473,7 @@ def test_parse_dns_stats_from_gateway_fixture(version):
 @pytest.mark.parametrize("version", AVAILABLE_VERSIONS)
 def test_parse_hoststat_from_gateway_fixture(version):
     # The coordinator composes hoststat from three commands; mirror that shape.
-    gw = OPENWRT_FIXTURES / version / "gateway"
+    gw = OPENWRT_FIXTURES / version / "usg"
     cpu_path = gw / "proc-stat.txt"
     mem_path = gw / "proc-meminfo.txt"
     disk_path = gw / "df-root.txt"

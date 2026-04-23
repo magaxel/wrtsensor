@@ -1,2 +1,0 @@
-Filesystem           1K-blocks      Used Available Use% Mounted on
-overlayfs:/overlay        8256       368      7888   4% /

@@ -1,0 +1,1 @@
+{"board_name":"ubnt,usg","model":"Ubiquiti UniFi Security Gateway","hostname":"gateway","kernel":"5.15.150"}

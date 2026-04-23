@@ -7,6 +7,7 @@ straightforward to unit-test without a running Home Assistant instance.
 from __future__ import annotations
 
 import ipaddress
+import json
 import re
 from typing import Any
 
@@ -174,6 +175,18 @@ def parse_wifi_output(out: str, ap_name: str) -> tuple[list[dict[str, Any]], lis
             }
         )
     return entries, hoststat
+
+
+def parse_board_model(out: str) -> tuple[str, str]:
+    """Extract (model, board_name) from collector output containing a BOARD| line."""
+    for line in out.splitlines():
+        if line.startswith("BOARD|"):
+            try:
+                board = json.loads(line[6:])
+                return board.get("model", ""), board.get("board_name", "")
+            except (ValueError, KeyError):
+                return "", ""
+    return "", ""
 
 
 def parse_dns_stats(lines: list[str]) -> dict[str, Any] | None:

@@ -1,3 +1,4 @@
+BOARD|{"board_name":"ubnt,unifi-nanohd","model":"Ubiquiti UniFi AP nanoHD","hostname":"ap2","kernel":"5.15.150"}
 STAT|cpu  5840614 0 1592892 118434797 0 0 2662896 0 0 0|120768|48364|4
 D8:00:00:00:00:09|5GHz|NetA|-48|433.3|Master|125987898|769436297|-102|54|433.3|373.6
 20:00:00:00:00:0A|5GHz|NetA|-50|325.0|Master|76135484|80258827|-102|52|117.0|284.6

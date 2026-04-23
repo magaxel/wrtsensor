@@ -29,6 +29,7 @@ from .parser import (
     _is_random_mac,
     _valid_ipv4,
     parse_arp,
+    parse_board_model,
     parse_conntrack,
     parse_dns_stats,
     parse_hoststat,
@@ -598,6 +599,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._device_bw_accum: dict[str, dict[str, int]] = {}
         self._wan_event_state: dict[str, str] = {}
         self._prev_state: dict[str, StateEntry] = {}
+        self._host_models: dict[str, tuple[str, str]] = {}  # ip → (model, board_name)
 
         # Cached file data (warm across scans)
         self._vendor_cache: dict[str, str] = {}
@@ -792,7 +794,8 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "echo '---DNS---'; "
             "kill -USR1 $(pidof dnsmasq) 2>/dev/null; sleep 0.3; "
             "logread -l 60 2>/dev/null | grep 'dnsmasq\\[' | grep -E 'cache size|queries forwarded|avg\\. latency' | tail -20; "
-            "echo '---CONNTRACK---'; cat /proc/net/nf_conntrack 2>/dev/null"
+            "echo '---CONNTRACK---'; cat /proc/net/nf_conntrack 2>/dev/null; "
+            "echo '---BOARD---'; ubus call system board 2>/dev/null"
         )
         out = await self._ssh_run(self._gateway_host, cmd, timeout=25)
         if not out or "---LEASES---" not in out:
@@ -828,6 +831,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "conntrack": [ln for ln in sections.get("CONNTRACK", []) if ln.strip()],
             "hoststat": hoststat_info,
             "dns": dns_info,
+            "gw_board": sections.get("BOARD", [""])[0].strip(),
         }
 
     async def _get_ap_info(self, host: str) -> tuple[str, str, list[str], list[str]]:
@@ -875,6 +879,9 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self, host: str, ap_name: str
     ) -> tuple[list[dict[str, Any]], list[str]]:
         out = await self._ssh_run(host, f"sh {COLLECTOR_REMOTE_PATH}", timeout=12)
+        model, board_name = parse_board_model(out)
+        if model:
+            self._host_models[host] = (model, board_name)
         return parse_wifi_output(out, ap_name)
 
     async def _ping_stale(self, ips: list[str]) -> list[str]:
@@ -1207,6 +1214,11 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             leases = parse_leases(gw_data["leases"])
             arp_states, stale, arp_ips = parse_arp(gw_data["arp"])
             ndp = parse_ndp(gw_data["ndp"])
+            gw_board_json = gw_data.get("gw_board", "")
+            if gw_board_json and self._gateway_host:
+                gw_model, gw_board_name = parse_board_model("BOARD|" + gw_board_json)
+                if gw_model:
+                    self._host_models[self._gateway_host] = (gw_model, gw_board_name)
         else:
             leases = {}
             arp_states = {}
@@ -1472,8 +1484,11 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._gateway_host, parse_hoststat(gw_data.get("hoststat", []))
             )
             if gw_stats:
+                gw_model_info = self._host_models.get(self._gateway_host, ("", ""))
                 host_stats[self._gateway_host] = {
                     "hostname": gw_data.get("gw_hostname", "gateway"),
+                    "model": gw_model_info[0],
+                    "board_name": gw_model_info[1],
                     **gw_stats,
                 }
         for host in self._ap_hosts:
@@ -1481,11 +1496,14 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 host, parse_hoststat(ap_hoststats.get(host, []))
             )
             if stats:
+                ap_model_info = self._host_models.get(host, ("", ""))
                 host_stats[host] = {
                     "hostname": next(
                         (d.hostname for d in devices if d.ip == host and d.hostname),
                         host,
                     ),
+                    "model": ap_model_info[0],
+                    "board_name": ap_model_info[1],
                     **stats,
                 }
 

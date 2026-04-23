@@ -16,6 +16,7 @@ if ! command -v iwinfo >/dev/null 2>&1; then
     exit 1
 fi
 
+echo "BOARD|$(ubus call system board 2>/dev/null)"
 cpu_line=$(grep '^cpu ' /proc/stat 2>/dev/null)
 mem=$(awk '/^MemTotal:/ {t=$2} /^MemAvailable:/ {a=$2} END{print t "|" a}' /proc/meminfo 2>/dev/null)
 disk=$(df / 2>/dev/null | awk 'NR==2 {gsub("%","",$5); print $5+0}')
