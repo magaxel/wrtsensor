@@ -31,7 +31,7 @@ Per scan (every 60 s) the integration produces a single JSON object with:
 
 - **Devices** — MAC, IPv4, IPv6, hostname, vendor (OUI lookup), connection type, online status.
 - **Wi-Fi metrics** — for associated clients: AP, band, signal, noise, SNR, TX/RX PHY rates, expected throughput, per-station byte counters.
-- **Host stats** — CPU%, RAM%, and root disk% for the gateway and each AP.
+- **Host stats** — CPU%, RAM%, root disk%, hardware model, and board name for the gateway and each AP. The hardware model (from `ubus call system board`) is shown in the HA device registry for each host's sensor cluster.
 - **WAN** — IPv4, IPv6, live RX/TX rate, cumulative byte totals.
 - **DNS cache** — dnsmasq cache hit/miss counts and rates, per-upstream query counts and latency, weighted average upstream latency.
 - **Event log** — append-only JSONL at `/dev/shm/netscan_events.json` with connect/disconnect/ip_change events (30-day retention, sticky disconnect window to prevent flapping).
