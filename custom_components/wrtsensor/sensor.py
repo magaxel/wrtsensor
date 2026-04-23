@@ -90,13 +90,13 @@ class WrtsensorNetworkScannerSensor(_WrtsensorBase):
     """Compatibility sensor — matches the legacy command_line sensor schema exactly."""
 
     _attr_has_entity_name = False
+    _attr_name = "Network Scanner"
+    _attr_suggested_object_id = "wrtsensor_network_scanner"
     _attr_icon = "mdi:lan"
 
     def __init__(self, coordinator: WrtsensorCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry)
-        self._attr_name = "Network Scanner"
         self._attr_unique_id = f"{entry.entry_id}_network_scanner"
-        self._attr_suggested_object_id = "wrtsensor_network_scanner"
 
     @property
     def state(self) -> int | None:
@@ -131,13 +131,12 @@ class WrtsensorEventLogSensor(_WrtsensorBase):
     """Exposes the JSONL event log so dashboard cards can read it."""
 
     _attr_name = "Event Log"
+    _attr_suggested_object_id = "wrtsensor_event_log"
     _attr_icon = "mdi:history"
 
     def __init__(self, coordinator: WrtsensorCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry)
-        self._attr_name = "Event Log"
         self._attr_unique_id = f"{entry.entry_id}_event_log"
-        self._attr_suggested_object_id = "wrtsensor_event_log"
 
     @property
     def state(self) -> int:
