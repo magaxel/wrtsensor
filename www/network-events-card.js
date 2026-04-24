@@ -5,7 +5,7 @@ import {
   nothing,
 } from "https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js";
 
-const CARD_VERSION = "1.1.0";
+const CARD_VERSION = "1.1.1";
 const CARD_TYPE = "network-events-card";
 const EDITOR_TYPE = `${CARD_TYPE}-editor`;
 const WS_TYPE_RECENT_EVENTS = "wrtsensor/recent_events";
@@ -318,13 +318,16 @@ class NetworkEventsCard extends LitElement {
     const visibleTypes = shownTypes
       ? EVENT_TYPES.filter((t) => shownTypes.includes(t.type))
       : EVENT_TYPES;
-    const maxHeight = Number(config.max_height);
+    const rawHeight = config.max_height;
+    // Empty string / null keeps the default; Number("") is 0, which the
+    // render path treats as "unlimited" and silently breaks the default clamp.
+    const parsedHeight = rawHeight === "" || rawHeight == null ? NaN : Number(rawHeight);
 
     this._config = {
       entity: config.entity,
       title: config.title ?? "Network Events",
       shown_types: shownTypes,
-      max_height: Number.isFinite(maxHeight) ? maxHeight : 560,
+      max_height: Number.isFinite(parsedHeight) ? parsedHeight : 560,
       show_search: config.show_search ?? true,
       show_filters: config.show_filters ?? true,
     };
