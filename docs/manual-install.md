@@ -74,7 +74,7 @@ Append `?v=1` (or any string) to bust the HA companion app's cache when you upda
 
 ## `command_line.yaml`
 
-Defines the `sensor.wrtsensor_network_scanner` command_line sensor that runs the scanner every 60 s (45 s timeout). The `json_attributes` list is an **explicit allowlist** — any new top-level JSON key emitted by the scanner must be added here or Home Assistant silently drops it. Also defines `sensor.wrtsensor_event_log` which tails the JSONL event file (capped at 500 entries per poll).
+Defines the `sensor.wrtsensor_network_scanner` command_line sensor that runs the scanner every 60 s (45 s timeout). The `json_attributes` list is an **explicit allowlist** — any new top-level JSON key emitted by the scanner must be added here or Home Assistant silently drops it. Also defines `sensor.wrtsensor_event_log` which tails the JSONL event file (capped at 500 entries per poll). This file-backed event log is specific to the manual install path; the HACS integration keeps recent events in memory only.
 
 ## `templates.yaml` — derived sensors
 

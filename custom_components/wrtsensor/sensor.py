@@ -28,7 +28,6 @@ async def async_setup_entry(
 
     entities: list[SensorEntity] = [
         WrtsensorNetworkScannerSensor(coordinator, entry),
-        WrtsensorEventLogSensor(coordinator, entry),
     ]
     # Gateway-only sensors: WAN bandwidth + DNS stats require the router.
     if coordinator._gateway_host:
@@ -125,35 +124,6 @@ class WrtsensorNetworkScannerSensor(_WrtsensorBase):
         if not data:
             return {}
         return {k: data[k] for k in self._COMPAT_KEYS if k in data}
-
-
-class WrtsensorEventLogSensor(_WrtsensorBase):
-    """Exposes the JSONL event log so dashboard cards can read it."""
-
-    _attr_name = "Event Log"
-    _attr_suggested_object_id = "wrtsensor_event_log"
-    _attr_icon = "mdi:history"
-
-    def __init__(self, coordinator: WrtsensorCoordinator, entry: ConfigEntry) -> None:
-        super().__init__(coordinator, entry)
-        self._attr_unique_id = f"{entry.entry_id}_event_log"
-
-    @property
-    def state(self) -> int:
-        data = self.coordinator.data
-        if not data:
-            return 0
-        return data.get("event_count", 0)
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        data = self.coordinator.data
-        if not data:
-            return {"events": [], "event_count": 0}
-        return {
-            "events": data.get("events", []),
-            "event_count": data.get("event_count", 0),
-        }
 
 
 class WrtsensorWANDownloadSensor(_WrtsensorBase):

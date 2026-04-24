@@ -33,6 +33,7 @@ const EVENT_TYPES = [
 ];
 
 const TYPE_MAP = Object.fromEntries(EVENT_TYPES.map((t) => [t.type, t]));
+const WS_TYPE_RECENT_EVENTS = "wrtsensor/recent_events";
 
 // ── Card ──────────────────────────────────────────────────────────────────────
 
@@ -40,6 +41,7 @@ class NetworkEventsCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
+    this._events = [];
     this._lastUpdated = null;
     this._rendered = false;
     this._textFilter = "";
@@ -47,6 +49,7 @@ class NetworkEventsCard extends HTMLElement {
     this._visibleTypes = EVENT_TYPES;
     this._page = 1;
     this._perPage = 50;
+    this._requestSeq = 0;
   }
 
   connectedCallback() {
@@ -98,11 +101,23 @@ class NetworkEventsCard extends HTMLElement {
     }
     if (state.last_updated === this._lastUpdated && this._rendered) return;
     this._lastUpdated = state.last_updated;
-    this._events = [...(state.attributes?.events ?? [])].reverse();
+    this._refreshEvents(state.entity_id);
+  }
+
+  async _refreshEvents(entityId) {
+    const requestSeq = ++this._requestSeq;
+    if (!this._rendered) this._renderLoading();
     try {
+      const result = await this._hass.callWS({
+        type: WS_TYPE_RECENT_EVENTS,
+        entity_id: entityId,
+      });
+      if (requestSeq !== this._requestSeq) return;
+      this._events = [...(result?.events ?? [])].reverse();
       this._render();
     } catch (e) {
-      this._renderError(String(e));
+      if (requestSeq !== this._requestSeq) return;
+      this._renderError(String(e?.message ?? e));
     }
   }
 
@@ -672,6 +687,14 @@ class NetworkEventsCard extends HTMLElement {
       </ha-card>`;
   }
 
+  _renderLoading() {
+    this.shadowRoot.innerHTML = `
+      <style>:host{display:block}</style>
+      <ha-card header="${_esc(this._config?.title ?? "Network Events")}">
+        <div style="padding:16px;color:var(--secondary-text-color);font-size:0.9em">Loading events…</div>
+      </ha-card>`;
+  }
+
   _renderError(message) {
     this.shadowRoot.innerHTML = `
       <style>:host{display:block}</style>
@@ -824,5 +847,5 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: "network-events-card",
   name: "Network Events",
-  description: "Filterable network event log from network_event_log sensor",
+  description: "Filterable network event log from a wrtsensor network_scanner entity",
 });

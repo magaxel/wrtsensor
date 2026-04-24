@@ -34,7 +34,7 @@ Per scan (every 60 s) the integration produces a single JSON object with:
 - **Host stats** — CPU%, RAM%, root disk%, hardware model, and board name for the gateway and each AP. The hardware model (from `ubus call system board`) is shown in the HA device registry for each host's sensor cluster.
 - **WAN** — IPv4, IPv6, live RX/TX rate, cumulative byte totals.
 - **DNS cache** — dnsmasq cache hit/miss counts and rates, per-upstream query counts and latency, weighted average upstream latency.
-- **Event log** — append-only JSONL at `/dev/shm/netscan_events.json` with connect/disconnect/ip_change events (30-day retention, sticky disconnect window to prevent flapping).
+- **Event log** — HACS integration keeps the most recent 500 events in memory only (cleared on HA restart/reload). The manual `command_line` install keeps its separate JSONL event file.
 
 All of this comes from a single 20 s SSH call to the gateway plus parallel SSH calls to each AP — no redundant shell sensors.
 
@@ -59,7 +59,7 @@ All of this comes from a single 20 s SSH call to the gateway plus parallel SSH c
 
 4. Enter your gateway IP (optional), SSH key path (default `/config/ssh/id_ed25519`), and any AP IPs (comma-separated). At least one of gateway or APs must be set — leaving gateway empty enables APs-only mode.
 
-5. Done — wrtsensor creates one scanner sensor and one event-log sensor per config entry. Their exact entity IDs depend on the entry title, so pick them from the entity picker in the UI rather than assuming a fixed `sensor.wrtsensor_*` name.
+5. Done — wrtsensor creates one scanner sensor per config entry, plus dedicated WAN/DNS/host sensors where applicable. Their exact entity IDs depend on the entry title, so pick them from the entity picker in the UI rather than assuming a fixed `sensor.wrtsensor_*` name.
 
 6. Add the Lovelace resources manually in **Settings → Dashboards → Resources**:
 
@@ -79,7 +79,7 @@ Open the integration in **Settings → Devices & Services**, hit the triple-dot 
 
 ## Card configuration
 
-Each wrtsensor config entry creates its own scanner and event-log entities. Use the entity picker in the card editor, or replace the example IDs below with the entity IDs created for your entry. Drop these snippets into a dashboard via **Raw configuration editor** or the **+ ADD CARD → Manual** editor.
+Each wrtsensor config entry creates its own scanner entity. Use the entity picker in the card editor, or replace the example IDs below with the entity IDs created for your entry. Drop these snippets into a dashboard via **Raw configuration editor** or the **+ ADD CARD → Manual** editor.
 
 ### `network-list-card`
 
@@ -144,7 +144,7 @@ Filterable event log. Groups events by date, shows per-day count, live search, t
 
 ```yaml
 type: custom:network-events-card
-entity: sensor.my_router_event_log
+entity: sensor.my_router_network_scanner
 title: Network Events
 max_height: 560
 show_search: true        # hide search bar by setting false
@@ -227,7 +227,6 @@ In APs-only mode, only the AP rows appear.
 | Entity ID | What it is |
 |-----------|-----------|
 | `sensor.<entry>_network_scanner` | Main sensor for one config entry — device count as state, full JSON blob as attributes. |
-| `sensor.<entry>_event_log` | Event log for one config entry — event count as state, last 500 events as attributes. |
 | `sensor.<entry>_wan_download` | WAN RX rate in Mbit/s |
 | `sensor.<entry>_wan_upload` | WAN TX rate in Mbit/s |
 | `sensor.<entry>_dns_cache_hit` | DNS cache hit % |
@@ -260,20 +259,18 @@ Replace the example addresses with whatever your LAN uses. The HACS integration 
 
 ## Recorder & logbook exclusion
 
-The per-entry `*_network_scanner` and `*_event_log` entities carry large JSON blobs as attributes and change every scan (every 60 s). Exclude the specific entities created for your entry in `configuration.yaml` to keep the database and logbook trim:
+The per-entry `*_network_scanner` entity carries a large JSON blob as attributes and changes every scan (every 60 s). Exclude the specific entity created for your entry in `configuration.yaml` to keep the database and logbook trim:
 
 ```yaml
 recorder:
   exclude:
     entities:
       - sensor.my_router_network_scanner
-      - sensor.my_router_event_log
 
 logbook:
   exclude:
     entities:
       - sensor.my_router_network_scanner
-      - sensor.my_router_event_log
 ```
 
 ## Troubleshooting

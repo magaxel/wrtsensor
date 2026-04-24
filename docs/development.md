@@ -28,11 +28,12 @@ jq . hacs.json > /dev/null
 # Run the scanner locally (replace with your gateway + any APs)
 python3 diagnose.py root@<gateway-ip> root@<ap-ip> [root@<ap-ip> ...]
 
-# Inspect the live event log
+# Run the scanner locally and inspect the manual-install event log
+python3 diagnose.py root@<gateway-ip> root@<ap-ip> [root@<ap-ip> ...]
 cat /dev/shm/netscan_events.json
 ```
 
-The scanner writes state under `/dev/shm` on HA (or `/tmp/netscan` locally): previous-scan device state, MAC vendor cache, DNS cache, CPU delta state, and the event log.
+The standalone scanner writes state under `/dev/shm` on HA (or `/tmp/netscan` locally): previous-scan device state, MAC vendor cache, DNS cache, CPU delta state, and the manual-install event log. The HACS integration keeps recent events in memory instead of writing an event log file.
 
 ## Repository layout
 

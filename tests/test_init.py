@@ -42,6 +42,9 @@ class _Registry:
     def add(self, entity_id: str, unique_id: str, config_entry_id: str) -> None:
         self._entries[entity_id] = _RegEntry(entity_id, unique_id, config_entry_id)
 
+    def async_get(self, entity_id: str):
+        return self._entries.get(entity_id)
+
     def async_remove(self, entity_id: str) -> None:
         self._entries.pop(entity_id, None)
 
@@ -73,6 +76,8 @@ else:
     _init_mod = sys.modules[_init_name]
 
 _prune = _init_mod._prune_orphaned_host_entities
+_remove_legacy = _init_mod._remove_legacy_event_log_entity
+_ws_recent_events = _init_mod._ws_recent_events
 
 
 def _reset_registry():
@@ -168,6 +173,96 @@ def test_prune_handles_missing_data():
     _prune(hass=None, entry=entry, coordinator=coordinator)
 
     assert "sensor.wrtsensor_live_cpu" in _singleton_registry._entries
+
+
+def test_remove_legacy_event_log_entity():
+    _reset_registry()
+    entry = _make_entry()
+    _singleton_registry.add(
+        entity_id="sensor.wrtsensor_event_log",
+        unique_id=f"{entry.entry_id}_event_log",
+        config_entry_id=entry.entry_id,
+    )
+
+    _remove_legacy(hass=None, entry=entry)
+
+    assert "sensor.wrtsensor_event_log" not in _singleton_registry._entries
+
+
+def test_ws_recent_events_returns_buffer():
+    _reset_registry()
+    entry = _make_entry()
+    _singleton_registry.add(
+        entity_id="sensor.wrtsensor_network_scanner",
+        unique_id=f"{entry.entry_id}_network_scanner",
+        config_entry_id=entry.entry_id,
+    )
+
+    sent = {}
+
+    class _Conn:
+        def send_result(self, msg_id, payload):
+            sent["result"] = (msg_id, payload)
+
+        def send_error(self, msg_id, code, message):
+            sent["error"] = (msg_id, code, message)
+
+    hass = types.SimpleNamespace(
+        data={
+            "wrtsensor": {
+                entry.entry_id: types.SimpleNamespace(
+                    _EVENT_BUFFER_SIZE=500,
+                    get_recent_events=lambda: [{"type": "connect"}],
+                    get_event_count=lambda: 1,
+                )
+            }
+        }
+    )
+
+    asyncio.run(
+        _ws_recent_events(
+            hass,
+            _Conn(),
+            {"id": 7, "entity_id": "sensor.wrtsensor_network_scanner"},
+        )
+    )
+
+    assert sent["result"] == (
+        7,
+        {"events": [{"type": "connect"}], "count": 1, "buffer_size": 500},
+    )
+
+
+def test_ws_recent_events_rejects_non_scanner_entity():
+    _reset_registry()
+    entry = _make_entry()
+    _singleton_registry.add(
+        entity_id="sensor.wrtsensor_wan_download",
+        unique_id=f"{entry.entry_id}_wan_download",
+        config_entry_id=entry.entry_id,
+    )
+
+    sent = {}
+
+    class _Conn:
+        def send_result(self, msg_id, payload):
+            sent["result"] = (msg_id, payload)
+
+        def send_error(self, msg_id, code, message):
+            sent["error"] = (msg_id, code, message)
+
+    hass = types.SimpleNamespace(data={"wrtsensor": {}})
+
+    asyncio.run(
+        _ws_recent_events(
+            hass,
+            _Conn(),
+            {"id": 9, "entity_id": "sensor.wrtsensor_wan_download"},
+        )
+    )
+
+    assert sent["error"][0] == 9
+    assert sent["error"][1] == "invalid_entity"
 
 
 def test_setup_entry_does_not_touch_lovelace_storage():

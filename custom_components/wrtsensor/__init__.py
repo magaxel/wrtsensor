@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+import voluptuous as vol
+from homeassistant.components import websocket_api
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -24,6 +26,7 @@ from .coordinator import WrtsensorCoordinator
 _LOGGER = logging.getLogger(__name__)
 
 _WWW_DIR = Path(__file__).parent / "www"
+_WS_TYPE_RECENT_EVENTS = f"{DOMAIN}/recent_events"
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -44,10 +47,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
     await _register_static_path(hass)
+    _register_websocket_commands(hass)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     _prune_orphaned_host_entities(hass, entry, coordinator)
+    _remove_legacy_event_log_entity(hass, entry)
 
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True
@@ -109,3 +114,60 @@ async def _register_static_path(hass: HomeAssistant) -> None:
         )
     except RuntimeError:
         pass  # already registered (e.g. integration reloaded)
+
+
+def _remove_legacy_event_log_entity(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    reg = er.async_get(hass)
+    for reg_entry in list(er.async_entries_for_config_entry(reg, entry.entry_id)):
+        if reg_entry.unique_id == f"{entry.entry_id}_event_log":
+            reg.async_remove(reg_entry.entity_id)
+
+
+def _register_websocket_commands(hass: HomeAssistant) -> None:
+    registry = hass.data.setdefault(DOMAIN, {})
+    if registry.get("_ws_registered"):
+        return
+    websocket_api.async_register_command(hass, _ws_recent_events)
+    registry["_ws_registered"] = True
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): _WS_TYPE_RECENT_EVENTS,
+        vol.Required("entity_id"): str,
+    }
+)
+@websocket_api.async_response
+async def _ws_recent_events(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    entity_id = msg["entity_id"]
+    reg = er.async_get(hass)
+    reg_entry = reg.async_get(entity_id) if reg is not None else None
+    if reg_entry is None or not reg_entry.unique_id.endswith("_network_scanner"):
+        connection.send_error(
+            msg["id"],
+            "invalid_entity",
+            f"Not a wrtsensor network scanner entity: {entity_id}",
+        )
+        return
+
+    coordinator = hass.data.get(DOMAIN, {}).get(reg_entry.config_entry_id)
+    if coordinator is None:
+        connection.send_error(
+            msg["id"],
+            "entry_not_loaded",
+            f"wrtsensor config entry not loaded for {entity_id}",
+        )
+        return
+
+    connection.send_result(
+        msg["id"],
+        {
+            "events": coordinator.get_recent_events(),
+            "count": coordinator.get_event_count(),
+            "buffer_size": coordinator._EVENT_BUFFER_SIZE,
+        },
+    )
