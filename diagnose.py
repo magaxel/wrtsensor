@@ -97,12 +97,15 @@ DNS_CACHE = STATE_DIR / ".netscan_dns_cache"
 BW_STATE = STATE_DIR / ".netscan_bw_state"
 CPU_STATE = STATE_DIR / ".netscan_cpu_state"
 DNS_STATE = STATE_DIR / ".netscan_dns_state"
+DNS_HISTORY = STATE_DIR / ".netscan_dns_history.jsonl"
 PREV_STATE = STATE_DIR / ".netscan_prev_state.json"
 EVENT_LOG = STATE_DIR / "netscan_events.json"
 OUI_DB = CONFIG_DIR / "oui.db"
 OUI_TXT = CONFIG_DIR / "oui.txt"
 
 EVENT_RETENTION_DAYS = 30
+DNS_HISTORY_MAX_AGE_S = 25 * 60 * 60
+DNS_WINDOW_S = 24 * 60 * 60
 MAX_EVENT_LINES = 10_000
 DISCONNECT_MISS_THRESHOLD = 3
 STATE_MAX_AGE_DAYS = 7
@@ -764,13 +767,114 @@ def parse_dns_stats(lines: list[str]) -> dict[str, Any] | None:
     return result
 
 
+def _dns_window_label(elapsed_s: int) -> str:
+    if elapsed_s >= DNS_WINDOW_S - 5 * 60:
+        return "last 24h"
+    if elapsed_s >= 2 * 60 * 60:
+        return f"last {round(elapsed_s / 3600)}h"
+    if elapsed_s >= 60 * 60:
+        return "last 1h"
+    if elapsed_s >= 2 * 60:
+        return f"last {round(elapsed_s / 60)}m"
+    return "last scan"
+
+
+def _dns_rollup(
+    baseline: dict[str, int], current: dict[str, int], *, label: str | None = None
+) -> dict[str, Any] | None:
+    elapsed_s = int(current["ts"]) - int(baseline["ts"])
+    if elapsed_s <= 0:
+        return None
+    hits = int(current["hits"]) - int(baseline["hits"])
+    misses = int(current["misses"]) - int(baseline["misses"])
+    if hits < 0 or misses < 0:
+        return None
+    total = hits + misses
+    return {
+        "hits": hits,
+        "misses": misses,
+        "hit_pct": round(100.0 * hits / total, 1) if total else None,
+        "hits_per_sec": round(hits / elapsed_s, 2),
+        "misses_per_sec": round(misses / elapsed_s, 2),
+        "elapsed_s": elapsed_s,
+        "label": label or _dns_window_label(elapsed_s),
+    }
+
+
+def _load_dns_history() -> list[dict[str, int]]:
+    if not DNS_HISTORY.exists():
+        return []
+    history: list[dict[str, int]] = []
+    for line in DNS_HISTORY.read_text().splitlines():
+        try:
+            raw = json.loads(line)
+            sample = {
+                "ts": int(raw["ts"]),
+                "hits": int(raw["hits"]),
+                "misses": int(raw["misses"]),
+            }
+        except (TypeError, ValueError, KeyError, json.JSONDecodeError):
+            continue
+        history.append(sample)
+    return sorted(history, key=lambda sample: sample["ts"])
+
+
+def _append_dns_history(now: int, current: dict[str, Any]) -> list[dict[str, int]]:
+    cutoff = now - DNS_HISTORY_MAX_AGE_S
+    sample = {
+        "ts": now,
+        "hits": int(current["hits"]),
+        "misses": int(current["misses"]),
+    }
+    history = [entry for entry in _load_dns_history() if entry["ts"] >= cutoff]
+    history.append(sample)
+    text = "".join(json.dumps(entry, separators=(",", ":")) + "\n" for entry in history)
+    _atomic_write(DNS_HISTORY, text)
+    return history
+
+
+def _compute_dns_window(
+    history: list[dict[str, int]], now: int
+) -> dict[str, Any] | None:
+    if len(history) < 2:
+        return None
+
+    cutoff = now - DNS_WINDOW_S
+    segment_start = 0
+    reset_in_window = False
+    for idx in range(1, len(history)):
+        prev = history[idx - 1]
+        cur = history[idx]
+        if cur["hits"] < prev["hits"] or cur["misses"] < prev["misses"]:
+            segment_start = idx
+            if cur["ts"] >= cutoff:
+                reset_in_window = True
+
+    current = history[-1]
+    segment = history[segment_start:]
+    if len(segment) < 2:
+        return None
+
+    if reset_in_window:
+        return _dns_rollup(segment[0], current)
+
+    baseline = None
+    for sample in segment:
+        if sample["ts"] <= cutoff:
+            baseline = sample
+        else:
+            break
+    if baseline is None:
+        return None
+    return _dns_rollup(baseline, current, label="last 24h")
+
+
 def compute_dns_rates(current: dict[str, int | float] | None) -> dict[str, Any] | None:
-    """Returns dict with cumulative totals, per-second rates, and hit percentage.
-    Rates are based on delta since last scan (None on first run)."""
+    """Return DNS lifetime stats plus backend-computed last-24h rollups."""
     if current is None:
         return None
     now = int(time.time())
-    hits_rate = misses_rate = hit_pct = None
+    hits_rate = misses_rate = None
     if DNS_STATE.exists():
         try:
             prev = json.loads(DNS_STATE.read_text())
@@ -781,26 +885,29 @@ def compute_dns_rates(current: dict[str, int | float] | None) -> dict[str, Any] 
                 if d_hits >= 0 and d_misses >= 0:
                     hits_rate = round(d_hits / elapsed, 2)
                     misses_rate = round(d_misses / elapsed, 2)
-                    d_total = d_hits + d_misses
-                    if d_total > 0:
-                        hit_pct = round(100.0 * d_hits / d_total, 1)
         except Exception:
             pass
     _atomic_write(
         DNS_STATE,
         json.dumps({"ts": now, "hits": current["hits"], "misses": current["misses"]}),
     )
-    # Lifetime hit percent (since dnsmasq start)
-    life_total = current["hits"] + current["misses"]
-    life_pct = round(100.0 * current["hits"] / life_total, 1) if life_total else None
-    return {
-        "cache_size": current["cache_size"],
-        "hits_total": current["hits"],
-        "misses_total": current["misses"],
+    history = _append_dns_history(now, current)
+    life_total = int(current["hits"]) + int(current["misses"])
+    lifetime = {
+        "hits": int(current["hits"]),
+        "misses": int(current["misses"]),
+        "hit_pct": round(100.0 * int(current["hits"]) / life_total, 1)
+        if life_total
+        else None,
         "hits_per_sec": hits_rate,
         "misses_per_sec": misses_rate,
-        "hit_pct": hit_pct,
-        "hit_pct_lifetime": life_pct,
+        "elapsed_s": None,
+        "label": "lifetime",
+    }
+    return {
+        "cache_size": current["cache_size"],
+        "last_24h": _compute_dns_window(history, now),
+        "lifetime": lifetime,
         "latency_ms": current.get("latency_ms"),
         "servers": current.get("servers", []),
     }
