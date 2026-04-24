@@ -909,7 +909,6 @@ def compute_dns_rates(current: dict[str, int | float] | None) -> dict[str, Any] 
         "last_24h": _compute_dns_window(history, now),
         "lifetime": lifetime,
         "latency_ms": current.get("latency_ms"),
-        "avg_latency_ms": current.get("latency_ms"),
         "servers": current.get("servers", []),
     }
 

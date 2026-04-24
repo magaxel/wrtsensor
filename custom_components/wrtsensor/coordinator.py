@@ -1045,7 +1045,6 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "last_24h": self._compute_dns_window(history, now),
             "lifetime": lifetime,
             "latency_ms": current.get("latency_ms"),
-            "avg_latency_ms": current.get("latency_ms"),
             "servers": current.get("servers", []),
         }
 
@@ -1110,6 +1109,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         baseline = None
         for sample in segment:
+            # Use the latest clean sample at or before the 24h boundary.
             if sample["ts"] <= cutoff:
                 baseline = sample
             else:

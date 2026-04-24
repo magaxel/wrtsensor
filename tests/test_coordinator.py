@@ -274,6 +274,23 @@ def test_dns_stats_empty_history_after_restart_keeps_lifetime(tmp_path):
     assert result["lifetime"]["hit_pct"] == 80.0
 
 
+def test_dns_stats_partial_history_without_24h_baseline_has_lifetime_only(tmp_path):
+    c = _make_coordinator()
+    c._dns_history_path = tmp_path / ".netscan_dns_history.jsonl"
+    now = 200000
+    _write_dns_history(
+        c._dns_history_path,
+        [{"ts": now - 10 * 3600, "hits": 1000, "misses": 500}],
+    )
+
+    with patch.object(coord_mod.time, "time", return_value=now):
+        result = c._compute_dns_rates(_dns_current(4600, 2300))
+
+    assert result["last_24h"] is None
+    assert result["lifetime"]["hits"] == 4600
+    assert result["lifetime"]["misses"] == 2300
+
+
 def test_dns_stats_reset_reports_clean_partial_window(tmp_path):
     c = _make_coordinator()
     c._dns_history_path = tmp_path / ".netscan_dns_history.jsonl"

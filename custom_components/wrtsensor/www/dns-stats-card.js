@@ -5,7 +5,7 @@ import {
   nothing,
 } from "https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js";
 
-const CARD_VERSION = "1.0.0";
+const CARD_VERSION = "2.0.0";
 const CARD_TYPE = "dns-stats-card";
 const EDITOR_TYPE = `${CARD_TYPE}-editor`;
 const DEFAULT_PERIOD = "last_24h";
@@ -36,7 +36,7 @@ const pickPeriod = (dns, period) => {
   if (dns.last_24h) return { data: dns.last_24h, label: dns.last_24h.label ?? "last 24h" };
   return {
     data: dns.lifetime,
-    label: dns.lifetime ? "lifetime - no 24h data yet" : "last 24h",
+    label: dns.lifetime ? "lifetime - no 24h data yet" : "unavailable",
   };
 };
 
