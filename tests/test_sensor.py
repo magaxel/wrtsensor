@@ -200,6 +200,38 @@ def test_dns_hit_pct_sensor_falls_back_to_next_period():
     assert sensor.native_value == 60.0
 
 
+def test_dns_hit_pct_sensor_skips_empty_period_dicts():
+    # Empty-rollup dicts are truthy but carry hit_pct=None; the sensor must
+    # walk past them to the first period with real data.
+    sensor = _make_dns_hit_sensor(
+        {
+            "dns_stats": {
+                "last_24h": {"hit_pct": None, "label": "just started"},
+                "last_8h": {"hit_pct": None, "label": "just started"},
+                "last_1h": {"hit_pct": 42.5, "label": "collected for 30m"},
+                "last_scan": {"hit_pct": None, "label": "just started"},
+            }
+        }
+    )
+
+    assert sensor.native_value == 42.5
+
+
+def test_dns_hit_pct_sensor_returns_none_when_all_periods_empty():
+    sensor = _make_dns_hit_sensor(
+        {
+            "dns_stats": {
+                "last_24h": {"hit_pct": None},
+                "last_8h": {"hit_pct": None},
+                "last_1h": {"hit_pct": None},
+                "last_scan": {"hit_pct": None},
+            }
+        }
+    )
+
+    assert sensor.native_value is None
+
+
 async def _setup_platform_with_hosts(
     host_stats: dict,
 ) -> tuple[list[object], _FakeCoordinator]:

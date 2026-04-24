@@ -184,15 +184,15 @@ class WrtsensorDNSHitPctSensor(_WrtsensorBase):
         data = self.coordinator.data
         if not data:
             return None
-        dns = data.get("dns_stats", {})
-        period = (
-            dns.get("last_24h")
-            or dns.get("last_8h")
-            or dns.get("last_1h")
-            or dns.get("last_scan")
-            or {}
-        )
-        return period.get("hit_pct")
+        dns = data.get("dns_stats") or {}
+        # Empty period rollups are always present as dicts with hit_pct=None;
+        # walk the chain and pick the first period with actual data.
+        for key in ("last_24h", "last_8h", "last_1h", "last_scan"):
+            period = dns.get(key) or {}
+            val = period.get("hit_pct")
+            if val is not None:
+                return val
+        return None
 
 
 class WrtsensorDNSLatencySensor(_WrtsensorBase):

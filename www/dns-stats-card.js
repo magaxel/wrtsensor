@@ -36,7 +36,7 @@ const fmtRateUnit = (n) => (num(n) == null ? "—" : `${fmtRate(n)}/s`);
 const normalizePeriod = (period) => (VALID_PERIODS.has(period) ? period : DEFAULT_PERIOD);
 
 const pickPeriod = (dns, period, entity) => {
-  if (period === "lifetime" && !warnedLifetimeEntities.has(entity)) {
+  if (period === "lifetime" && entity && !warnedLifetimeEntities.has(entity)) {
     warnedLifetimeEntities.add(entity);
     console.warn(
       `${CARD_TYPE}: period "lifetime" is no longer supported for ${entity}; using "last_24h". Re-save the card config to update it.`,
@@ -256,6 +256,7 @@ class DnsStatsCard extends LitElement {
       `;
     }
     const hitPct = stats.hit_pct;
+    const hasData = num(hitPct) != null;
     const hitW = Math.max(0, Math.min(100, num(hitPct) ?? 0));
     const missW = 100 - hitW;
     const maxServers = Math.max(
@@ -276,18 +277,24 @@ class DnsStatsCard extends LitElement {
         </div>
         <div class="subtitle">${period.label}</div>
 
-        <div
-          class="bar"
-          title="Hits ${fmtPct(hitW)} · Misses ${fmtPct(missW)}"
-          aria-label="DNS hits ${fmtPct(hitW)}, misses ${fmtPct(missW)}"
-        >
-          <div class="bar-hit" style="width:${hitW}%"></div>
-          <div class="bar-miss" style="width:${missW}%"></div>
-        </div>
-        <div class="legend">
-          <span>Hits <span class="val">${fmtRateUnit(stats.hits_per_sec)}</span></span>
-          <span>Misses <span class="val">${fmtRateUnit(stats.misses_per_sec)}</span></span>
-        </div>
+        ${
+          hasData
+            ? html`
+                <div
+                  class="bar"
+                  title="Hits ${fmtPct(hitW)} · Misses ${fmtPct(missW)}"
+                  aria-label="DNS hits ${fmtPct(hitW)}, misses ${fmtPct(missW)}"
+                >
+                  <div class="bar-hit" style="width:${hitW}%"></div>
+                  <div class="bar-miss" style="width:${missW}%"></div>
+                </div>
+                <div class="legend">
+                  <span>Hits <span class="val">${fmtRateUnit(stats.hits_per_sec)}</span></span>
+                  <span>Misses <span class="val">${fmtRateUnit(stats.misses_per_sec)}</span></span>
+                </div>
+              `
+            : html`<div class="bar" aria-hidden="true"></div>`
+        }
 
         <div class="grid">
           <div class="kv">
@@ -411,10 +418,16 @@ class DnsStatsCardEditor extends LitElement {
 
   render() {
     if (!this.hass || !this._config) return nothing;
+    const normalized = normalizePeriod(this._config.period ?? DEFAULT_PERIOD);
+    if (this._config.period && this._config.period !== normalized) {
+      // Persist the migrated period back to the dashboard YAML so opening
+      // the editor once removes the deprecated "lifetime" value for good.
+      queueMicrotask(() => this._valueChanged({ detail: { value: { period: normalized } } }));
+    }
     const data = {
       entity: this._config.entity ?? "",
       title: this._config.title ?? "DNS Cache",
-      period: normalizePeriod(this._config.period ?? DEFAULT_PERIOD),
+      period: normalized,
       show_ipv6: this._config.show_ipv6 ?? false,
       max_servers: this._config.max_servers ?? DEFAULT_MAX_SERVERS,
     };
