@@ -132,11 +132,13 @@ SVG topology map showing the gateway, APs, and clients.
 type: custom:network-topology-card
 entity: sensor.my_router_network_scanner
 title: Network Map
-gateway_hostname: gw     # label shown on the gateway node
-col_width: 200           # px between AP columns
+gateway_label: gw        # fallback label shown when gateway device is missing
+column_width: 200        # px between AP columns
 show_bandwidth: false    # true = draw live throughput labels on each link
 show_offline: false
 ```
+
+Breaking change in v2.x: `gateway_hostname` was renamed to `gateway_label`, and `col_width` was renamed to `column_width`.
 
 ### `network-events-card`
 

@@ -115,6 +115,7 @@ _ALL_COMPAT_KEYS = (
     "device_count",
     "wan_ip",
     "wan_ip6",
+    "gateway_mac",
     "wan_rx_rate",
     "wan_tx_rate",
     "host_stats",
