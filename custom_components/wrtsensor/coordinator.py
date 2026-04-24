@@ -830,7 +830,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "awk '/^MemTotal:/ {t=$2} /^MemAvailable:/ {a=$2} END{print t, a}' /proc/meminfo 2>/dev/null; "
             'df / 2>/dev/null | awk \'NR==2 {gsub("%","",$5); print $5+0}\'; '
             "echo '---DNS---'; "
-            "kill -USR1 $(pidof dnsmasq) 2>/dev/null; sleep 0.3; "
+            "kill -USR1 $(pidof dnsmasq) 2>/dev/null; sleep 1; "
             "logread -l 60 2>/dev/null | grep 'dnsmasq\\[' | grep -E 'cache size|queries forwarded|avg\\. latency' | tail -20; "
             "echo '---CONNTRACK---'; cat /proc/net/nf_conntrack 2>/dev/null; "
             "echo '---BOARD---'; ubus call system board 2>/dev/null"
