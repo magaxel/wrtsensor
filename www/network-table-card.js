@@ -143,7 +143,7 @@ class NetworkTableCard extends LitElement {
     table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 0.85em;
+      font-size: 0.9em;
       white-space: nowrap;
     }
     th {
@@ -152,7 +152,7 @@ class NetworkTableCard extends LitElement {
       border-bottom: 1px solid var(--divider-color, #333);
       color: var(--secondary-text-color, #888);
       font-weight: 500;
-      font-size: 0.8em;
+      font-size: 0.875em;
       vertical-align: bottom;
     }
     th.th-sortable {
@@ -184,8 +184,9 @@ class NetworkTableCard extends LitElement {
       color: var(--primary-color, #009ac7);
     }
     .th-sort-ind {
-      font-size: 0.85em;
-      opacity: 0.3;
+      font-size: 1.2em;
+      font-weight: 600;
+      opacity: 0.5;
     }
     th.th-sortable:hover .th-sort-ind,
     th.th-sorted-asc .th-sort-ind,
@@ -237,9 +238,13 @@ class NetworkTableCard extends LitElement {
     }
     .dl {
       color: var(--success-color);
+      font-size: 1.2em;
+      font-weight: 600;
     }
     .ul {
       color: var(--warning-color);
+      font-size: 1.2em;
+      font-weight: 600;
     }
     .ic-green {
       color: var(--success-color);
