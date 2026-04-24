@@ -160,7 +160,7 @@ shown_types:             # optional — limit to specific event types; [] shows 
 
 ### `dns-stats-card`
 
-dnsmasq cache statistics. The main hit/miss bar defaults to the last 24 hours. If wrtsensor does not have enough history for the selected period yet, the card shows the available clean collection window instead, such as `collected for 3h`.
+dnsmasq cache statistics. The main hit/miss bar defaults to the last 24 hours. If wrtsensor does not have enough history for the selected period yet, the card shows the available clean collection window instead, such as `collected for 3h`. Upstream server rows use the first available per-server counter baseline inside that same clean window, so they can appear even when older hit/miss history predates server tracking.
 
 Breaking change: `lifetime` is no longer a selectable or displayed DNS card period. Existing cards with `period: lifetime` fall back to `last_24h`; re-save the card config to update it. Upstream query counts now follow the selected period instead of showing dnsmasq lifetime totals. `last_scan` rates are intentionally hidden and display as `—` because one-scan rates are noisy.
 

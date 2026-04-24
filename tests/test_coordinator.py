@@ -482,6 +482,46 @@ def test_dns_stats_old_history_without_servers_does_not_crash(tmp_path):
     assert result["last_1h"]["servers"] == []
 
 
+def test_dns_stats_period_servers_use_first_available_server_baseline(tmp_path):
+    c = _make_coordinator()
+    c._dns_history_path = tmp_path / ".netscan_dns_history.jsonl"
+    now = 200000
+    _write_dns_history(
+        c._dns_history_path,
+        [
+            {"ts": now - 6 * 3600, "hits": 1000, "misses": 500},
+            {
+                "ts": now - 3600,
+                "hits": 19000,
+                "misses": 9500,
+                "servers": [
+                    {"addr": "1.1.1.1#53", "queries": 100},
+                    {"addr": "8.8.8.8#53", "queries": 200},
+                ],
+            },
+        ],
+    )
+
+    with patch.object(coord_mod.time, "time", return_value=now):
+        result = c._compute_dns_rates(
+            _dns_current(
+                22600,
+                11300,
+                [
+                    {"addr": "1.1.1.1#53", "queries": 175, "latency_ms": 20},
+                    {"addr": "8.8.8.8#53", "queries": 600, "latency_ms": 25},
+                ],
+            )
+        )
+
+    assert result["last_24h"]["label"] == "collected for 6h"
+    assert result["last_24h"]["hits"] == 21600
+    assert result["last_24h"]["servers"] == [
+        {"addr": "8.8.8.8#53", "queries": 400, "latency_ms": 25},
+        {"addr": "1.1.1.1#53", "queries": 75, "latency_ms": 20},
+    ]
+
+
 def test_dns_history_prunes_entries_older_than_25h(tmp_path):
     c = _make_coordinator()
     c._dns_history_path = tmp_path / ".netscan_dns_history.jsonl"
