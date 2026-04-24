@@ -5,7 +5,7 @@ import {
   nothing,
 } from "https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js";
 
-const CARD_VERSION = "1.1.0";
+const CARD_VERSION = "1.1.1";
 const CARD_TYPE = "network-list-card";
 const EDITOR_TYPE = `${CARD_TYPE}-editor`;
 
@@ -344,6 +344,7 @@ class NetworkListCard extends LitElement {
     }
     .icon .sig-2 {
       color: var(--warning-color);
+      color: color-mix(in srgb, var(--warning-color) 55%, var(--error-color) 45%);
     }
     .icon .sig-1 {
       color: var(--error-color);
@@ -452,7 +453,7 @@ class NetworkListCard extends LitElement {
       color: var(--success-color);
     }
     .ic-dim {
-      color: var(--disabled-text-color);
+      color: var(--disabled-text-color, #555);
     }
   `;
 
@@ -471,13 +472,17 @@ class NetworkListCard extends LitElement {
     const cols = Array.isArray(config.columns)
       ? config.columns.filter((k) => validKeys.has(k))
       : DEFAULT_COLS;
-    const maxHeight = Number(config.max_height);
+    const rawHeight = config.max_height;
+    // Empty string / null should keep the 560 default; Number("") is 0,
+    // which the render path treats as "unlimited" and silently breaks the
+    // default scroll clamp.
+    const parsedHeight = rawHeight === "" || rawHeight == null ? NaN : Number(rawHeight);
     this._config = {
       entity: config.entity,
       title: config.title ?? "Network",
       show_offline: config.show_offline ?? false,
       columns: cols,
-      max_height: Number.isFinite(maxHeight) ? maxHeight : 560,
+      max_height: Number.isFinite(parsedHeight) ? parsedHeight : 560,
     };
   }
 
@@ -522,6 +527,9 @@ class NetworkListCard extends LitElement {
     // so "25/26" correctly shows "1 offline" even when show_offline is false.
     const onlineCount = all.filter((d) => d.online !== false).length;
     const totalCount = all.length;
+    const allExpanded =
+      sorted.length > 0 &&
+      sorted.every((d) => this._expanded.has(d.mac || `${d.ip || ""}_${d.hostname || ""}`));
 
     return html`
       <ha-card>
@@ -575,7 +583,9 @@ class NetworkListCard extends LitElement {
             <button
               class="sort-dir"
               @click=${this._toggleSortDir}
-              aria-label=${this._sortDir === "asc" ? "Sort descending" : "Sort ascending"}
+              aria-label="Sort direction"
+              aria-pressed=${this._sortDir === "desc" ? "true" : "false"}
+              title=${this._sortDir === "asc" ? "Ascending" : "Descending"}
             >
               <ha-icon
                 icon=${this._sortDir === "asc" ? "mdi:arrow-up" : "mdi:arrow-down"}
@@ -585,10 +595,12 @@ class NetworkListCard extends LitElement {
           <button
             class="expand-all"
             @click=${() => this._toggleExpandAll(sorted)}
-            aria-label=${sorted.every((d) => this._expanded.has(d.mac || `${d.ip || ""}_${d.hostname || ""}`)) ? "Collapse all devices" : "Expand all devices"}
+            aria-label="Toggle expand all devices"
+            aria-pressed=${allExpanded ? "true" : "false"}
+            title=${allExpanded ? "Collapse all" : "Expand all"}
           >
             <ha-icon
-              icon=${sorted.every((d) => this._expanded.has(d.mac || `${d.ip || ""}_${d.hostname || ""}`)) ? "mdi:arrow-collapse-all" : "mdi:arrow-expand-all"}
+              icon=${allExpanded ? "mdi:arrow-collapse-all" : "mdi:arrow-expand-all"}
             ></ha-icon>
           </button>
         </div>
