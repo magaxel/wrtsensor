@@ -5,7 +5,7 @@ import {
   nothing,
 } from "https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js";
 
-const CARD_VERSION = "2.1.0";
+const CARD_VERSION = "2.2.0";
 const CARD_TYPE = "network-table-card";
 const EDITOR_TYPE = `${CARD_TYPE}-editor`;
 
@@ -108,6 +108,10 @@ const COL_DISPLAY_NAME = {
   bw_since: "BW since (time tracking started)",
 };
 
+function colDisplayName(col) {
+  return COL_DISPLAY_NAME[col.key] ?? col.label ?? col.key;
+}
+
 // ── card ──────────────────────────────────────────────────────────────────────
 
 class NetworkTableCard extends LitElement {
@@ -156,8 +160,13 @@ class NetworkTableCard extends LitElement {
       user-select: none;
       white-space: nowrap;
     }
-    th.th-sortable:hover {
+    th.th-sortable:hover,
+    th.th-sortable:focus-visible {
       color: var(--primary-color, #009ac7);
+    }
+    th.th-sortable:focus-visible {
+      outline: 2px solid var(--primary-color, #009ac7);
+      outline-offset: -2px;
     }
     th.th-sorted-asc,
     th.th-sorted-desc {
@@ -198,7 +207,7 @@ class NetworkTableCard extends LitElement {
       min-width: 40px;
     }
     th input::placeholder {
-      color: #555;
+      color: var(--secondary-text-color);
       font-style: italic;
       font-weight: normal;
     }
@@ -224,25 +233,25 @@ class NetworkTableCard extends LitElement {
       font-size: 0.85em;
     }
     .dim {
-      color: #333;
+      color: var(--disabled-text-color);
     }
     .dl {
-      color: #4caf50;
+      color: var(--success-color);
     }
     .ul {
-      color: #ff9800;
+      color: var(--warning-color);
     }
     .ic-green {
-      color: #4caf50;
+      color: var(--success-color);
     }
     .ic-orange {
-      color: #ff9800;
+      color: var(--warning-color);
     }
     .ic-deep-orange {
-      color: #ff5722;
+      color: var(--warning-color);
     }
     .ic-red {
-      color: #f44336;
+      color: var(--error-color);
     }
     .msg {
       padding: 16px;
@@ -253,10 +262,15 @@ class NetworkTableCard extends LitElement {
 
   setConfig(config) {
     if (!config?.entity) throw new Error("entity required");
-    const cols =
-      Array.isArray(config.columns) && config.columns.length
-        ? config.columns.filter((k) => ALL_COLS.some((c) => c.key === k))
-        : DEFAULT_COLS;
+    let cols = DEFAULT_COLS;
+    if (Array.isArray(config.columns) && config.columns.length) {
+      const validKeys = new Set(ALL_COLS.map((c) => c.key));
+      const unknown = config.columns.filter((k) => !validKeys.has(k));
+      if (unknown.length) {
+        console.warn(`[${CARD_TYPE}] Ignoring unknown column key(s): ${unknown.join(", ")}`);
+      }
+      cols = config.columns.filter((k) => validKeys.has(k));
+    }
     this._config = {
       entity: config.entity,
       title: config.title ?? "Network",
@@ -338,15 +352,21 @@ class NetworkTableCard extends LitElement {
     const sorted = this._sortKey === col.key;
     const sortedClass = sorted ? `th-sorted-${this._sortDir}` : "";
     const sortInd = sorted ? (this._sortDir === "asc" ? "▲" : "▼") : "↕";
+    const ariaSort = sorted ? (this._sortDir === "asc" ? "ascending" : "descending") : "none";
+    const label = colDisplayName(col);
 
     if (this._activeFilterCol === col.key && col.filterable) {
       const val = this._filters[col.filterKey] || "";
       return html`<th
         class="th-sortable ${sortedClass}"
         data-col=${col.key}
+        scope="col"
+        aria-sort=${ariaSort}
       >
         <input
           type="text"
+          aria-label=${`Filter ${label}`}
+          placeholder=${`Filter ${label}`}
           .value=${val}
           @input=${(e) => this._onFilterInput(col.filterKey, e.target.value)}
           @keydown=${(e) => this._onFilterKeydown(e)}
@@ -363,9 +383,14 @@ class NetworkTableCard extends LitElement {
       return html`<th
         class="th-sortable ${sortedClass}"
         data-col=${col.key}
+        scope="col"
+        tabindex="0"
+        aria-sort=${ariaSort}
+        aria-label=${`Sort by ${label}`}
         @click=${() => this._handleSortClick(col.key)}
+        @keydown=${(e) => this._onHeaderKeydown(e, col)}
       >
-        ${labelContent} <span class="th-sort-ind">${sortInd}</span>
+        ${labelContent} <span class="th-sort-ind" aria-hidden="true">${sortInd}</span>
       </th>`;
     }
 
@@ -373,12 +398,17 @@ class NetworkTableCard extends LitElement {
       class="th-sortable ${sortedClass} ${filterActive}"
       data-col=${col.key}
       data-filter=${col.filterKey}
+      scope="col"
+      tabindex="0"
+      aria-sort=${ariaSort}
+      aria-label=${`Sort by ${label}. Press F or slash to filter.`}
       @click=${() => this._handleSortClick(col.key)}
+      @keydown=${(e) => this._onHeaderKeydown(e, col)}
     >
       <span class="th-label" @click=${(e) => this._activateFilter(e, col.key)}
         >${labelContent}</span
       >
-      <span class="th-sort-ind">${sortInd}</span>
+      <span class="th-sort-ind" aria-hidden="true">${sortInd}</span>
     </th>`;
   }
 
@@ -397,6 +427,16 @@ class NetworkTableCard extends LitElement {
       this._activeFilterCol = null;
     } else if (e.key === "Enter") {
       e.target.blur();
+    }
+  }
+
+  _onHeaderKeydown(e, col) {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      this._handleSortClick(col.key);
+    } else if (col.filterable && (e.key === "f" || e.key === "F" || e.key === "/")) {
+      e.preventDefault();
+      this._activeFilterCol = col.key;
     }
   }
 
@@ -439,6 +479,8 @@ class NetworkTableCard extends LitElement {
               icon="mdi:check-circle"
               class="ic-green"
               title=${d.ip6}
+              role="img"
+              aria-label=${`IPv6 address ${d.ip6}`}
             ></ha-icon>`
           : html`<span class="dim">—</span>`;
       case "hostname":
@@ -449,7 +491,13 @@ class NetworkTableCard extends LitElement {
         return d.mac || "—";
       case "connection":
         if (d.connection === "wifi") return this._signalIcon(d.signal);
-        if (d.connection === "wired") return html`<ha-icon icon="mdi:ethernet"></ha-icon>`;
+        if (d.connection === "wired")
+          return html`<ha-icon
+            icon="mdi:ethernet"
+            title="Wired connection"
+            role="img"
+            aria-label="Wired connection"
+          ></ha-icon>`;
         return "—";
       case "ap":
         return d.ap || "—";
@@ -500,23 +548,44 @@ class NetworkTableCard extends LitElement {
 
   _signalIcon(sig) {
     const s = Number(sig);
-    if (Number.isNaN(s)) return html`<ha-icon icon="mdi:wifi"></ha-icon>`;
+    if (Number.isNaN(s))
+      return html`<ha-icon
+        icon="mdi:wifi"
+        title="Wi-Fi signal unavailable"
+        role="img"
+        aria-label="Wi-Fi signal unavailable"
+      ></ha-icon>`;
     if (s > -60)
       return html`<ha-icon
         icon="mdi:wifi-strength-4"
         class="ic-green"
+        title=${`Excellent Wi-Fi signal (${s} dBm)`}
+        role="img"
+        aria-label=${`Excellent Wi-Fi signal, ${s} dBm`}
       ></ha-icon>`;
     if (s > -70)
       return html`<ha-icon
         icon="mdi:wifi-strength-3"
         class="ic-orange"
+        title=${`Good Wi-Fi signal (${s} dBm)`}
+        role="img"
+        aria-label=${`Good Wi-Fi signal, ${s} dBm`}
       ></ha-icon>`;
     if (s > -75)
       return html`<ha-icon
         icon="mdi:wifi-strength-2"
         class="ic-deep-orange"
+        title=${`Fair Wi-Fi signal (${s} dBm)`}
+        role="img"
+        aria-label=${`Fair Wi-Fi signal, ${s} dBm`}
       ></ha-icon>`;
-    return html`<ha-icon icon="mdi:wifi-strength-1" class="ic-red"></ha-icon>`;
+    return html`<ha-icon
+      icon="mdi:wifi-strength-1"
+      class="ic-red"
+      title=${`Weak Wi-Fi signal (${s} dBm)`}
+      role="img"
+      aria-label=${`Weak Wi-Fi signal, ${s} dBm`}
+    ></ha-icon>`;
   }
 
   _sortValue(d, key) {
@@ -626,6 +695,13 @@ class NetworkTableCard extends LitElement {
 
   getCardSize() {
     return 6;
+  }
+
+  getGridOptions() {
+    return {
+      columns: "full",
+      min_columns: 6,
+    };
   }
 }
 
