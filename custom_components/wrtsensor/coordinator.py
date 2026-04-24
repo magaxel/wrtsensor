@@ -7,6 +7,7 @@ and delta-state handling differ (asyncssh + in-memory state instead of files).
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import ipaddress
 import json
 import logging
@@ -60,8 +61,6 @@ from .const import (
     DEFAULT_WAN_IFACE,
     DISCONNECT_MISS_THRESHOLD,
     DOMAIN,
-    EVENT_RETENTION_DAYS,
-    MAX_EVENT_LINES,
     STATE_DIR_HA,
     STATE_DIR_LOCAL,
     STATE_MAX_AGE_DAYS,
@@ -560,6 +559,8 @@ def save_kv_cache(path: Path, cache: dict[str, str]) -> None:
 
 
 class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
+    EVENT_BUFFER_SIZE = 500
+
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         data = {**entry.data, **entry.options}
         self._gateway_host: str | None = data.get(CONF_GATEWAY_HOST, "") or None
@@ -582,7 +583,6 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # File paths (persistent across HA restarts)
         self._prev_state_path = state_dir / ".netscan_prev_state.json"
-        self._event_log_path = state_dir / "netscan_events.json"
         self._vendor_cache_path = state_dir / ".netscan_mac_vendors"
         self._dns_cache_path = state_dir / ".netscan_dns_cache"
 
@@ -600,6 +600,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._wan_event_state: dict[str, str] = {}
         self._prev_state: dict[str, StateEntry] = {}
         self._host_models: dict[str, tuple[str, str]] = {}  # ip → (model, board_name)
+        self._event_buffer: deque[dict[str, Any]] = deque(maxlen=self.EVENT_BUFFER_SIZE)
 
         # Cached file data (warm across scans)
         self._vendor_cache: dict[str, str] = {}
@@ -1103,40 +1104,6 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._wan_event_state = {"wan_ip": wan_ip, "wan_ip6": wan_ip6}
         return events
 
-    def _append_events(self, events: list[dict]) -> None:
-        if not events:
-            return
-        with self._event_log_path.open("a") as f:
-            f.write("".join(json.dumps(ev) + "\n" for ev in events))
-
-    def _prune_events(self) -> None:
-        if not self._event_log_path.exists():
-            return
-        cutoff = (
-            (datetime.now(timezone.utc) - timedelta(days=EVENT_RETENTION_DAYS))
-            .isoformat()
-            .replace("+00:00", "Z")
-        )
-        lines = [
-            ln for ln in self._event_log_path.read_text().splitlines() if ln.strip()
-        ]
-        before = len(lines)
-        if datetime.now().minute == 0:
-            kept = []
-            for line in lines:
-                try:
-                    if json.loads(line).get("ts", "") >= cutoff:
-                        kept.append(line)
-                except json.JSONDecodeError:
-                    continue
-            lines = kept
-        if len(lines) > MAX_EVENT_LINES:
-            lines = lines[-MAX_EVENT_LINES:]
-        if len(lines) != before:
-            _atomic_write(
-                self._event_log_path, "\n".join(lines) + ("\n" if lines else "")
-            )
-
     def _save_state(self, state: dict[str, StateEntry]) -> None:
         self._prev_state = state
         _atomic_write(
@@ -1144,24 +1111,18 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             json.dumps({mac: asdict(e) for mac, e in state.items()}),
         )
 
-    def _read_event_log(self, n: int = 500) -> tuple[list[dict[str, Any]], int]:
-        """Return (recent_events, total_count) from the event log file."""
-        if not self._event_log_path.exists():
-            return [], 0
-        try:
-            lines = [
-                ln for ln in self._event_log_path.read_text().splitlines() if ln.strip()
-            ]
-        except OSError:
-            return [], 0
-        total = len(lines)
-        recent: list[dict[str, Any]] = []
-        for ln in lines[-n:]:
-            try:
-                recent.append(json.loads(ln))
-            except json.JSONDecodeError:
-                continue
-        return recent, total
+    def _append_event_buffer(self, events: list[dict[str, Any]]) -> None:
+        if events:
+            self._event_buffer.extend(events)
+
+    def get_recent_events(self) -> list[dict[str, Any]]:
+        return list(self._event_buffer)
+
+    def get_event_count(self) -> int:
+        return len(self._event_buffer)
+
+    def get_event_buffer_size(self) -> int:
+        return self.EVENT_BUFFER_SIZE
 
     # ── Main update ───────────────────────────────────────────────────────────
 
@@ -1191,9 +1152,6 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )
                     for e in self._prev_state.values()
                 ]
-                recent_events, event_count = await self.hass.async_add_executor_job(
-                    self._read_event_log
-                )
                 return {
                     "device_count": sum(1 for d in cached_devices if d.online),
                     "scan_duration": round(time.time() - scan_start, 2),
@@ -1205,8 +1163,6 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "dns_stats": None,
                     "devices": [asdict(d) for d in cached_devices],
                     "partial": True,
-                    "events": recent_events,
-                    "event_count": event_count,
                 }
             raise UpdateFailed("Gateway unreachable")
 
@@ -1471,11 +1427,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 d.first_seen = float(d.bw_since)
 
         await self.hass.async_add_executor_job(self._save_state, new_state)
-        await self.hass.async_add_executor_job(self._append_events, all_events)
-        await self.hass.async_add_executor_job(self._prune_events)
-        recent_events, event_count = await self.hass.async_add_executor_job(
-            self._read_event_log
-        )
+        self._append_event_buffer(all_events)
 
         # Host stats
         host_stats: dict[str, dict[str, Any]] = {}
@@ -1526,8 +1478,6 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "dns_stats": dns_stats,
             "devices": [asdict(d) for d in devices],
             "partial": False,
-            "events": recent_events,
-            "event_count": event_count,
             # Pass through for entity platform use
             "_gw_mac": gw_mac,
             "_gw_hostname": gw_hostname,

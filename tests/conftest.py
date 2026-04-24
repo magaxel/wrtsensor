@@ -34,11 +34,16 @@ _asyncssh.connect = None  # type: ignore[attr-defined]
 _asyncssh.Error = Exception  # type: ignore[attr-defined]
 _asyncssh.PermissionDenied = Exception  # type: ignore[attr-defined]
 
+# ── voluptuous stub ────────────────────────────────────────────────────────────
+_vol = _stub("voluptuous")
+_vol.Required = lambda key: key  # type: ignore[attr-defined]
+
 # ── homeassistant stubs ────────────────────────────────────────────────────────
 for _p in [
     "homeassistant",
     "homeassistant.components",
     "homeassistant.components.http",
+    "homeassistant.components.websocket_api",
     "homeassistant.config_entries",
     "homeassistant.core",
     "homeassistant.helpers",
@@ -63,6 +68,9 @@ sys.modules["homeassistant.helpers"].entity_registry = sys.modules[
 sys.modules["homeassistant.components"].http = sys.modules[
     "homeassistant.components.http"
 ]  # type: ignore[attr-defined]
+sys.modules["homeassistant.components"].websocket_api = sys.modules[
+    "homeassistant.components.websocket_api"
+]  # type: ignore[attr-defined]
 
 # Minimal entity_registry stub — test_init.py replaces these with a functional
 # in-memory registry; default stubs keep other tests' __init__ imports happy.
@@ -73,6 +81,11 @@ if not hasattr(_er_default, "async_entries_for_config_entry"):
     _er_default.async_entries_for_config_entry = lambda reg, eid: []  # type: ignore[attr-defined]
 
 sys.modules["homeassistant.components.http"].StaticPathConfig = object  # type: ignore[attr-defined]
+_ws = sys.modules["homeassistant.components.websocket_api"]
+_ws.ActiveConnection = object  # type: ignore[attr-defined]
+_ws.async_register_command = lambda hass, handler: None  # type: ignore[attr-defined]
+_ws.async_response = lambda fn: fn  # type: ignore[attr-defined]
+_ws.websocket_command = lambda schema: lambda fn: fn  # type: ignore[attr-defined]
 sys.modules["homeassistant.config_entries"].ConfigEntry = object  # type: ignore[attr-defined]
 sys.modules["homeassistant.core"].HomeAssistant = object  # type: ignore[attr-defined]
 

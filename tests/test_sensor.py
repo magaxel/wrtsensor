@@ -173,7 +173,9 @@ def test_network_scanner_unique_id_is_entry_scoped():
     assert sensor_a._attr_unique_id != sensor_b._attr_unique_id
 
 
-async def _setup_platform_with_hosts(host_stats: dict) -> tuple[list[object], _FakeCoordinator]:
+async def _setup_platform_with_hosts(
+    host_stats: dict,
+) -> tuple[list[object], _FakeCoordinator]:
     added: list[object] = []
     coordinator = _FakeCoordinator({"host_stats": host_stats})
     entry = _FakeEntry()
@@ -217,36 +219,3 @@ def test_async_setup_entry_does_not_duplicate_host_sensors():
 
     host_entities = [e for e in added if getattr(e, "_hostname", None) == "192.0.2.22"]
     assert len(host_entities) == 3
-
-
-# ── WrtsensorEventLogSensor ───────────────────────────────────────────────────
-
-WrtsensorEventLogSensor = sys.modules[_sensor_name].WrtsensorEventLogSensor
-
-
-def _make_event_log_sensor(data: dict | None) -> WrtsensorEventLogSensor:
-    return WrtsensorEventLogSensor(_FakeCoordinator(data), _FakeEntry())
-
-
-def test_event_log_sensor_state():
-    """State equals event_count from coordinator data."""
-    sensor = _make_event_log_sensor({"event_count": 42, "events": []})
-    assert sensor.state == 42
-
-
-def test_event_log_sensor_attributes():
-    """Attributes expose events list and event_count."""
-    events = [
-        {"ts": "2026-01-01T00:00:00Z", "type": "join", "mac": "aa:bb:cc:dd:ee:ff"}
-    ]
-    sensor = _make_event_log_sensor({"event_count": 1, "events": events})
-    attrs = sensor.extra_state_attributes
-    assert attrs["event_count"] == 1
-    assert attrs["events"] == events
-
-
-def test_event_log_sensor_no_data():
-    """Returns zero state and empty events when coordinator has no data."""
-    sensor = _make_event_log_sensor(None)
-    assert sensor.state == 0
-    assert sensor.extra_state_attributes == {"events": [], "event_count": 0}

@@ -57,9 +57,6 @@ class _FakeHass:
         self.config_entries = _FakeConfigEntries()
 
     async def async_add_executor_job(self, fn, *args):
-        # _read_event_log must return a (list, int) tuple; all other file I/O is skipped
-        if getattr(fn, "__name__", "") == "_read_event_log":
-            return [], 0
         return None
 
     def async_create_task(self, coro):
@@ -202,6 +199,17 @@ def test_gateway_unreachable_returns_scan_duration():
         result = asyncio.run(c._async_update_data())
     assert "scan_duration" in result
     assert result["scan_duration"] >= 0
+
+
+def test_event_buffer_keeps_most_recent_500():
+    c = _make_coordinator()
+
+    c._append_event_buffer(
+        [{"ts": f"2026-01-01T00:00:{i:02d}Z", "type": "connect"} for i in range(550)]
+    )
+
+    assert c.get_event_count() == 500
+    assert c.get_recent_events()[0]["ts"] == "2026-01-01T00:00:50Z"
 
 
 # ── AP unreachable ────────────────────────────────────────────────────────────
