@@ -5,7 +5,7 @@ import {
   nothing,
 } from "https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js";
 
-const CARD_VERSION = "1.0.0";
+const CARD_VERSION = "1.1.0";
 const CARD_TYPE = "network-list-card";
 const EDITOR_TYPE = `${CARD_TYPE}-editor`;
 
@@ -337,16 +337,16 @@ class NetworkListCard extends LitElement {
       color: var(--secondary-text-color);
     }
     .icon .sig-4 {
-      color: #4caf50;
+      color: var(--success-color);
     }
     .icon .sig-3 {
-      color: #ff9800;
+      color: var(--warning-color);
     }
     .icon .sig-2 {
-      color: #ff5722;
+      color: var(--warning-color);
     }
     .icon .sig-1 {
-      color: #f44336;
+      color: var(--error-color);
     }
 
     .identity {
@@ -449,27 +449,35 @@ class NetworkListCard extends LitElement {
     }
 
     .ic-green {
-      color: #4caf50;
+      color: var(--success-color);
     }
     .ic-dim {
-      color: var(--disabled-color, #555);
+      color: var(--disabled-text-color);
     }
   `;
 
   setConfig(config) {
     if (!config?.entity) throw new Error("entity required");
+    const validKeys = new Set(ALL_COL_KEYS);
+    const unknownCols = Array.isArray(config.columns)
+      ? config.columns.filter((k) => !validKeys.has(k))
+      : [];
+    if (unknownCols.length) {
+      console.warn(`[${CARD_TYPE}] Ignoring unknown column key(s): ${unknownCols.join(", ")}`);
+    }
     // Empty array is honored; only fall back to defaults when columns is
     // genuinely absent (new card). The editor's fallback used to collide
     // with this one, re-enabling everything when the user cleared the list.
     const cols = Array.isArray(config.columns)
-      ? config.columns.filter((k) => ALL_COL_KEYS.includes(k))
+      ? config.columns.filter((k) => validKeys.has(k))
       : DEFAULT_COLS;
+    const maxHeight = Number(config.max_height);
     this._config = {
       entity: config.entity,
       title: config.title ?? "Network",
       show_offline: config.show_offline ?? false,
       columns: cols,
-      max_height: Number.isFinite(config.max_height) ? config.max_height : 560,
+      max_height: Number.isFinite(maxHeight) ? maxHeight : 560,
     };
   }
 
@@ -525,9 +533,10 @@ class NetworkListCard extends LitElement {
         </div>
         <div class="controls">
           <div class="search">
-            <ha-icon icon="mdi:magnify"></ha-icon>
+            <ha-icon icon="mdi:magnify" aria-hidden="true"></ha-icon>
             <input
               type="search"
+              aria-label="Search network devices"
               placeholder="Search hostname, IP, vendor, MAC…"
               .value=${this._filterText}
               @input=${(e) => {
@@ -566,7 +575,7 @@ class NetworkListCard extends LitElement {
             <button
               class="sort-dir"
               @click=${this._toggleSortDir}
-              aria-label=${this._sortDir === "asc" ? "Ascending" : "Descending"}
+              aria-label=${this._sortDir === "asc" ? "Sort descending" : "Sort ascending"}
             >
               <ha-icon
                 icon=${this._sortDir === "asc" ? "mdi:arrow-up" : "mdi:arrow-down"}
@@ -576,7 +585,7 @@ class NetworkListCard extends LitElement {
           <button
             class="expand-all"
             @click=${() => this._toggleExpandAll(sorted)}
-            aria-label=${sorted.every((d) => this._expanded.has(d.mac || `${d.ip || ""}_${d.hostname || ""}`)) ? "Collapse all" : "Expand all"}
+            aria-label=${sorted.every((d) => this._expanded.has(d.mac || `${d.ip || ""}_${d.hostname || ""}`)) ? "Collapse all devices" : "Expand all devices"}
           >
             <ha-icon
               icon=${sorted.every((d) => this._expanded.has(d.mac || `${d.ip || ""}_${d.hostname || ""}`)) ? "mdi:arrow-collapse-all" : "mdi:arrow-expand-all"}
@@ -584,7 +593,7 @@ class NetworkListCard extends LitElement {
           </button>
         </div>
         <div class="list-wrap" style=${this._config.max_height > 0 ? `max-height:${this._config.max_height}px` : ""} @scroll=${this._saveScroll}>
-        <div class="list">
+        <div class="list" role="list" aria-label="Network devices">
           ${
             sorted.length === 0
               ? html`<div class="empty">No devices match</div>`
@@ -625,12 +634,14 @@ class NetworkListCard extends LitElement {
     const sortBadge = this._sortBadge(this._sortKey, d);
 
     return html`
-      <div class=${classes.join(" ")}>
+      <div class=${classes.join(" ")} role="listitem">
         <div
           class="row"
           @click=${() => this._toggleExpand(mac)}
           role="button"
           tabindex="0"
+          aria-expanded=${expanded ? "true" : "false"}
+          aria-label=${`${expanded ? "Collapse" : "Expand"} ${name}`}
           @keydown=${(e) => {
             if (e.key === "Enter" || e.key === " ") {
               e.preventDefault();
@@ -638,7 +649,12 @@ class NetworkListCard extends LitElement {
             }
           }}
         >
-          <div class="dot ${offline ? "" : "on"}"></div>
+          <div
+            class="dot ${offline ? "" : "on"}"
+            title=${offline ? "Offline" : "Online"}
+            role="img"
+            aria-label=${offline ? "Offline" : "Online"}
+          ></div>
           ${showConnIcon ? html`<div class="icon">${this._renderConnIcon(d)}</div>` : nothing}
           <div class="identity">
             <div class="name">${name}</div>
@@ -653,7 +669,7 @@ class NetworkListCard extends LitElement {
             }
           </div>
           ${sortBadge ? html`<span class="sort-badge">${sortBadge}</span>` : nothing}
-          <ha-icon class="chevron" icon="mdi:chevron-down"></ha-icon>
+          <ha-icon class="chevron" icon="mdi:chevron-down" aria-hidden="true"></ha-icon>
         </div>
         ${expanded ? this._renderDetail(d) : nothing}
       </div>
@@ -680,12 +696,31 @@ class NetworkListCard extends LitElement {
           cls = "sig-1";
         }
       }
-      return html`<ha-icon class=${cls} icon=${icon}></ha-icon>`;
+      const label = Number.isNaN(s)
+        ? "Wi-Fi signal unavailable"
+        : s > -60
+          ? `Excellent Wi-Fi signal, ${s} dBm`
+          : s > -70
+            ? `Good Wi-Fi signal, ${s} dBm`
+            : s > -75
+              ? `Fair Wi-Fi signal, ${s} dBm`
+              : `Weak Wi-Fi signal, ${s} dBm`;
+      return html`<ha-icon class=${cls} icon=${icon} title=${label} role="img" aria-label=${label}></ha-icon>`;
     }
     if (d.connection === "wired") {
-      return html`<ha-icon icon="mdi:ethernet"></ha-icon>`;
+      return html`<ha-icon
+        icon="mdi:ethernet"
+        title="Wired connection"
+        role="img"
+        aria-label="Wired connection"
+      ></ha-icon>`;
     }
-    return html`<ha-icon icon="mdi:help-circle-outline"></ha-icon>`;
+    return html`<ha-icon
+      icon="mdi:help-circle-outline"
+      title="Unknown connection"
+      role="img"
+      aria-label="Unknown connection"
+    ></ha-icon>`;
   }
 
   _renderDetail(d) {
@@ -722,7 +757,13 @@ class NetworkListCard extends LitElement {
         return d.ip6 || null;
       case "ip6_enabled":
         return d.ip6
-          ? html`<ha-icon class="ic-green" icon="mdi:check-circle" title=${d.ip6}></ha-icon>`
+          ? html`<ha-icon
+              class="ic-green"
+              icon="mdi:check-circle"
+              title=${d.ip6}
+              role="img"
+              aria-label=${`IPv6 address ${d.ip6}`}
+            ></ha-icon>`
           : html`<span class="ic-dim">No</span>`;
       case "hostname":
         return d.hostname || null;
@@ -884,6 +925,13 @@ class NetworkListCard extends LitElement {
 
   getCardSize() {
     return 4;
+  }
+
+  getGridOptions() {
+    return {
+      columns: "full",
+      min_columns: 6,
+    };
   }
 
   static getConfigElement() {
