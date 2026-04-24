@@ -151,7 +151,7 @@ title: Network Events
 max_height: 560
 show_search: true        # hide search bar by setting false
 show_filters: true       # hide type-filter pill row by setting false
-shown_types:             # optional — limit to specific event types
+shown_types:             # optional — limit to specific event types; [] shows none
   - connect
   - disconnect
   - roam
