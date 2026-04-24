@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib.util
+import json
 import sys
 from contextlib import ExitStack
 from datetime import timedelta
@@ -210,6 +211,131 @@ def test_event_buffer_keeps_most_recent_500():
 
     assert c.get_event_count() == 500
     assert c.get_recent_events()[0]["ts"] == "2026-01-01T00:00:50Z"
+
+
+def _write_dns_history(path: Path, samples: list[dict[str, int]]) -> None:
+    path.write_text("".join(json.dumps(sample) + "\n" for sample in samples))
+
+
+def _dns_current(hits: int, misses: int) -> dict:
+    return {"cache_size": 10000, "hits": hits, "misses": misses, "servers": []}
+
+
+def test_dns_stats_last_24h_rollup(tmp_path):
+    c = _make_coordinator()
+    c._dns_history_path = tmp_path / ".netscan_dns_history.jsonl"
+    now = 200000
+    _write_dns_history(
+        c._dns_history_path,
+        [{"ts": now - 86400, "hits": 1000, "misses": 500}],
+    )
+
+    with patch.object(coord_mod.time, "time", return_value=now):
+        result = c._compute_dns_rates(_dns_current(87400, 43700))
+
+    assert result["last_24h"] == {
+        "hits": 86400,
+        "misses": 43200,
+        "hit_pct": 66.7,
+        "hits_per_sec": 1.0,
+        "misses_per_sec": 0.5,
+        "elapsed_s": 86400,
+        "label": "last 24h",
+    }
+    assert result["lifetime"]["hits"] == 87400
+    assert result["lifetime"]["misses"] == 43700
+    assert result["lifetime"]["hit_pct"] == 66.7
+
+
+def test_dns_stats_first_sample_has_lifetime_only(tmp_path):
+    c = _make_coordinator()
+    c._dns_history_path = tmp_path / ".netscan_dns_history.jsonl"
+
+    with patch.object(coord_mod.time, "time", return_value=200000):
+        result = c._compute_dns_rates(_dns_current(120, 30))
+
+    assert result["last_24h"] is None
+    assert result["lifetime"]["hits"] == 120
+    assert result["lifetime"]["misses"] == 30
+    assert result["lifetime"]["hit_pct"] == 80.0
+
+
+def test_dns_stats_empty_history_after_restart_keeps_lifetime(tmp_path):
+    c = _make_coordinator()
+    c._dns_history_path = tmp_path / ".netscan_dns_history.jsonl"
+    c._dns_state = {}
+
+    with patch.object(coord_mod.time, "time", return_value=200000):
+        result = c._compute_dns_rates(_dns_current(10000, 2500))
+
+    assert result["last_24h"] is None
+    assert result["lifetime"]["hits"] == 10000
+    assert result["lifetime"]["misses"] == 2500
+    assert result["lifetime"]["hit_pct"] == 80.0
+
+
+def test_dns_stats_reset_reports_clean_partial_window(tmp_path):
+    c = _make_coordinator()
+    c._dns_history_path = tmp_path / ".netscan_dns_history.jsonl"
+    now = 200000
+    _write_dns_history(
+        c._dns_history_path,
+        [
+            {"ts": now - 12 * 3600, "hits": 90000, "misses": 30000},
+            {"ts": now - 10 * 3600, "hits": 10, "misses": 5},
+        ],
+    )
+
+    with patch.object(coord_mod.time, "time", return_value=now):
+        result = c._compute_dns_rates(_dns_current(3610, 1805))
+
+    assert result["last_24h"] == {
+        "hits": 3600,
+        "misses": 1800,
+        "hit_pct": 66.7,
+        "hits_per_sec": 0.1,
+        "misses_per_sec": 0.05,
+        "elapsed_s": 36000,
+        "label": "last 10h",
+    }
+
+
+def test_dns_stats_reset_without_clean_interval_has_no_last_24h(tmp_path):
+    c = _make_coordinator()
+    c._dns_history_path = tmp_path / ".netscan_dns_history.jsonl"
+    now = 200000
+    _write_dns_history(
+        c._dns_history_path,
+        [{"ts": now - 3600, "hits": 90000, "misses": 30000}],
+    )
+
+    with patch.object(coord_mod.time, "time", return_value=now):
+        result = c._compute_dns_rates(_dns_current(10, 5))
+
+    assert result["last_24h"] is None
+    assert result["lifetime"]["hits"] == 10
+    assert result["lifetime"]["misses"] == 5
+
+
+def test_dns_history_prunes_entries_older_than_25h(tmp_path):
+    c = _make_coordinator()
+    c._dns_history_path = tmp_path / ".netscan_dns_history.jsonl"
+    now = 200000
+    _write_dns_history(
+        c._dns_history_path,
+        [
+            {"ts": now - 26 * 3600, "hits": 1, "misses": 1},
+            {"ts": now - 24 * 3600, "hits": 100, "misses": 50},
+        ],
+    )
+
+    with patch.object(coord_mod.time, "time", return_value=now):
+        c._compute_dns_rates(_dns_current(200, 100))
+
+    retained = [
+        json.loads(line) for line in c._dns_history_path.read_text().splitlines()
+    ]
+    assert [sample["ts"] for sample in retained] == [now - 24 * 3600, now]
 
 
 # ── AP unreachable ────────────────────────────────────────────────────────────

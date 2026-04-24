@@ -67,6 +67,8 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+DNS_HISTORY_MAX_AGE_S = 25 * 60 * 60
+DNS_WINDOW_S = 24 * 60 * 60
 
 
 # ── Data types ────────────────────────────────────────────────────────────────
@@ -555,6 +557,40 @@ def save_kv_cache(path: Path, cache: dict[str, str]) -> None:
     _atomic_write(path, "\n".join(f"{k}|{v}" for k, v in cache.items()) + "\n")
 
 
+def _dns_window_label(elapsed_s: int) -> str:
+    if elapsed_s >= DNS_WINDOW_S - 5 * 60:
+        return "last 24h"
+    if elapsed_s >= 2 * 60 * 60:
+        return f"last {round(elapsed_s / 3600)}h"
+    if elapsed_s >= 60 * 60:
+        return "last 1h"
+    if elapsed_s >= 2 * 60:
+        return f"last {round(elapsed_s / 60)}m"
+    return "last scan"
+
+
+def _dns_rollup(
+    baseline: dict[str, int], current: dict[str, int], *, label: str | None = None
+) -> dict[str, Any] | None:
+    elapsed_s = int(current["ts"]) - int(baseline["ts"])
+    if elapsed_s <= 0:
+        return None
+    hits = int(current["hits"]) - int(baseline["hits"])
+    misses = int(current["misses"]) - int(baseline["misses"])
+    if hits < 0 or misses < 0:
+        return None
+    total = hits + misses
+    return {
+        "hits": hits,
+        "misses": misses,
+        "hit_pct": round(100.0 * hits / total, 1) if total else None,
+        "hits_per_sec": round(hits / elapsed_s, 2),
+        "misses_per_sec": round(misses / elapsed_s, 2),
+        "elapsed_s": elapsed_s,
+        "label": label or _dns_window_label(elapsed_s),
+    }
+
+
 # ── Coordinator ────────────────────────────────────────────────────────────────
 
 
@@ -585,6 +621,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._prev_state_path = state_dir / ".netscan_prev_state.json"
         self._vendor_cache_path = state_dir / ".netscan_mac_vendors"
         self._dns_cache_path = state_dir / ".netscan_dns_cache"
+        self._dns_history_path = state_dir / ".netscan_dns_history.jsonl"
 
         # Integration package dir (for collector script + OUI db)
         self._pkg_dir = Path(__file__).resolve().parent
@@ -975,7 +1012,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if current is None:
             return None
         now = int(time.time())
-        hits_rate = misses_rate = hit_pct = None
+        hits_rate = misses_rate = None
         p = self._dns_state
         if p:
             elapsed = now - int(p.get("ts", 0))
@@ -985,30 +1022,101 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if d_hits >= 0 and d_misses >= 0:
                     hits_rate = round(d_hits / elapsed, 2)
                     misses_rate = round(d_misses / elapsed, 2)
-                    d_total = d_hits + d_misses
-                    if d_total > 0:
-                        hit_pct = round(100.0 * d_hits / d_total, 1)
         self._dns_state = {
             "ts": now,
             "hits": current["hits"],
             "misses": current["misses"],
         }
-        life_total = current["hits"] + current["misses"]
-        life_pct = (
-            round(100.0 * current["hits"] / life_total, 1) if life_total else None
-        )
-        return {
-            "cache_size": current["cache_size"],
-            "hits_total": current["hits"],
-            "misses_total": current["misses"],
+        history = self._append_dns_history(now, current)
+        life_total = int(current["hits"]) + int(current["misses"])
+        lifetime = {
+            "hits": int(current["hits"]),
+            "misses": int(current["misses"]),
+            "hit_pct": round(100.0 * int(current["hits"]) / life_total, 1)
+            if life_total
+            else None,
             "hits_per_sec": hits_rate,
             "misses_per_sec": misses_rate,
-            "hit_pct": hit_pct,
-            "hit_pct_lifetime": life_pct,
+            "elapsed_s": None,
+            "label": "lifetime",
+        }
+        return {
+            "cache_size": current["cache_size"],
+            "last_24h": self._compute_dns_window(history, now),
+            "lifetime": lifetime,
             "latency_ms": current.get("latency_ms"),
             "avg_latency_ms": current.get("latency_ms"),
             "servers": current.get("servers", []),
         }
+
+    def _load_dns_history(self) -> list[dict[str, int]]:
+        if not self._dns_history_path.exists():
+            return []
+        history: list[dict[str, int]] = []
+        for line in self._dns_history_path.read_text().splitlines():
+            try:
+                raw = json.loads(line)
+                sample = {
+                    "ts": int(raw["ts"]),
+                    "hits": int(raw["hits"]),
+                    "misses": int(raw["misses"]),
+                }
+            except (TypeError, ValueError, KeyError, json.JSONDecodeError):
+                continue
+            history.append(sample)
+        return sorted(history, key=lambda sample: sample["ts"])
+
+    def _append_dns_history(
+        self, now: int, current: dict[str, Any]
+    ) -> list[dict[str, int]]:
+        cutoff = now - DNS_HISTORY_MAX_AGE_S
+        sample = {
+            "ts": now,
+            "hits": int(current["hits"]),
+            "misses": int(current["misses"]),
+        }
+        history = [entry for entry in self._load_dns_history() if entry["ts"] >= cutoff]
+        history.append(sample)
+        text = "".join(
+            json.dumps(entry, separators=(",", ":")) + "\n" for entry in history
+        )
+        _atomic_write(self._dns_history_path, text)
+        return history
+
+    def _compute_dns_window(
+        self, history: list[dict[str, int]], now: int
+    ) -> dict[str, Any] | None:
+        if len(history) < 2:
+            return None
+
+        cutoff = now - DNS_WINDOW_S
+        segment_start = 0
+        reset_in_window = False
+        for idx in range(1, len(history)):
+            prev = history[idx - 1]
+            cur = history[idx]
+            if cur["hits"] < prev["hits"] or cur["misses"] < prev["misses"]:
+                segment_start = idx
+                if cur["ts"] >= cutoff:
+                    reset_in_window = True
+
+        current = history[-1]
+        segment = history[segment_start:]
+        if len(segment) < 2:
+            return None
+
+        if reset_in_window:
+            return _dns_rollup(segment[0], current)
+
+        baseline = None
+        for sample in segment:
+            if sample["ts"] <= cutoff:
+                baseline = sample
+            else:
+                break
+        if baseline is None:
+            return None
+        return _dns_rollup(baseline, current, label="last 24h")
 
     def _compute_device_rates(
         self,

@@ -33,7 +33,7 @@ Per scan (every 60 s) the integration produces a single JSON object with:
 - **Wi-Fi metrics** — for associated clients: AP, band, signal, noise, SNR, TX/RX PHY rates, expected throughput, per-station byte counters.
 - **Host stats** — CPU%, RAM%, root disk%, hardware model, and board name for the gateway and each AP. The hardware model (from `ubus call system board`) is shown in the HA device registry for each host's sensor cluster.
 - **WAN** — IPv4, IPv6, live RX/TX rate, cumulative byte totals.
-- **DNS cache** — dnsmasq cache hit/miss counts and rates, per-upstream query counts and latency, weighted average upstream latency.
+- **DNS cache** — dnsmasq cache hit/miss counts, lifetime and last-24h rollups, per-upstream query counts and latency, weighted average upstream latency.
 - **Event log** — HACS integration keeps the most recent 500 events in memory only (cleared on HA restart/reload). The manual `command_line` install keeps its separate JSONL event file.
 
 All of this comes from a single 20 s SSH call to the gateway plus parallel SSH calls to each AP — no redundant shell sensors.
@@ -160,13 +160,18 @@ shown_types:             # optional — limit to specific event types
 
 ### `dns-stats-card`
 
-dnsmasq cache statistics.
+dnsmasq cache statistics. The main hit/miss bar defaults to the last 24 hours. If wrtsensor does not have enough history yet, the card falls back to dnsmasq lifetime totals and notes that no 24h data is available.
 
 ```yaml
 type: custom:dns-stats-card
 entity: sensor.my_router_network_scanner
 title: DNS Cache
+period: last_24h     # last_24h or lifetime
+show_ipv6: false     # hide IPv6 upstream rows by default
+max_servers: 8
 ```
+
+Breaking change: DNS period values are now exposed under `dns_stats.last_24h` and `dns_stats.lifetime`; the old top-level `hit_pct`, `hits_per_sec`, `misses_per_sec`, `hits_total`, and `misses_total` fields are no longer emitted by the integration.
 
 ### `history-graph` — CPU
 

@@ -68,6 +68,7 @@ if _sensor_name not in sys.modules:
     _spec.loader.exec_module(_mod)  # type: ignore[union-attr]
 
 WrtsensorNetworkScannerSensor = sys.modules[_sensor_name].WrtsensorNetworkScannerSensor
+WrtsensorDNSHitPctSensor = sys.modules[_sensor_name].WrtsensorDNSHitPctSensor
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -106,6 +107,10 @@ class _FakeEntry:
 def _make_sensor(data: dict | None) -> WrtsensorNetworkScannerSensor:
     sensor = WrtsensorNetworkScannerSensor(_FakeCoordinator(data), _FakeEntry())
     return sensor
+
+
+def _make_dns_hit_sensor(data: dict | None) -> WrtsensorDNSHitPctSensor:
+    return WrtsensorDNSHitPctSensor(_FakeCoordinator(data), _FakeEntry())
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
@@ -172,6 +177,27 @@ def test_network_scanner_unique_id_is_entry_scoped():
     assert sensor_a._attr_unique_id == "test-entry_network_scanner"
     assert sensor_b._attr_unique_id == "other-entry_network_scanner"
     assert sensor_a._attr_unique_id != sensor_b._attr_unique_id
+
+
+def test_dns_hit_pct_sensor_prefers_last_24h():
+    sensor = _make_dns_hit_sensor(
+        {
+            "dns_stats": {
+                "last_24h": {"hit_pct": 75.0},
+                "lifetime": {"hit_pct": 60.0},
+            }
+        }
+    )
+
+    assert sensor.native_value == 75.0
+
+
+def test_dns_hit_pct_sensor_falls_back_to_lifetime():
+    sensor = _make_dns_hit_sensor(
+        {"dns_stats": {"last_24h": None, "lifetime": {"hit_pct": 60.0}}}
+    )
+
+    assert sensor.native_value == 60.0
 
 
 async def _setup_platform_with_hosts(

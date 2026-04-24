@@ -82,7 +82,7 @@ Template sensors that unpack values out of `sensor.wrtsensor_network_scanner`'s 
 
 - **Host metrics** per host — CPU%, RAM%, disk% for the gateway and each AP (e.g. `sensor.openwrtgw_used_cpu`, `sensor.kallaren_ap_used_ram`).
 - **WAN** — `sensor.wan_download_mbit`, `sensor.wan_upload_mbit`.
-- **DNS cache** — `sensor.dns_cache_hit_pct`, `sensor.dns_cache_hits_per_sec`, `sensor.dns_cache_misses_per_sec`, `sensor.dns_upstream_latency_ms`.
+- **DNS cache** — `sensor.dns_cache_hit_pct`, `sensor.dns_cache_hits_per_sec`, `sensor.dns_cache_misses_per_sec`, `sensor.dns_upstream_latency_ms`. `diagnose.py` also writes `.netscan_dns_history.jsonl` so `dns-stats-card` can show the same last-24h view on manual installs.
 - **Device presence** — binary sensors matching specific MACs (e.g. family phones) with `device_class: presence` for person/automation use.
 
 Adding a new per-host template follows the pattern:
