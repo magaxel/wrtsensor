@@ -5,11 +5,13 @@ import {
   nothing,
 } from "https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js";
 
-const CARD_VERSION = "2.0.0";
+const CARD_VERSION = "3.0.0";
 const CARD_TYPE = "dns-stats-card";
 const EDITOR_TYPE = `${CARD_TYPE}-editor`;
 const DEFAULT_PERIOD = "last_24h";
 const DEFAULT_MAX_SERVERS = 8;
+const VALID_PERIODS = new Set(["last_24h", "last_8h", "last_1h", "last_scan"]);
+const warnedLifetimeEntities = new Set();
 
 const num = (n) => (Number.isFinite(Number(n)) ? Number(n) : null);
 const fmtInt = (n) => (num(n) == null ? "—" : new Intl.NumberFormat().format(Math.round(num(n))));
@@ -29,15 +31,20 @@ const fmtRate = (n) =>
         : num(n).toFixed(2);
 const fmtPct = (n) => (num(n) == null ? "—" : `${num(n).toFixed(1)}%`);
 const fmtMs = (n) => (num(n) == null ? "—" : `${Math.round(num(n))} ms`);
+const fmtRateUnit = (n) => (num(n) == null ? "—" : `${fmtRate(n)}/s`);
 
-const pickPeriod = (dns, period) => {
-  if (period === "lifetime")
-    return { data: dns.lifetime, label: dns.lifetime?.label ?? "lifetime" };
-  if (dns.last_24h) return { data: dns.last_24h, label: dns.last_24h.label ?? "last 24h" };
-  return {
-    data: dns.lifetime,
-    label: dns.lifetime ? "lifetime - no 24h data yet" : "unavailable",
-  };
+const normalizePeriod = (period) => (VALID_PERIODS.has(period) ? period : DEFAULT_PERIOD);
+
+const pickPeriod = (dns, period, entity) => {
+  if (period === "lifetime" && entity && !warnedLifetimeEntities.has(entity)) {
+    warnedLifetimeEntities.add(entity);
+    console.warn(
+      `${CARD_TYPE}: period "lifetime" is no longer supported for ${entity}; using "last_24h". Re-save the card config to update it.`,
+    );
+  }
+  const key = normalizePeriod(period);
+  const data = dns[key];
+  return { data, label: data?.label ?? "unavailable" };
 };
 
 class DnsStatsCard extends LitElement {
@@ -185,10 +192,10 @@ class DnsStatsCard extends LitElement {
     if (!config.entity) throw new Error("Missing required 'entity'");
     this._config = {
       title: "DNS Cache",
-      period: DEFAULT_PERIOD,
       show_ipv6: false,
       max_servers: DEFAULT_MAX_SERVERS,
       ...config,
+      period: config.period ?? DEFAULT_PERIOD,
     };
   }
 
@@ -238,7 +245,7 @@ class DnsStatsCard extends LitElement {
       `;
     }
 
-    const period = pickPeriod(d, this._config.period);
+    const period = pickPeriod(d, this._config.period, this._config.entity);
     const stats = period.data;
     if (!stats) {
       return html`
@@ -249,13 +256,16 @@ class DnsStatsCard extends LitElement {
       `;
     }
     const hitPct = stats.hit_pct;
+    const hasData = num(hitPct) != null;
     const hitW = Math.max(0, Math.min(100, num(hitPct) ?? 0));
     const missW = 100 - hitW;
     const maxServers = Math.max(
       0,
       Math.floor(num(this._config.max_servers) ?? DEFAULT_MAX_SERVERS),
     );
-    const servers = (d.servers ?? [])
+    const periodServers = stats.servers ?? [];
+    const rawServers = d.servers ?? [];
+    const servers = periodServers
       .filter((s) => this._config.show_ipv6 || !String(s.addr ?? "").includes(":"))
       .slice(0, maxServers);
 
@@ -267,18 +277,24 @@ class DnsStatsCard extends LitElement {
         </div>
         <div class="subtitle">${period.label}</div>
 
-        <div
-          class="bar"
-          title="Hits ${fmtPct(hitW)} · Misses ${fmtPct(missW)}"
-          aria-label="DNS hits ${fmtPct(hitW)}, misses ${fmtPct(missW)}"
-        >
-          <div class="bar-hit" style="width:${hitW}%"></div>
-          <div class="bar-miss" style="width:${missW}%"></div>
-        </div>
-        <div class="legend">
-          <span>Hits <span class="val">${fmtRate(stats.hits_per_sec)}/s</span></span>
-          <span>Misses <span class="val">${fmtRate(stats.misses_per_sec)}/s</span></span>
-        </div>
+        ${
+          hasData
+            ? html`
+                <div
+                  class="bar"
+                  title="Hits ${fmtPct(hitW)} · Misses ${fmtPct(missW)}"
+                  aria-label="DNS hits ${fmtPct(hitW)}, misses ${fmtPct(missW)}"
+                >
+                  <div class="bar-hit" style="width:${hitW}%"></div>
+                  <div class="bar-miss" style="width:${missW}%"></div>
+                </div>
+                <div class="legend">
+                  <span>Hits <span class="val">${fmtRateUnit(stats.hits_per_sec)}</span></span>
+                  <span>Misses <span class="val">${fmtRateUnit(stats.misses_per_sec)}</span></span>
+                </div>
+              `
+            : html`<div class="bar" aria-hidden="true"></div>`
+        }
 
         <div class="grid">
           <div class="kv">
@@ -290,18 +306,25 @@ class DnsStatsCard extends LitElement {
             <span class="v">${fmtInt(d.cache_size)}</span>
           </div>
           <div class="kv">
-            <span class="k">Hits total</span>
+            <span class="k">Hits</span>
             <span class="v" title="${fmtInt(stats.hits)}">${fmtCompact(stats.hits)}</span>
           </div>
           <div class="kv">
-            <span class="k">Misses total</span>
+            <span class="k">Misses</span>
             <span class="v" title="${fmtInt(stats.misses)}">${fmtCompact(stats.misses)}</span>
           </div>
         </div>
 
         ${
-          servers.length
+          rawServers.length && !periodServers.length
             ? html`
+                <div class="servers">
+                  <div class="hdr">Upstream servers</div>
+                  <div class="unavailable">No upstream query data for this window yet</div>
+                </div>
+              `
+            : servers.length
+              ? html`
                 <div class="servers">
                   <div class="hdr">Upstream servers</div>
                   ${servers.map(
@@ -317,7 +340,7 @@ class DnsStatsCard extends LitElement {
                   )}
                 </div>
               `
-            : nothing
+              : nothing
         }
       </ha-card>
     `;
@@ -359,7 +382,9 @@ class DnsStatsCardEditor extends LitElement {
             mode: "dropdown",
             options: [
               { value: "last_24h", label: "Last 24h" },
-              { value: "lifetime", label: "Lifetime" },
+              { value: "last_8h", label: "Last 8h" },
+              { value: "last_1h", label: "Last 1h" },
+              { value: "last_scan", label: "Last scan" },
             ],
           },
         },
@@ -393,10 +418,16 @@ class DnsStatsCardEditor extends LitElement {
 
   render() {
     if (!this.hass || !this._config) return nothing;
+    const normalized = normalizePeriod(this._config.period ?? DEFAULT_PERIOD);
+    if (this._config.period && this._config.period !== normalized) {
+      // Persist the migrated period back to the dashboard YAML so opening
+      // the editor once removes the deprecated "lifetime" value for good.
+      queueMicrotask(() => this._valueChanged({ detail: { value: { period: normalized } } }));
+    }
     const data = {
       entity: this._config.entity ?? "",
       title: this._config.title ?? "DNS Cache",
-      period: this._config.period ?? DEFAULT_PERIOD,
+      period: normalized,
       show_ipv6: this._config.show_ipv6 ?? false,
       max_servers: this._config.max_servers ?? DEFAULT_MAX_SERVERS,
     };

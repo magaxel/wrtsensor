@@ -49,32 +49,44 @@
       name: dns_cache_hit_pct
       unit_of_measurement: "%"
       state: >-
-        {% set d = state_attr('sensor.network_scanner', 'dns_stats') %}
-        {% set p = (d.get('last_24h') or d.get('lifetime')) if d else none %}
-        {{ p.get('hit_pct') if p else none }}
+        {% set d = state_attr('sensor.network_scanner', 'dns_stats') or {} %}
+        {% set periods = [d.get('last_24h'), d.get('last_8h'), d.get('last_1h'), d.get('last_scan')] %}
+        {% set ns = namespace(v=none) %}
+        {% for p in periods %}
+          {% if ns.v is none and p is mapping and p.get('hit_pct') is not none %}{% set ns.v = p.get('hit_pct') %}{% endif %}
+        {% endfor %}
+        {{ ns.v }}
 
     - unique_id: wrtsensor_dns_cache_hits_per_sec
       name: dns_cache_hits_per_sec
       unit_of_measurement: "q/s"
       state: >-
-        {% set d = state_attr('sensor.network_scanner', 'dns_stats') %}
-        {% set p = (d.get('last_24h') or d.get('lifetime')) if d else none %}
-        {{ p.get('hits_per_sec') if p else none }}
+        {% set d = state_attr('sensor.network_scanner', 'dns_stats') or {} %}
+        {% set periods = [d.get('last_24h'), d.get('last_8h'), d.get('last_1h'), d.get('last_scan')] %}
+        {% set ns = namespace(v=none) %}
+        {% for p in periods %}
+          {% if ns.v is none and p is mapping and p.get('hits_per_sec') is not none %}{% set ns.v = p.get('hits_per_sec') %}{% endif %}
+        {% endfor %}
+        {{ ns.v }}
 
     - unique_id: wrtsensor_dns_cache_misses_per_sec
       name: dns_cache_misses_per_sec
       unit_of_measurement: "q/s"
       state: >-
-        {% set d = state_attr('sensor.network_scanner', 'dns_stats') %}
-        {% set p = (d.get('last_24h') or d.get('lifetime')) if d else none %}
-        {{ p.get('misses_per_sec') if p else none }}
+        {% set d = state_attr('sensor.network_scanner', 'dns_stats') or {} %}
+        {% set periods = [d.get('last_24h'), d.get('last_8h'), d.get('last_1h'), d.get('last_scan')] %}
+        {% set ns = namespace(v=none) %}
+        {% for p in periods %}
+          {% if ns.v is none and p is mapping and p.get('misses_per_sec') is not none %}{% set ns.v = p.get('misses_per_sec') %}{% endif %}
+        {% endfor %}
+        {{ ns.v }}
 
     - unique_id: wrtsensor_dns_upstream_latency_ms
       name: dns_upstream_latency_ms
       unit_of_measurement: "ms"
       state: >-
         {% set d = state_attr('sensor.network_scanner', 'dns_stats') %}
-        {{ d.get('avg_latency_ms') if d else none }}
+        {{ d.get('latency_ms') if d else none }}
 
   # --------------------- Device presence (binary) ---------------------
   # Matches a specific MAC in the devices list. Copy per-device.

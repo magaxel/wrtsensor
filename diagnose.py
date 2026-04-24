@@ -106,6 +106,8 @@ OUI_TXT = CONFIG_DIR / "oui.txt"
 EVENT_RETENTION_DAYS = 30
 DNS_HISTORY_MAX_AGE_S = 25 * 60 * 60
 DNS_WINDOW_S = 24 * 60 * 60
+# Suppress "last scan" DNS deltas after skipped or stale collection intervals.
+DNS_LAST_SCAN_MAX_GAP_S = 5 * 60
 MAX_EVENT_LINES = 10_000
 DISCONNECT_MISS_THRESHOLD = 3
 STATE_MAX_AGE_DAYS = 7
@@ -767,20 +769,20 @@ def parse_dns_stats(lines: list[str]) -> dict[str, Any] | None:
     return result
 
 
-def _dns_window_label(elapsed_s: int) -> str:
-    if elapsed_s >= DNS_WINDOW_S - 5 * 60:
-        return "last 24h"
-    if elapsed_s >= 2 * 60 * 60:
-        return f"last {round(elapsed_s / 3600)}h"
-    if elapsed_s >= 60 * 60:
-        return "last 1h"
-    if elapsed_s >= 2 * 60:
-        return f"last {round(elapsed_s / 60)}m"
-    return "last scan"
+def _dns_duration_label(elapsed_s: int) -> str:
+    if elapsed_s < 60:
+        return "just started"
+    if elapsed_s < 60 * 60:
+        return f"collected for {round(elapsed_s / 60)}m"
+    return f"collected for {round(elapsed_s / 3600)}h"
 
 
 def _dns_rollup(
-    baseline: dict[str, int], current: dict[str, int], *, label: str | None = None
+    baseline: dict[str, Any],
+    current: dict[str, Any],
+    *,
+    label: str,
+    include_rates: bool = True,
 ) -> dict[str, Any] | None:
     elapsed_s = int(current["ts"]) - int(baseline["ts"])
     if elapsed_s <= 0:
@@ -789,22 +791,107 @@ def _dns_rollup(
     misses = int(current["misses"]) - int(baseline["misses"])
     if hits < 0 or misses < 0:
         return None
+    servers = _dns_server_rollup(baseline, current)
     total = hits + misses
     return {
         "hits": hits,
         "misses": misses,
         "hit_pct": round(100.0 * hits / total, 1) if total else None,
-        "hits_per_sec": round(hits / elapsed_s, 2),
-        "misses_per_sec": round(misses / elapsed_s, 2),
+        "hits_per_sec": round(hits / elapsed_s, 2) if include_rates else None,
+        "misses_per_sec": round(misses / elapsed_s, 2) if include_rates else None,
         "elapsed_s": elapsed_s,
-        "label": label or _dns_window_label(elapsed_s),
+        "label": label,
+        "servers": servers,
     }
 
 
-def _load_dns_history() -> list[dict[str, int]]:
+def _dns_empty_rollup() -> dict[str, Any]:
+    return {
+        "hits": 0,
+        "misses": 0,
+        "hit_pct": None,
+        "hits_per_sec": None,
+        "misses_per_sec": None,
+        "elapsed_s": 0,
+        "label": "just started",
+        "servers": [],
+    }
+
+
+def _dns_server_rollup(
+    baseline: dict[str, Any], current: dict[str, Any]
+) -> list[dict[str, Any]]:
+    previous = {
+        str(server.get("addr")): int(server.get("queries", 0))
+        for server in baseline.get("servers", [])
+        if server.get("addr")
+    }
+    result: list[dict[str, Any]] = []
+    for server in current.get("servers", []):
+        addr = server.get("addr")
+        if not addr or addr not in previous:
+            continue
+        delta = int(server.get("queries", 0)) - previous[addr]
+        if delta < 0:
+            continue
+        item = {"addr": addr, "queries": delta}
+        if server.get("latency_ms") is not None:
+            item["latency_ms"] = server["latency_ms"]
+        result.append(item)
+    return sorted(result, key=lambda item: item["queries"], reverse=True)
+
+
+def _dns_clean_segment_start(history: list[dict[str, Any]]) -> int:
+    segment_start = 0
+    for idx in range(1, len(history)):
+        prev = history[idx - 1]
+        cur = history[idx]
+        if cur["hits"] < prev["hits"] or cur["misses"] < prev["misses"]:
+            segment_start = idx
+    return segment_start
+
+
+def _dns_period_rollup(
+    segment: list[dict[str, Any]], now: int, window_s: int, full_label: str
+) -> dict[str, Any]:
+    if len(segment) < 2:
+        return _dns_empty_rollup()
+
+    cutoff = now - window_s
+    baseline = segment[0]
+    for sample in segment:
+        if sample["ts"] <= cutoff:
+            baseline = sample
+        else:
+            break
+
+    current = segment[-1]
+    elapsed_s = int(current["ts"]) - int(baseline["ts"])
+    label = (
+        full_label if elapsed_s >= window_s - 5 * 60 else _dns_duration_label(elapsed_s)
+    )
+    return _dns_rollup(baseline, current, label=label) or _dns_empty_rollup()
+
+
+def _dns_last_scan_rollup(segment: list[dict[str, Any]]) -> dict[str, Any]:
+    # Previous clean sample means history[-2] is still inside this clean segment.
+    if len(segment) < 2:
+        return _dns_empty_rollup()
+    previous = segment[-2]
+    current = segment[-1]
+    elapsed_s = int(current["ts"]) - int(previous["ts"])
+    if elapsed_s <= 0 or elapsed_s > DNS_LAST_SCAN_MAX_GAP_S:
+        return _dns_empty_rollup()
+    return (
+        _dns_rollup(previous, current, label="last scan", include_rates=False)
+        or _dns_empty_rollup()
+    )
+
+
+def _load_dns_history() -> list[dict[str, Any]]:
     if not DNS_HISTORY.exists():
         return []
-    history: list[dict[str, int]] = []
+    history: list[dict[str, Any]] = []
     for line in DNS_HISTORY.read_text().splitlines():
         try:
             raw = json.loads(line)
@@ -812,6 +899,19 @@ def _load_dns_history() -> list[dict[str, int]]:
                 "ts": int(raw["ts"]),
                 "hits": int(raw["hits"]),
                 "misses": int(raw["misses"]),
+                "servers": [
+                    {
+                        "addr": str(server["addr"]),
+                        "queries": int(server["queries"]),
+                        **(
+                            {"latency_ms": server["latency_ms"]}
+                            if server.get("latency_ms") is not None
+                            else {}
+                        ),
+                    }
+                    for server in raw.get("servers", [])
+                    if server.get("addr") and "queries" in server
+                ],
             }
         except (TypeError, ValueError, KeyError, json.JSONDecodeError):
             continue
@@ -819,12 +919,13 @@ def _load_dns_history() -> list[dict[str, int]]:
     return sorted(history, key=lambda sample: sample["ts"])
 
 
-def _append_dns_history(now: int, current: dict[str, Any]) -> list[dict[str, int]]:
+def _append_dns_history(now: int, current: dict[str, Any]) -> list[dict[str, Any]]:
     cutoff = now - DNS_HISTORY_MAX_AGE_S
     sample = {
         "ts": now,
         "hits": int(current["hits"]),
         "misses": int(current["misses"]),
+        "servers": current.get("servers", []),
     }
     history = [entry for entry in _load_dns_history() if entry["ts"] >= cutoff]
     history.append(sample)
@@ -833,81 +934,23 @@ def _append_dns_history(now: int, current: dict[str, Any]) -> list[dict[str, int
     return history
 
 
-def _compute_dns_window(
-    history: list[dict[str, int]], now: int
-) -> dict[str, Any] | None:
-    if len(history) < 2:
-        return None
-
-    cutoff = now - DNS_WINDOW_S
-    segment_start = 0
-    reset_in_window = False
-    for idx in range(1, len(history)):
-        prev = history[idx - 1]
-        cur = history[idx]
-        if cur["hits"] < prev["hits"] or cur["misses"] < prev["misses"]:
-            segment_start = idx
-            if cur["ts"] >= cutoff:
-                reset_in_window = True
-
-    current = history[-1]
-    segment = history[segment_start:]
-    if len(segment) < 2:
-        return None
-
-    if reset_in_window:
-        return _dns_rollup(segment[0], current)
-
-    baseline = None
-    for sample in segment:
-        if sample["ts"] <= cutoff:
-            baseline = sample
-        else:
-            break
-    if baseline is None:
-        return None
-    return _dns_rollup(baseline, current, label="last 24h")
-
-
 def compute_dns_rates(current: dict[str, int | float] | None) -> dict[str, Any] | None:
-    """Return DNS lifetime stats plus backend-computed last-24h rollups."""
+    """Return backend-computed DNS period rollups."""
     if current is None:
         return None
     now = int(time.time())
-    hits_rate = misses_rate = None
-    if DNS_STATE.exists():
-        try:
-            prev = json.loads(DNS_STATE.read_text())
-            elapsed = now - int(prev.get("ts", 0))
-            if 0 < elapsed < BW_MAX_AGE_S:
-                d_hits = current["hits"] - prev.get("hits", 0)
-                d_misses = current["misses"] - prev.get("misses", 0)
-                if d_hits >= 0 and d_misses >= 0:
-                    hits_rate = round(d_hits / elapsed, 2)
-                    misses_rate = round(d_misses / elapsed, 2)
-        except Exception:
-            pass
     _atomic_write(
         DNS_STATE,
         json.dumps({"ts": now, "hits": current["hits"], "misses": current["misses"]}),
     )
     history = _append_dns_history(now, current)
-    life_total = int(current["hits"]) + int(current["misses"])
-    lifetime = {
-        "hits": int(current["hits"]),
-        "misses": int(current["misses"]),
-        "hit_pct": round(100.0 * int(current["hits"]) / life_total, 1)
-        if life_total
-        else None,
-        "hits_per_sec": hits_rate,
-        "misses_per_sec": misses_rate,
-        "elapsed_s": None,
-        "label": "lifetime",
-    }
+    segment = history[_dns_clean_segment_start(history) :]
     return {
         "cache_size": current["cache_size"],
-        "last_24h": _compute_dns_window(history, now),
-        "lifetime": lifetime,
+        "last_24h": _dns_period_rollup(segment, now, DNS_WINDOW_S, "last 24h"),
+        "last_8h": _dns_period_rollup(segment, now, 8 * 60 * 60, "last 8h"),
+        "last_1h": _dns_period_rollup(segment, now, 60 * 60, "last 1h"),
+        "last_scan": _dns_last_scan_rollup(segment),
         "latency_ms": current.get("latency_ms"),
         "servers": current.get("servers", []),
     }
