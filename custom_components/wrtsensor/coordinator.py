@@ -559,7 +559,7 @@ def save_kv_cache(path: Path, cache: dict[str, str]) -> None:
 
 
 class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    _EVENT_BUFFER_SIZE = 500
+    EVENT_BUFFER_SIZE = 500
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         data = {**entry.data, **entry.options}
@@ -600,7 +600,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._wan_event_state: dict[str, str] = {}
         self._prev_state: dict[str, StateEntry] = {}
         self._host_models: dict[str, tuple[str, str]] = {}  # ip → (model, board_name)
-        self._event_buffer: deque[dict[str, Any]] = deque(maxlen=self._EVENT_BUFFER_SIZE)
+        self._event_buffer: deque[dict[str, Any]] = deque(maxlen=self.EVENT_BUFFER_SIZE)
 
         # Cached file data (warm across scans)
         self._vendor_cache: dict[str, str] = {}
@@ -1120,6 +1120,9 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def get_event_count(self) -> int:
         return len(self._event_buffer)
+
+    def get_event_buffer_size(self) -> int:
+        return self.EVENT_BUFFER_SIZE
 
     # ── Main update ───────────────────────────────────────────────────────────
 

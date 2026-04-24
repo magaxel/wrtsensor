@@ -173,7 +173,9 @@ def test_network_scanner_unique_id_is_entry_scoped():
     assert sensor_a._attr_unique_id != sensor_b._attr_unique_id
 
 
-async def _setup_platform_with_hosts(host_stats: dict) -> tuple[list[object], _FakeCoordinator]:
+async def _setup_platform_with_hosts(
+    host_stats: dict,
+) -> tuple[list[object], _FakeCoordinator]:
     added: list[object] = []
     coordinator = _FakeCoordinator({"host_stats": host_stats})
     entry = _FakeEntry()
@@ -217,4 +219,3 @@ def test_async_setup_entry_does_not_duplicate_host_sensors():
 
     host_entities = [e for e in added if getattr(e, "_hostname", None) == "192.0.2.22"]
     assert len(host_entities) == 3
-

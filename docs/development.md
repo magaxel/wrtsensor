@@ -28,8 +28,7 @@ jq . hacs.json > /dev/null
 # Run the scanner locally (replace with your gateway + any APs)
 python3 diagnose.py root@<gateway-ip> root@<ap-ip> [root@<ap-ip> ...]
 
-# Run the scanner locally and inspect the manual-install event log
-python3 diagnose.py root@<gateway-ip> root@<ap-ip> [root@<ap-ip> ...]
+# Inspect the manual-install event log
 cat /dev/shm/netscan_events.json
 ```
 

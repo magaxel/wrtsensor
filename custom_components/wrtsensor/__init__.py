@@ -27,6 +27,7 @@ _LOGGER = logging.getLogger(__name__)
 
 _WWW_DIR = Path(__file__).parent / "www"
 _WS_TYPE_RECENT_EVENTS = f"{DOMAIN}/recent_events"
+_WS_REGISTERED_KEY = f"{DOMAIN}_ws_registered"
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -124,11 +125,10 @@ def _remove_legacy_event_log_entity(hass: HomeAssistant, entry: ConfigEntry) -> 
 
 
 def _register_websocket_commands(hass: HomeAssistant) -> None:
-    registry = hass.data.setdefault(DOMAIN, {})
-    if registry.get("_ws_registered"):
+    if hass.data.get(_WS_REGISTERED_KEY):
         return
     websocket_api.async_register_command(hass, _ws_recent_events)
-    registry["_ws_registered"] = True
+    hass.data[_WS_REGISTERED_KEY] = True
 
 
 @websocket_api.websocket_command(
@@ -145,7 +145,7 @@ async def _ws_recent_events(
 ) -> None:
     entity_id = msg["entity_id"]
     reg = er.async_get(hass)
-    reg_entry = reg.async_get(entity_id) if reg is not None else None
+    reg_entry = reg.async_get(entity_id)
     if reg_entry is None or not reg_entry.unique_id.endswith("_network_scanner"):
         connection.send_error(
             msg["id"],
@@ -168,6 +168,6 @@ async def _ws_recent_events(
         {
             "events": coordinator.get_recent_events(),
             "count": coordinator.get_event_count(),
-            "buffer_size": coordinator._EVENT_BUFFER_SIZE,
+            "buffer_size": coordinator.get_event_buffer_size(),
         },
     )

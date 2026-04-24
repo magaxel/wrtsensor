@@ -85,7 +85,7 @@ _ws = sys.modules["homeassistant.components.websocket_api"]
 _ws.ActiveConnection = object  # type: ignore[attr-defined]
 _ws.async_register_command = lambda hass, handler: None  # type: ignore[attr-defined]
 _ws.async_response = lambda fn: fn  # type: ignore[attr-defined]
-_ws.websocket_command = lambda schema: (lambda fn: fn)  # type: ignore[attr-defined]
+_ws.websocket_command = lambda schema: lambda fn: fn  # type: ignore[attr-defined]
 sys.modules["homeassistant.config_entries"].ConfigEntry = object  # type: ignore[attr-defined]
 sys.modules["homeassistant.core"].HomeAssistant = object  # type: ignore[attr-defined]
 

@@ -211,9 +211,9 @@ def test_ws_recent_events_returns_buffer():
         data={
             "wrtsensor": {
                 entry.entry_id: types.SimpleNamespace(
-                    _EVENT_BUFFER_SIZE=500,
                     get_recent_events=lambda: [{"type": "connect"}],
                     get_event_count=lambda: 1,
+                    get_event_buffer_size=lambda: 500,
                 )
             }
         }
@@ -265,6 +265,31 @@ def test_ws_recent_events_rejects_non_scanner_entity():
     assert sent["error"][1] == "invalid_entity"
 
 
+def test_ws_recent_events_rejects_unknown_entity():
+    _reset_registry()
+    sent = {}
+
+    class _Conn:
+        def send_result(self, msg_id, payload):
+            sent["result"] = (msg_id, payload)
+
+        def send_error(self, msg_id, code, message):
+            sent["error"] = (msg_id, code, message)
+
+    hass = types.SimpleNamespace(data={"wrtsensor": {}})
+
+    asyncio.run(
+        _ws_recent_events(
+            hass,
+            _Conn(),
+            {"id": 11, "entity_id": "sensor.missing_network_scanner"},
+        )
+    )
+
+    assert sent["error"][0] == 11
+    assert sent["error"][1] == "invalid_entity"
+
+
 def test_setup_entry_does_not_touch_lovelace_storage():
     calls: list[str] = []
 
@@ -309,7 +334,9 @@ def test_setup_entry_does_not_touch_lovelace_storage():
     try:
         _init_mod.WrtsensorCoordinator = _FakeCoordinator
         _init_mod._register_static_path = _fake_register_static_path
-        _init_mod._prune_orphaned_host_entities = lambda hass, entry, coordinator: calls.append("prune")
+        _init_mod._prune_orphaned_host_entities = lambda hass, entry, coordinator: (
+            calls.append("prune")
+        )
 
         asyncio.run(_init_mod.async_setup_entry(_FakeHass(), _FakeEntry()))
     finally:

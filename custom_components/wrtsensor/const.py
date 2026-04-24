@@ -25,8 +25,6 @@ STATE_DIR_LOCAL = "/tmp/netscan"
 COLLECTOR_SCRIPT_NAME = "openwrt_collector.sh"
 COLLECTOR_REMOTE_PATH = "/tmp/wrtsensor_collector.sh"
 
-EVENT_RETENTION_DAYS = 30
-MAX_EVENT_LINES = 10_000
 DISCONNECT_MISS_THRESHOLD = 3  # kept for wrtsensor.py standalone compat
 CONF_DISCONNECT_THRESHOLD = "disconnect_threshold_s"
 DEFAULT_DISCONNECT_THRESHOLD = 120  # seconds
