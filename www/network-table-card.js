@@ -5,7 +5,7 @@ import {
   nothing,
 } from "https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js";
 
-const CARD_VERSION = "2.2.0";
+const CARD_VERSION = "2.2.1";
 const CARD_TYPE = "network-table-card";
 const EDITOR_TYPE = `${CARD_TYPE}-editor`;
 
@@ -234,7 +234,7 @@ class NetworkTableCard extends LitElement {
       font-size: 0.85em;
     }
     .dim {
-      color: var(--disabled-text-color);
+      color: var(--disabled-text-color, #555);
     }
     .dl {
       color: var(--success-color);
@@ -254,6 +254,7 @@ class NetworkTableCard extends LitElement {
     }
     .ic-deep-orange {
       color: var(--warning-color);
+      color: color-mix(in srgb, var(--warning-color) 55%, var(--error-color) 45%);
     }
     .ic-red {
       color: var(--error-color);
