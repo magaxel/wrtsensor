@@ -184,7 +184,7 @@ def test_dns_hit_pct_sensor_prefers_last_24h():
         {
             "dns_stats": {
                 "last_24h": {"hit_pct": 75.0},
-                "lifetime": {"hit_pct": 60.0},
+                "last_8h": {"hit_pct": 60.0},
             }
         }
     )
@@ -192,9 +192,9 @@ def test_dns_hit_pct_sensor_prefers_last_24h():
     assert sensor.native_value == 75.0
 
 
-def test_dns_hit_pct_sensor_falls_back_to_lifetime():
+def test_dns_hit_pct_sensor_falls_back_to_next_period():
     sensor = _make_dns_hit_sensor(
-        {"dns_stats": {"last_24h": None, "lifetime": {"hit_pct": 60.0}}}
+        {"dns_stats": {"last_24h": None, "last_8h": {"hit_pct": 60.0}}}
     )
 
     assert sensor.native_value == 60.0

@@ -185,7 +185,13 @@ class WrtsensorDNSHitPctSensor(_WrtsensorBase):
         if not data:
             return None
         dns = data.get("dns_stats", {})
-        period = dns.get("last_24h") or dns.get("lifetime") or {}
+        period = (
+            dns.get("last_24h")
+            or dns.get("last_8h")
+            or dns.get("last_1h")
+            or dns.get("last_scan")
+            or {}
+        )
         return period.get("hit_pct")
 
 
