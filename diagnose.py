@@ -841,6 +841,16 @@ def _dns_server_rollup(
     return sorted(result, key=lambda item: item["queries"], reverse=True)
 
 
+def _dns_period_server_rollup(
+    period_segment: list[dict[str, Any]], current: dict[str, Any]
+) -> list[dict[str, Any]]:
+    for sample in period_segment[:-1]:
+        servers = _dns_server_rollup(sample, current)
+        if servers:
+            return servers
+    return []
+
+
 def _dns_clean_segment_start(history: list[dict[str, Any]]) -> int:
     segment_start = 0
     for idx in range(1, len(history)):
@@ -859,9 +869,11 @@ def _dns_period_rollup(
 
     cutoff = now - window_s
     baseline = segment[0]
-    for sample in segment:
+    baseline_idx = 0
+    for idx, sample in enumerate(segment):
         if sample["ts"] <= cutoff:
             baseline = sample
+            baseline_idx = idx
         else:
             break
 
@@ -870,7 +882,12 @@ def _dns_period_rollup(
     label = (
         full_label if elapsed_s >= window_s - 5 * 60 else _dns_duration_label(elapsed_s)
     )
-    return _dns_rollup(baseline, current, label=label) or _dns_empty_rollup()
+    rollup = _dns_rollup(baseline, current, label=label)
+    if rollup is None:
+        return _dns_empty_rollup()
+    if not rollup["servers"]:
+        rollup["servers"] = _dns_period_server_rollup(segment[baseline_idx:], current)
+    return rollup
 
 
 def _dns_last_scan_rollup(segment: list[dict[str, Any]]) -> dict[str, Any]:
