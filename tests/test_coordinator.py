@@ -250,6 +250,7 @@ def test_ap_unreachable_result_not_partial():
     # _append_events/_save_state are called via hass.async_add_executor_job which
     # is a no-op in FakeHass, so no extra patching needed.
     assert "devices" in result
+    assert result["gateway_mac"] == _MINIMAL_GW["gw_mac"]
     assert not result.get("partial")
     assert isinstance(result["devices"], list)
 
@@ -329,6 +330,7 @@ def test_aps_only_update_builds_from_ap_neigh():
         result = asyncio.run(c._async_update_data())
     assert result["wan_ip"] == ""
     assert result["dns_stats"] is None
+    assert result["gateway_mac"] == ""
     assert result["_gw_mac"] == ""
     macs = {d["mac"] for d in result["devices"]}
     assert "AA:BB:CC:DD:EE:01" in macs

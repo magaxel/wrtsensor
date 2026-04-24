@@ -1157,6 +1157,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "scan_duration": round(time.time() - scan_start, 2),
                     "wan_ip": "",
                     "wan_ip6": "",
+                    "gateway_mac": "",
                     "wan_rx_rate": None,
                     "wan_tx_rate": None,
                     "host_stats": {},
@@ -1472,6 +1473,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "wan_ip6": (gw_data.get("wan_ip6") or gw_data.get("gw_ip6", ""))
             if gw_data
             else "",
+            "gateway_mac": gw_mac,
             "wan_rx_rate": rx_rate,
             "wan_tx_rate": tx_rate,
             "host_stats": host_stats,

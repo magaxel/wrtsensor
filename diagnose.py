@@ -1806,6 +1806,7 @@ def main() -> None:
         "scan_duration": round(time.time() - scan_start, 2),
         "wan_ip": gw_data["wan_ip"],
         "wan_ip6": gw_data["wan_ip6"] or gw_data["gw_ip6"],
+        "gateway_mac": gw_data["gw_mac"],
         "wan_rx_rate": rx_rate,
         "wan_tx_rate": tx_rate,
         "host_stats": host_stats,

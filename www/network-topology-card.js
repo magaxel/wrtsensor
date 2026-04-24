@@ -126,9 +126,10 @@ function _fmtBytes(bytes) {
 function _truncate(str, n) {
   if (!str) return "";
   if (str.length <= n) return str;
-  // Prefer breaking at a word boundary
+  if (n <= 1) return "…";
+
   const cut = str.slice(0, n - 1);
-  const boundary = cut.lastIndexOf(/[-._]/) ?? -1;
+  const boundary = Math.max(cut.lastIndexOf("-"), cut.lastIndexOf("_"), cut.lastIndexOf("."));
   return `${boundary > n * 0.6 ? cut.slice(0, boundary) : cut}…`;
 }
 
@@ -157,6 +158,7 @@ class NetworkTopologyCard extends HTMLElement {
     this.attachShadow({ mode: "open" });
     this._lastUpdated = null;
     this._iconCache = {};
+    this._overlay = null;
   }
 
   setConfig(config) {
@@ -164,8 +166,8 @@ class NetworkTopologyCard extends HTMLElement {
     this._config = {
       entity: config.entity,
       title: config.title ?? "Network Map",
-      gateway_hostname: config.gateway_hostname ?? "gw",
-      col_width: config.col_width ?? 200,
+      gateway_label: config.gateway_label ?? "gw",
+      column_width: config.column_width ?? 200,
       show_bandwidth: config.show_bandwidth ?? false,
       show_offline: config.show_offline ?? false,
     };
@@ -226,8 +228,9 @@ class NetworkTopologyCard extends HTMLElement {
     const allDevices = attr.devices ?? [];
     const wanIp = attr.wan_ip ?? "";
     const wanIp6 = attr.wan_ip6 ?? "";
+    const gatewayMac = String(attr.gateway_mac ?? "").toLowerCase();
     const partial = attr.partial ?? false;
-    const gwHostname = this._config.gateway_hostname;
+    const gatewayLabel = this._config.gateway_label;
 
     const devices = this._config.show_offline
       ? allDevices
@@ -238,7 +241,9 @@ class NetworkTopologyCard extends HTMLElement {
       if (d.ap) apHostnames.add(d.ap);
     }
 
-    const gateway = allDevices.find((d) => d.hostname === gwHostname || d.connection === "gateway");
+    const gateway = gatewayMac
+      ? allDevices.find((d) => String(d.mac ?? "").toLowerCase() === gatewayMac)
+      : null;
     const aps = allDevices.filter(
       (d) => apHostnames.has(d.hostname) || apHostnames.has(d.mac?.toLowerCase()),
     );
@@ -264,7 +269,7 @@ class NetworkTopologyCard extends HTMLElement {
       AP_R = 22,
       ROW_H = 52;
     const COL_PAD = 40,
-      COL_WIDTH = this._config.col_width;
+      COL_WIDTH = this._config.column_width;
     const MAX_COL = 8;
 
     const sortDevs = (arr) =>
@@ -394,11 +399,11 @@ class NetworkTopologyCard extends HTMLElement {
         gwY,
         GW_R,
         ICON_ROUTER,
-        gateway?.hostname ?? gwHostname,
+        gateway?.hostname ?? gatewayLabel,
         gateway?.ip ?? "",
         "ntc-gw",
         gwOp,
-        gateway ? nodeTitle(gateway) : gwHostname,
+        gateway ? nodeTitle(gateway) : gatewayLabel,
       ),
     );
 
@@ -535,7 +540,7 @@ class NetworkTopologyCard extends HTMLElement {
       </style>
       <ha-card>
         <div class="card-header">${_esc(this._config.title)}</div>
-        <div class="body">${svgWrapper}</div>
+        <div class="body" tabindex="0" role="button" aria-label="${_esc(this._config.title)}">${svgWrapper}</div>
         <div class="updated">${(() => {
           const onlineCount = allDevices.filter((d) => d.online !== false).length;
           const offlineCount = allDevices.filter((d) => d.online === false).length;
@@ -550,11 +555,15 @@ class NetworkTopologyCard extends HTMLElement {
   }
 
   _openDialog(svg, title, lastUpdated) {
-    const existing = document.getElementById("ntc-overlay");
-    if (existing) existing.remove();
+    if (this._overlay) this._overlay.remove();
+    const focusAfterClose = this.shadowRoot.querySelector(".body");
 
     const overlay = document.createElement("div");
-    overlay.id = "ntc-overlay";
+    this._overlay = overlay;
+    overlay.className = "ntc-overlay";
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+    overlay.setAttribute("aria-label", title);
     overlay.style.cssText = `
       position:fixed;inset:0;z-index:9999;
       background:rgba(0,0,0,0.75);
@@ -564,7 +573,7 @@ class NetworkTopologyCard extends HTMLElement {
     const style = document.createElement("style");
     style.textContent = `
       @keyframes ntc-fade { from{opacity:0} to{opacity:1} }
-      #ntc-box {
+      .ntc-box {
         background: var(--card-background-color, #fff);
         color: var(--primary-text-color);
         border-radius: var(--ha-card-border-radius, 12px);
@@ -577,38 +586,38 @@ class NetworkTopologyCard extends HTMLElement {
         cursor: default;
         user-select: none;
       }
-      #ntc-box-header {
+      .ntc-box-header {
         display:flex;justify-content:space-between;align-items:center;
         margin-bottom:10px;flex-shrink:0;
       }
-      #ntc-box-title {
+      .ntc-box-title {
         font-family: var(--ha-font-family-body, Roboto, sans-serif);
         font-size: var(--ha-font-size-m, 14px);
         font-weight: var(--ha-font-weight-medium, 500);
         color: var(--primary-text-color);
       }
-      #ntc-box-meta {
+      .ntc-box-meta {
         font-family: var(--ha-font-family-body, Roboto, sans-serif);
         font-size: var(--ha-font-size-xs, 10px);
         color: var(--secondary-text-color);
       }
-      #ntc-close {
+      .ntc-close {
         background:none;border:none;
         color: var(--secondary-text-color);
         font-size:22px;cursor:pointer;line-height:1;padding:4px 8px;
       }
-      #ntc-close:hover { color: var(--primary-text-color); }
-      #ntc-svg-wrap {
+      .ntc-close:hover { color: var(--primary-text-color); }
+      .ntc-svg-wrap {
         flex:1;overflow:hidden;touch-action:none;position:relative;
         border-radius:8px;
       }
-      #ntc-svg-wrap svg { width:100%;display:block; }
-      #ntc-hint {
+      .ntc-svg-wrap svg { width:100%;display:block; }
+      .ntc-hint {
         flex-shrink:0;
         font-size:10px;color:var(--secondary-text-color);
         text-align:center;padding-top:6px;
       }
-      #ntc-info {
+      .ntc-info {
         display:none;
         position:fixed;
         bottom:24px;
@@ -630,19 +639,19 @@ class NetworkTopologyCard extends HTMLElement {
     overlay.appendChild(style);
 
     const infoPanel = document.createElement("div");
-    infoPanel.id = "ntc-info";
+    infoPanel.className = "ntc-info";
     overlay.appendChild(infoPanel);
 
     const box = document.createElement("div");
-    box.id = "ntc-box";
+    box.className = "ntc-box";
     box.innerHTML = `
-      <div id="ntc-box-header">
-        <span id="ntc-box-title">${_esc(title)}</span>
-        <span id="ntc-box-meta">Updated: ${new Date(lastUpdated).toLocaleTimeString()}</span>
-        <button id="ntc-close" title="Close">✕</button>
+      <div class="ntc-box-header">
+        <span class="ntc-box-title">${_esc(title)}</span>
+        <span class="ntc-box-meta">Updated: ${new Date(lastUpdated).toLocaleTimeString()}</span>
+        <button class="ntc-close" title="Close" aria-label="Close network map">✕</button>
       </div>
-      <div id="ntc-svg-wrap">${svg}</div>
-      <div id="ntc-hint">Scroll or pinch to zoom · drag to pan · double-tap to reset</div>`;
+      <div class="ntc-svg-wrap">${svg}</div>
+      <div class="ntc-hint">Scroll or pinch to zoom · drag to pan · double-tap to reset</div>`;
 
     let infoTimeout;
     const showInfo = (text) => {
@@ -681,13 +690,15 @@ class NetworkTopologyCard extends HTMLElement {
       window.removeEventListener("mousemove", mouseMove);
       window.removeEventListener("mouseup", mouseUp);
       overlay.remove();
+      if (this._overlay === overlay) this._overlay = null;
       document.removeEventListener("keydown", onKey);
+      focusAfterClose?.focus();
     };
     const onKey = (e) => {
       if (e.key === "Escape") closeOverlay();
     };
 
-    box.querySelector("#ntc-close").addEventListener("click", closeOverlay);
+    box.querySelector(".ntc-close").addEventListener("click", closeOverlay);
     overlay.addEventListener("click", closeOverlay);
     box.addEventListener("click", (e) => e.stopPropagation());
     document.addEventListener("keydown", onKey);
@@ -705,7 +716,7 @@ class NetworkTopologyCard extends HTMLElement {
     });
 
     // ── Zoom / pan ────────────────────────────────────────────────────────────
-    const wrap = box.querySelector("#ntc-svg-wrap");
+    const wrap = box.querySelector(".ntc-svg-wrap");
     const svgEl = wrap.querySelector("svg");
     const origVB = svgEl.getAttribute("viewBox").split(" ").map(Number); // [x,y,w,h]
     let [vx, vy, vw, vh] = origVB;
@@ -910,7 +921,7 @@ class NetworkTopologyCard extends HTMLElement {
     return document.createElement("network-topology-card-editor");
   }
   static getStubConfig() {
-    return { entity: "", title: "Network Map", gateway_hostname: "gw" };
+    return { entity: "", title: "Network Map", gateway_label: "gw", column_width: 200 };
   }
 }
 
@@ -955,6 +966,7 @@ class NetworkTopologyCardEditor extends HTMLElement {
           padding: 16px 0;
         }
         ha-entity-picker { width: 100%; display: block; }
+        ha-textfield { width: 100%; display: block; }
         .cb-row {
           display: flex; align-items: center; gap: 8px;
           font-size: var(--ha-font-size-m, 14px);
@@ -966,6 +978,13 @@ class NetworkTopologyCardEditor extends HTMLElement {
           label="Entity"
           allow-custom-entity
         ></ha-entity-picker>
+        <ha-textfield id="title" label="Title"></ha-textfield>
+        <ha-textfield id="gateway_label" label="Gateway label"></ha-textfield>
+        <ha-textfield id="column_width" label="Column width" type="number" min="120" step="10"></ha-textfield>
+        <label class="cb-row">
+          <ha-checkbox id="show_bandwidth"></ha-checkbox>
+          <span>Show bandwidth labels</span>
+        </label>
         <label class="cb-row">
           <ha-checkbox id="show_offline"></ha-checkbox>
           <span>Show offline devices (dimmed)</span>
@@ -978,6 +997,34 @@ class NetworkTopologyCardEditor extends HTMLElement {
     if (this._hass) picker.hass = this._hass;
     picker.addEventListener("value-changed", (e) => {
       this._fire({ ...this._config, entity: e.detail.value });
+    });
+
+    const title = this.shadowRoot.querySelector("#title");
+    title.value = c.title ?? "Network Map";
+    title.addEventListener("input", () => {
+      this._fire({ ...this._config, title: title.value });
+    });
+
+    const gatewayLabel = this.shadowRoot.querySelector("#gateway_label");
+    gatewayLabel.value = c.gateway_label ?? "gw";
+    gatewayLabel.addEventListener("input", () => {
+      this._fire({ ...this._config, gateway_label: gatewayLabel.value });
+    });
+
+    const columnWidth = this.shadowRoot.querySelector("#column_width");
+    columnWidth.value = c.column_width ?? 200;
+    columnWidth.addEventListener("input", () => {
+      const value = Number(columnWidth.value);
+      this._fire({
+        ...this._config,
+        column_width: Number.isFinite(value) && value > 0 ? value : 200,
+      });
+    });
+
+    const bandwidthCb = this.shadowRoot.querySelector("#show_bandwidth");
+    bandwidthCb.checked = c.show_bandwidth ?? false;
+    bandwidthCb.addEventListener("change", () => {
+      this._fire({ ...this._config, show_bandwidth: bandwidthCb.checked });
     });
 
     const offlineCb = this.shadowRoot.querySelector("#show_offline");
