@@ -166,8 +166,8 @@ class NetworkTopologyCard extends HTMLElement {
     this._config = {
       entity: config.entity,
       title: config.title ?? "Network Map",
-      gateway_label: config.gateway_label ?? "gw",
-      column_width: config.column_width ?? 200,
+      gateway_label: config.gateway_label ?? config.gateway_hostname ?? "gw",
+      column_width: config.column_width ?? config.col_width ?? 200,
       show_bandwidth: config.show_bandwidth ?? false,
       show_offline: config.show_offline ?? false,
     };
@@ -241,9 +241,13 @@ class NetworkTopologyCard extends HTMLElement {
       if (d.ap) apHostnames.add(d.ap);
     }
 
-    const gateway = gatewayMac
-      ? allDevices.find((d) => String(d.mac ?? "").toLowerCase() === gatewayMac)
-      : null;
+    // Prefer the authoritative gateway_mac from the scanner; fall back to
+    // connection === "gateway" so partial scans (gateway_mac === "") and
+    // stale sensor data still render a gateway node with real device info.
+    const gateway = allDevices.find((d) => {
+      if (gatewayMac && String(d.mac ?? "").toLowerCase() === gatewayMac) return true;
+      return d.connection === "gateway";
+    });
     const aps = allDevices.filter(
       (d) => apHostnames.has(d.hostname) || apHostnames.has(d.mac?.toLowerCase()),
     );
@@ -549,8 +553,14 @@ class NetworkTopologyCard extends HTMLElement {
         })()}</div>
       </ha-card>`;
 
-    this.shadowRoot.querySelector(".body").addEventListener("click", () => {
-      this._openDialog(svg, this._config.title, state.last_updated);
+    const body = this.shadowRoot.querySelector(".body");
+    const openDialog = () => this._openDialog(svg, this._config.title, state.last_updated);
+    body.addEventListener("click", openDialog);
+    body.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        openDialog();
+      }
     });
   }
 
@@ -694,8 +704,31 @@ class NetworkTopologyCard extends HTMLElement {
       document.removeEventListener("keydown", onKey);
       focusAfterClose?.focus();
     };
+    const getFocusable = () =>
+      Array.from(
+        box.querySelectorAll(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((el) => !el.hasAttribute("disabled"));
     const onKey = (e) => {
-      if (e.key === "Escape") closeOverlay();
+      if (e.key === "Escape") {
+        closeOverlay();
+        return;
+      }
+      if (e.key === "Tab") {
+        const focusable = getFocusable();
+        if (focusable.length === 0) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        const active = this.shadowRoot?.activeElement ?? document.activeElement;
+        if (e.shiftKey && active === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && active === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
     };
 
     box.querySelector(".ntc-close").addEventListener("click", closeOverlay);
@@ -705,6 +738,7 @@ class NetworkTopologyCard extends HTMLElement {
 
     overlay.appendChild(box);
     document.body.appendChild(overlay);
+    box.querySelector(".ntc-close")?.focus();
 
     // Stamp node info onto <g> elements for tap delegation
     box.querySelectorAll("svg g").forEach((g) => {
@@ -1017,7 +1051,7 @@ class NetworkTopologyCardEditor extends HTMLElement {
       const value = Number(columnWidth.value);
       this._fire({
         ...this._config,
-        column_width: Number.isFinite(value) && value > 0 ? value : 200,
+        column_width: Number.isFinite(value) && value >= 120 ? value : 200,
       });
     });
 
