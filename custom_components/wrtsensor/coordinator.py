@@ -1110,7 +1110,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._cpu_state[host_key] = {"busy": current["busy"], "idle": current["idle"]}
         return {"cpu": cpu, "ram": ram, "disk": current.get("disk")}
 
-    def _compute_dns_rates(
+    def _compute_dns_rates_sync(
         self, current: dict[str, Any] | None
     ) -> dict[str, Any] | None:
         if current is None:
@@ -1631,9 +1631,12 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     **stats,
                 }
 
-        # DNS stats
+        # DNS stats — file I/O lives in _compute_dns_rates_sync, run on executor.
         if gw_data:
-            dns_stats = self._compute_dns_rates(parse_dns_stats(gw_data.get("dns", [])))
+            dns_stats = await self.hass.async_add_executor_job(
+                self._compute_dns_rates_sync,
+                parse_dns_stats(gw_data.get("dns", [])),
+            )
         else:
             dns_stats = None
 
