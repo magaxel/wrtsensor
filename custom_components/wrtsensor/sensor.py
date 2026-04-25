@@ -210,7 +210,7 @@ class WrtsensorDNSLatencySensor(_WrtsensorBase):
         data = self.coordinator.data
         if not data:
             return None
-        dns = data.get("dns_stats", {})
+        dns = data.get("dns_stats") or {}
         return dns.get("latency_ms")
 
 
