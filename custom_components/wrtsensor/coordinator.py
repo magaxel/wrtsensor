@@ -1092,6 +1092,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         restricts options to the same allowlist parse_wg_uci enforces.
         """
         return (
+            "echo '---WG_PROBE---'; echo ok; "
             "if command -v wg >/dev/null 2>&1; then "
             "echo '---WG_INTERFACES---'; "
             "wg show interfaces 2>/dev/null | tr ' ' '\\n'; "
@@ -1142,7 +1143,9 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         the call returns; only the structured dict reaches callers.
         """
         out = await self._ssh_run(host, self._build_wireguard_command(), timeout=8)
-        if not out or "---WG_INTERFACES---" not in out:
+        if not out or "---WG_PROBE---" not in out:
+            return {"failed": True}
+        if "---WG_INTERFACES---" not in out:
             return {}
         sections = self._parse_wg_sections(out)
         now = time.time()
@@ -1202,12 +1205,12 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if pid not in live_ids:
                 self._wg_bw_state.pop(pid, None)
 
-    async def _collect_wireguard(self) -> dict[str, Any]:
+    async def _collect_wireguard(self) -> dict[str, Any] | None:
         """Gather WG data from gateway + APs in parallel.
 
-        Returns a dict suitable for direct insertion into coordinator.data
-        under the `wireguard` key, even when no host has `wg` installed
-        (`available=False`).
+        Returns a dict suitable for direct insertion into coordinator.data under
+        the `wireguard` key. Returns None when any host's WG probe fails so
+        entities become unavailable instead of falsely going offline.
         """
         hosts = ([self._gateway_host] if self._gateway_host else []) + list(
             self._ap_hosts
@@ -1219,7 +1222,9 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         interfaces: list[dict[str, Any]] = []
         for res in results:
             if isinstance(res, Exception):
-                continue
+                return None
+            if res.get("failed"):
+                return None
             interfaces.extend(res.get("interfaces", []))
         self._compute_wg_rates(interfaces)
         return {

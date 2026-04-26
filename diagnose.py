@@ -1062,6 +1062,7 @@ def _wg_command() -> str:
     diagnose process.
     """
     return (
+        "echo '---WG_PROBE---'; echo ok; "
         "if command -v wg >/dev/null 2>&1; then "
         "echo '---WG_INTERFACES---'; "
         "wg show interfaces 2>/dev/null | tr ' ' '\\n'; "
@@ -1108,7 +1109,9 @@ def _wg_split_kv(line: str) -> tuple[str, str] | None:
 def collect_wireguard(host: str, stale_threshold_s: int = 180) -> dict[str, Any]:
     """Run secret-free WG queries on `host`; raw stdout is discarded after parsing."""
     out = ssh_run(host, _wg_command(), timeout=8)
-    if not out or "---WG_INTERFACES---" not in out:
+    if not out or "---WG_PROBE---" not in out:
+        return {"failed": True}
+    if "---WG_INTERFACES---" not in out:
         return {}
     sections: dict[str, list[str]] = {}
     current: str | None = None
@@ -2245,14 +2248,19 @@ def main() -> None:
                 try:
                     res = fut.result(timeout=12)
                 except Exception:
-                    continue
+                    wireguard = None
+                    break
+                if res.get("failed"):
+                    wireguard = None
+                    break
                 wg_interfaces.extend(res.get("interfaces", []))
-        compute_wg_rates(wg_interfaces)
-        wireguard = {
-            "available": bool(wg_interfaces),
-            "stale_threshold_s": 180,
-            "interfaces": wg_interfaces,
-        }
+            else:
+                compute_wg_rates(wg_interfaces)
+                wireguard = {
+                    "available": bool(wg_interfaces),
+                    "stale_threshold_s": 180,
+                    "interfaces": wg_interfaces,
+                }
 
     # Output JSON for HA sensor
     output = {

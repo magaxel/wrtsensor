@@ -713,6 +713,7 @@ def test_wg_command_contains_no_secret_subcommands():
 def test_wg_command_uses_safe_subcommands():
     cmd = WrtsensorCoordinator._build_wireguard_command()
     for safe in (
+        "---WG_PROBE---",
         "wg show interfaces",
         "public-key",
         "listen-port",
@@ -754,13 +755,33 @@ def test_wg_enabled_no_hosts_have_wg_returns_unavailable():
         )
         # Mock the SSH layer rather than the higher-level method so
         # _collect_wireguard's own logic exercises.
-        stack.enter_context(patch.object(c, "_ssh_run", new=AsyncMock(return_value="")))
+        stack.enter_context(
+            patch.object(
+                c,
+                "_ssh_run",
+                new=AsyncMock(return_value="---WG_PROBE---\nok\n"),
+            )
+        )
         result = asyncio.run(c._async_update_data())
     assert result["wireguard"] == {
         "available": False,
         "stale_threshold_s": 180,
         "interfaces": [],
     }
+
+
+def test_wg_probe_failure_returns_none_for_partial_wg_scan():
+    c = _make_coordinator()
+    c._enable_wireguard = True
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch.object(c, "_collect_gateway", new=AsyncMock(return_value=_MINIMAL_GW))
+        )
+        # Empty stdout means the WG probe itself did not complete; do not treat
+        # that as "no WireGuard installed".
+        stack.enter_context(patch.object(c, "_ssh_run", new=AsyncMock(return_value="")))
+        result = asyncio.run(c._async_update_data())
+    assert result["wireguard"] is None
 
 
 def test_wg_enabled_with_peers_populates_result():

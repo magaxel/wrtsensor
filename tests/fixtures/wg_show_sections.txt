@@ -1,3 +1,5 @@
+---WG_PROBE---
+ok
 ---WG_INTERFACES---
 Wireguard
 ---WG_IFACE Wireguard---
