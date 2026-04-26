@@ -140,6 +140,8 @@ shown_types:             # optional — limit to specific event types; [] shows 
 
 dnsmasq cache statistics. The main hit/miss bar defaults to the last 24 hours. If wrtsensor does not have enough history for the selected period yet, the card shows the available clean collection window instead, such as `collected for 3h`. Upstream server rows use the first available per-server counter baseline inside that same clean window, so they can appear even when older hit/miss history predates server tracking.
 
+The "Upstream latency" value and the per-upstream `· N ms` next to each server follow the configured `period:` — they are means of the per-sample dnsmasq latency reports across the window. `last_scan` shows the latest sample only.
+
 Requires the **Collect DNS stats** option (on by default). When the option is off, or when no gateway is configured, the card displays a short message pointing back at the integration options instead of a chart.
 
 Breaking change: `lifetime` is no longer a selectable or displayed DNS card period. Existing cards with `period: lifetime` fall back to `last_24h`; re-save the card config to update it. Upstream query counts now follow the selected period instead of showing dnsmasq lifetime totals. `last_scan` rates are intentionally hidden and display as `—` because one-scan rates are noisy.
@@ -154,6 +156,8 @@ max_servers: 8
 ```
 
 Breaking change: DNS period values are now exposed under `dns_stats.last_24h`, `dns_stats.last_8h`, `dns_stats.last_1h`, and `dns_stats.last_scan`; `dns_stats.lifetime` is no longer emitted.
+
+Breaking change: top-level `dns_stats.latency_ms` and `dns_stats.servers` are no longer emitted. Read the period equivalents instead — e.g. `dns_stats.last_1h.latency_ms` and `dns_stats.last_24h.servers`. The `sensor.<entry>_dns_latency` entity now reports the `last_scan` window. After upgrade, DNS history is reset (samples without latency data are discarded on first load), so the card briefly shows "collected for Xm" until the new window fills in.
 
 ### `history-graph` — CPU
 
