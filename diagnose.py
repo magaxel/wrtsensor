@@ -10,6 +10,7 @@ Usage:
 from __future__ import annotations
 
 import concurrent.futures
+import hashlib
 import ipaddress
 import json
 import os
@@ -1042,6 +1043,208 @@ def parse_conntrack(lines: list[str]) -> dict[str, dict[str, int]]:
     return result
 
 
+_WG_UCI_ALLOWED_OPTIONS = (
+    "description",
+    "public_key",
+    "allowed_ips",
+    "endpoint_host",
+    "endpoint_port",
+)
+
+
+def _wg_command() -> str:
+    """Secret-free `wg show` subcommand bundle.
+
+    Avoids `wg show all dump`, `wg show <iface> private-key`, `wg show <iface>
+    preshared-keys`, `uci -q export network`, and any read of /etc/wireguard/*
+    or /etc/config/network. Private and preshared keys are never read into the
+    diagnose process.
+    """
+    return (
+        "if command -v wg >/dev/null 2>&1; then "
+        "echo '---WG_INTERFACES---'; "
+        "wg show interfaces 2>/dev/null | tr ' ' '\\n'; "
+        "for iface in $(wg show interfaces 2>/dev/null); do "
+        'echo "---WG_IFACE $iface---"; '
+        'wg show "$iface" public-key 2>/dev/null; '
+        'wg show "$iface" listen-port 2>/dev/null; '
+        'echo "---WG_PEERS $iface---"; '
+        'wg show "$iface" peers 2>/dev/null; '
+        'echo "---WG_ENDPOINTS $iface---"; '
+        'wg show "$iface" endpoints 2>/dev/null; '
+        'echo "---WG_ALLOWED_IPS $iface---"; '
+        'wg show "$iface" allowed-ips 2>/dev/null; '
+        'echo "---WG_HANDSHAKES $iface---"; '
+        'wg show "$iface" latest-handshakes 2>/dev/null; '
+        'echo "---WG_TRANSFER $iface---"; '
+        'wg show "$iface" transfer 2>/dev/null; '
+        'echo "---WG_KEEPALIVE $iface---"; '
+        'wg show "$iface" persistent-keepalive 2>/dev/null; '
+        "done; "
+        "echo '---WG_UCI---'; "
+        "uci -q show network 2>/dev/null | awk -F= '"
+        "$1 ~ /\\.description$/ || "
+        "$1 ~ /\\.public_key$/ || "
+        "$1 ~ /\\.allowed_ips$/ || "
+        "$1 ~ /\\.endpoint_host$/ || "
+        "$1 ~ /\\.endpoint_port$/ { print }'; "
+        "fi"
+    )
+
+
+def _wg_peer_id(host: str, iface: str, public_key: str) -> str:
+    digest = hashlib.sha1(f"{host}|{iface}|{public_key}".encode()).hexdigest()
+    return digest[:16]
+
+
+def _wg_split_kv(line: str) -> tuple[str, str] | None:
+    parts = line.split(None, 1)
+    if len(parts) != 2:
+        return None
+    return parts[0], parts[1].strip()
+
+
+def collect_wireguard(host: str, stale_threshold_s: int = 180) -> dict[str, Any]:
+    """Run secret-free WG queries on `host`; raw stdout is discarded after parsing."""
+    out = ssh_run(host, _wg_command(), timeout=8)
+    if not out or "---WG_INTERFACES---" not in out:
+        return {}
+    sections: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in out.splitlines():
+        m = re.match(r"^---(WG_[A-Z_]+(?:\s+\S+)?)---$", line)
+        if m:
+            current = m.group(1)
+            sections[current] = []
+        elif current is not None:
+            sections[current].append(line)
+
+    iface_names = [ln.strip() for ln in sections.get("WG_INTERFACES", []) if ln.strip()]
+    now = time.time()
+    interfaces: list[dict[str, Any]] = []
+    host_label = host.split("@")[-1]
+    for iface in iface_names:
+        meta = [
+            ln.strip() for ln in sections.get(f"WG_IFACE {iface}", []) if ln.strip()
+        ]
+        if len(meta) < 2:
+            continue
+        public_key = meta[0]
+        try:
+            listen_port: int | None = int(meta[1])
+        except ValueError:
+            listen_port = None
+        peer_keys = [
+            ln.strip() for ln in sections.get(f"WG_PEERS {iface}", []) if ln.strip()
+        ]
+        endpoints: dict[str, str | None] = {}
+        for raw in sections.get(f"WG_ENDPOINTS {iface}", []):
+            kv = _wg_split_kv(raw)
+            if kv is None:
+                continue
+            pk, val = kv
+            endpoints[pk] = None if val == "(none)" else val
+        allowed_map: dict[str, list[str]] = {}
+        for raw in sections.get(f"WG_ALLOWED_IPS {iface}", []):
+            kv = _wg_split_kv(raw)
+            if kv is None:
+                continue
+            pk, val = kv
+            allowed_map[pk] = (
+                []
+                if val == "(none)"
+                else [v.strip() for v in val.split(",") if v.strip()]
+            )
+        handshakes: dict[str, int] = {}
+        for raw in sections.get(f"WG_HANDSHAKES {iface}", []):
+            kv = _wg_split_kv(raw)
+            if kv is None:
+                continue
+            pk, val = kv
+            try:
+                handshakes[pk] = int(val.strip())
+            except ValueError:
+                continue
+        transfer: dict[str, tuple[int, int]] = {}
+        for raw in sections.get(f"WG_TRANSFER {iface}", []):
+            cols = raw.split()
+            if len(cols) != 3:
+                continue
+            try:
+                transfer[cols[0]] = (int(cols[1]), int(cols[2]))
+            except ValueError:
+                continue
+        keepalive: dict[str, int | None] = {}
+        for raw in sections.get(f"WG_KEEPALIVE {iface}", []):
+            kv = _wg_split_kv(raw)
+            if kv is None:
+                continue
+            pk, val = kv
+            if val == "off":
+                keepalive[pk] = None
+            else:
+                try:
+                    keepalive[pk] = int(val)
+                except ValueError:
+                    keepalive[pk] = None
+
+        # UCI name lookup
+        uci_lines = sections.get("WG_UCI", [])
+        by_section: dict[str, dict[str, str]] = {}
+        for raw in uci_lines:
+            line = raw.strip()
+            if not line or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            parts = key.split(".")
+            if len(parts) != 3:
+                continue
+            _, section, option = parts
+            if option not in _WG_UCI_ALLOWED_OPTIONS:
+                continue
+            v = value.strip()
+            if len(v) >= 2 and v[0] in ("'", '"') and v[-1] == v[0]:
+                v = v[1:-1]
+            by_section.setdefault(section, {})[option] = v
+        names: dict[str, str] = {}
+        for fields in by_section.values():
+            pk = fields.get("public_key")
+            if pk and "description" in fields:
+                names[pk] = fields["description"]
+
+        peers: list[dict[str, Any]] = []
+        for pk in peer_keys:
+            last_hs = handshakes.get(pk, 0)
+            rx_b, tx_b = transfer.get(pk, (0, 0))
+            online = last_hs > 0 and (now - last_hs) <= stale_threshold_s
+            peers.append(
+                {
+                    "id": _wg_peer_id(host_label, iface, pk),
+                    "name": names.get(pk) or pk[:8],
+                    "public_key": pk,
+                    "endpoint": endpoints.get(pk),
+                    "allowed_ips": allowed_map.get(pk, []),
+                    "last_handshake": last_hs,
+                    "rx_bytes": rx_b,
+                    "tx_bytes": tx_b,
+                    "rx_Bps": None,
+                    "tx_Bps": None,
+                    "persistent_keepalive_s": keepalive.get(pk),
+                    "online": online,
+                }
+            )
+        interfaces.append(
+            {
+                "host": host_label,
+                "name": iface,
+                "public_key": public_key,
+                "listen_port": listen_port,
+                "peers": peers,
+            }
+        )
+    return {"interfaces": interfaces}
+
+
 def compute_device_rates(
     wifi_bytes: dict[str, dict[str, int]],
     wired_bytes: dict[str, dict[str, int]],
@@ -1967,6 +2170,26 @@ def main() -> None:
     # dnsmasq DNS cache stats
     dns_stats = compute_dns_rates(parse_dns_stats(gw_data.get("dns", [])))
 
+    # WireGuard (secret-free; private/preshared keys never read)
+    wg_interfaces: list[dict[str, Any]] = []
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=max(1, 1 + len(ap_hosts))
+    ) as pool:
+        wg_futures = [pool.submit(collect_wireguard, gw_host)] + [
+            pool.submit(collect_wireguard, h) for h in ap_hosts
+        ]
+        for fut in wg_futures:
+            try:
+                res = fut.result(timeout=12)
+            except Exception:
+                continue
+            wg_interfaces.extend(res.get("interfaces", []))
+    wireguard = {
+        "available": bool(wg_interfaces),
+        "stale_threshold_s": 180,
+        "interfaces": wg_interfaces,
+    }
+
     # Output JSON for HA sensor
     output = {
         "device_count": sum(1 for d in devices if d.online),
@@ -1978,6 +2201,7 @@ def main() -> None:
         "wan_tx_rate": tx_rate,
         "host_stats": host_stats,
         "dns_stats": dns_stats,
+        "wireguard": wireguard,
         "devices": [
             {
                 "mac": d.mac,

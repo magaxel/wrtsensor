@@ -6,6 +6,7 @@ straightforward to unit-test without a running Home Assistant instance.
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import json
 import re
@@ -234,6 +235,194 @@ def parse_dns_stats(lines: list[str]) -> dict[str, Any] | None:
     if lat_weight > 0:
         result["latency_ms"] = round(lat_weighted_sum / lat_weight, 1)
     return result
+
+
+_WG_UCI_ALLOWED_OPTIONS = (
+    "description",
+    "public_key",
+    "allowed_ips",
+    "endpoint_host",
+    "endpoint_port",
+)
+
+
+def wg_peer_id(host: str, iface: str, public_key: str) -> str:
+    """Stable opaque peer id used for device_tracker unique_id.
+
+    Hashed so registry IDs and attributes never embed the raw pubkey.
+    """
+    digest = hashlib.sha1(f"{host}|{iface}|{public_key}".encode()).hexdigest()
+    return digest[:16]
+
+
+def _split_kv_line(line: str) -> tuple[str, str] | None:
+    parts = line.split(None, 1)
+    if len(parts) != 2:
+        return None
+    return parts[0], parts[1].strip()
+
+
+def parse_wg_show_sections(
+    host: str, sections: dict[str, list[str]], stale_threshold_s: int, now: float
+) -> list[dict[str, Any]]:
+    """Stitch the per-subcommand `wg show` outputs into structured interfaces.
+
+    Expected sections (produced by the SSH command in coordinator._get_wireguard_info):
+
+      WG_INTERFACES                     -> one iface name per line
+      WG_IFACE <iface>                  -> 2 lines: <public-key>, <listen-port>
+      WG_PEERS <iface>                  -> one pubkey per line
+      WG_ENDPOINTS <iface>              -> "<pubkey>\\t<endpoint|(none)>"
+      WG_ALLOWED_IPS <iface>            -> "<pubkey>\\t<csv-or-(none)>"
+      WG_HANDSHAKES <iface>             -> "<pubkey>\\t<epoch>"
+      WG_TRANSFER <iface>               -> "<pubkey>\\t<rx>\\t<tx>"
+      WG_KEEPALIVE <iface>              -> "<pubkey>\\t<seconds|off>"
+
+    None of these subcommands ever emit private or preshared keys, so this parser
+    has no secret-stripping logic — by design, secrets are blocked at the source.
+    """
+    iface_names = [ln.strip() for ln in sections.get("WG_INTERFACES", []) if ln.strip()]
+    interfaces: list[dict[str, Any]] = []
+    for iface in iface_names:
+        meta = [
+            ln.strip() for ln in sections.get(f"WG_IFACE {iface}", []) if ln.strip()
+        ]
+        if len(meta) < 2:
+            continue
+        public_key = meta[0]
+        listen_port_raw = meta[1]
+        try:
+            listen_port = int(listen_port_raw)
+        except ValueError:
+            listen_port = None
+
+        peer_keys = [
+            ln.strip() for ln in sections.get(f"WG_PEERS {iface}", []) if ln.strip()
+        ]
+
+        endpoints: dict[str, str | None] = {}
+        for raw in sections.get(f"WG_ENDPOINTS {iface}", []):
+            kv = _split_kv_line(raw)
+            if kv is None:
+                continue
+            pk, val = kv
+            endpoints[pk] = None if val == "(none)" else val
+
+        allowed_map: dict[str, list[str]] = {}
+        for raw in sections.get(f"WG_ALLOWED_IPS {iface}", []):
+            kv = _split_kv_line(raw)
+            if kv is None:
+                continue
+            pk, val = kv
+            if val == "(none)":
+                allowed_map[pk] = []
+            else:
+                allowed_map[pk] = [v.strip() for v in val.split(",") if v.strip()]
+
+        handshakes: dict[str, int] = {}
+        for raw in sections.get(f"WG_HANDSHAKES {iface}", []):
+            kv = _split_kv_line(raw)
+            if kv is None:
+                continue
+            pk, val = kv
+            try:
+                handshakes[pk] = int(val.strip())
+            except ValueError:
+                continue
+
+        transfer: dict[str, tuple[int, int]] = {}
+        for raw in sections.get(f"WG_TRANSFER {iface}", []):
+            cols = raw.split()
+            if len(cols) != 3:
+                continue
+            pk, rx_s, tx_s = cols
+            try:
+                transfer[pk] = (int(rx_s), int(tx_s))
+            except ValueError:
+                continue
+
+        keepalive: dict[str, int | None] = {}
+        for raw in sections.get(f"WG_KEEPALIVE {iface}", []):
+            kv = _split_kv_line(raw)
+            if kv is None:
+                continue
+            pk, val = kv
+            if val == "off":
+                keepalive[pk] = None
+            else:
+                try:
+                    keepalive[pk] = int(val)
+                except ValueError:
+                    keepalive[pk] = None
+
+        peers: list[dict[str, Any]] = []
+        for pk in peer_keys:
+            last_hs = handshakes.get(pk, 0)
+            rx_b, tx_b = transfer.get(pk, (0, 0))
+            online = last_hs > 0 and (now - last_hs) <= stale_threshold_s
+            peers.append(
+                {
+                    "id": wg_peer_id(host, iface, pk),
+                    "public_key": pk,
+                    "endpoint": endpoints.get(pk),
+                    "allowed_ips": allowed_map.get(pk, []),
+                    "last_handshake": last_hs,
+                    "rx_bytes": rx_b,
+                    "tx_bytes": tx_b,
+                    "persistent_keepalive_s": keepalive.get(pk),
+                    "online": online,
+                }
+            )
+
+        interfaces.append(
+            {
+                "host": host,
+                "name": iface,
+                "public_key": public_key,
+                "listen_port": listen_port,
+                "peers": peers,
+            }
+        )
+    return interfaces
+
+
+def parse_wg_uci(lines: list[str]) -> dict[str, dict[str, str]]:
+    """Parse awk-filtered `uci -q show network` lines into pubkey -> metadata.
+
+    Format per line: `network.<section>.<option>=<value>` (value may be quoted).
+    The awk filter in the SSH command already restricts options to the allowlist,
+    but we apply the same allowlist here as defence in depth so unfiltered input
+    (e.g. a future code change) cannot leak forbidden keys.
+    """
+    by_section: dict[str, dict[str, str]] = {}
+    for raw in lines:
+        line = raw.strip()
+        if not line or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key_parts = key.split(".")
+        if len(key_parts) != 3:
+            continue
+        _, section, option = key_parts
+        if option not in _WG_UCI_ALLOWED_OPTIONS:
+            continue
+        v = value.strip()
+        if len(v) >= 2 and v[0] == "'" and v[-1] == "'":
+            v = v[1:-1]
+        elif len(v) >= 2 and v[0] == '"' and v[-1] == '"':
+            v = v[1:-1]
+        by_section.setdefault(section, {})[option] = v
+
+    by_pubkey: dict[str, dict[str, str]] = {}
+    for fields in by_section.values():
+        pk = fields.get("public_key")
+        if not pk:
+            continue
+        entry: dict[str, str] = {}
+        if "description" in fields:
+            entry["name"] = fields["description"]
+        by_pubkey[pk] = entry
+    return by_pubkey
 
 
 def parse_conntrack(lines: list[str]) -> dict[str, dict[str, int]]:

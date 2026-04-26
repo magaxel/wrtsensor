@@ -76,6 +76,7 @@ else:
     _init_mod = sys.modules[_init_name]
 
 _prune = _init_mod._prune_orphaned_host_entities
+_prune_wg = _init_mod._prune_wireguard_entities
 _remove_legacy = _init_mod._remove_legacy_event_log_entity
 _ws_recent_events = _init_mod._ws_recent_events
 
@@ -296,6 +297,7 @@ def test_setup_entry_does_not_touch_lovelace_storage():
     class _FakeCoordinator:
         def __init__(self, hass, entry):
             self.data = {"host_stats": {}}
+            self._enable_wireguard = False
 
         async def async_setup(self):
             return None
@@ -331,11 +333,15 @@ def test_setup_entry_does_not_touch_lovelace_storage():
     original_coordinator = _init_mod.WrtsensorCoordinator
     original_register = _init_mod._register_static_path
     original_prune = _init_mod._prune_orphaned_host_entities
+    original_prune_wg = _init_mod._prune_wireguard_entities
     try:
         _init_mod.WrtsensorCoordinator = _FakeCoordinator
         _init_mod._register_static_path = _fake_register_static_path
         _init_mod._prune_orphaned_host_entities = lambda hass, entry, coordinator: (
             calls.append("prune")
+        )
+        _init_mod._prune_wireguard_entities = lambda hass, entry, coordinator: (
+            calls.append("prune_wg")
         )
 
         asyncio.run(_init_mod.async_setup_entry(_FakeHass(), _FakeEntry()))
@@ -343,7 +349,98 @@ def test_setup_entry_does_not_touch_lovelace_storage():
         _init_mod.WrtsensorCoordinator = original_coordinator
         _init_mod._register_static_path = original_register
         _init_mod._prune_orphaned_host_entities = original_prune
+        _init_mod._prune_wireguard_entities = original_prune_wg
 
     assert "static" in calls
     assert "prune" in calls
     assert all(call != "_register_lovelace_resources" for call in calls)
+
+
+# ── WireGuard registry pruning ────────────────────────────────────────────────
+
+
+def _make_wg_coordinator(*, enable: bool, data):
+    c = types.SimpleNamespace()
+    c._enable_wireguard = enable
+    c.data = data
+    return c
+
+
+def test_wg_prune_removes_orphan_peer_when_enabled():
+    _reset_registry()
+    entry = _make_entry()
+    _singleton_registry.add(
+        "device_tracker.wg_alice", "test-entry_wgpeer_aaa", "test-entry"
+    )
+    _singleton_registry.add(
+        "device_tracker.wg_bob", "test-entry_wgpeer_bbb", "test-entry"
+    )
+    _singleton_registry.add("sensor.wireguard", "test-entry_wireguard", "test-entry")
+
+    coordinator = _make_wg_coordinator(
+        enable=True,
+        data={
+            "wireguard": {
+                "available": True,
+                "interfaces": [
+                    {"peers": [{"id": "aaa"}]},  # only aaa is live
+                ],
+            }
+        },
+    )
+    _prune_wg(None, entry, coordinator)
+
+    assert _singleton_registry.async_get("device_tracker.wg_alice") is not None
+    assert _singleton_registry.async_get("device_tracker.wg_bob") is None
+    # WG sensor stays — option still on
+    assert _singleton_registry.async_get("sensor.wireguard") is not None
+
+
+def test_wg_prune_removes_all_when_option_disabled():
+    _reset_registry()
+    entry = _make_entry()
+    _singleton_registry.add(
+        "device_tracker.wg_alice", "test-entry_wgpeer_aaa", "test-entry"
+    )
+    _singleton_registry.add(
+        "device_tracker.wg_bob", "test-entry_wgpeer_bbb", "test-entry"
+    )
+    _singleton_registry.add("sensor.wireguard", "test-entry_wireguard", "test-entry")
+    _singleton_registry.add("sensor.unrelated", "test-entry_dns_hit_pct", "test-entry")
+
+    coordinator = _make_wg_coordinator(enable=False, data=None)
+    _prune_wg(None, entry, coordinator)
+
+    assert _singleton_registry.async_get("device_tracker.wg_alice") is None
+    assert _singleton_registry.async_get("device_tracker.wg_bob") is None
+    assert _singleton_registry.async_get("sensor.wireguard") is None
+    # Unrelated entries untouched
+    assert _singleton_registry.async_get("sensor.unrelated") is not None
+
+
+def test_wg_prune_skips_on_partial_scan():
+    """If the option is on but data['wireguard'] is None (partial scan), keep all trackers."""
+    _reset_registry()
+    entry = _make_entry()
+    _singleton_registry.add(
+        "device_tracker.wg_alice", "test-entry_wgpeer_aaa", "test-entry"
+    )
+
+    coordinator = _make_wg_coordinator(enable=True, data={"wireguard": None})
+    _prune_wg(None, entry, coordinator)
+
+    assert _singleton_registry.async_get("device_tracker.wg_alice") is not None
+
+
+def test_wg_prune_skips_when_no_data():
+    """Cold start (coordinator.data is None): leave registry alone."""
+    _reset_registry()
+    entry = _make_entry()
+    _singleton_registry.add(
+        "device_tracker.wg_alice", "test-entry_wgpeer_aaa", "test-entry"
+    )
+
+    coordinator = _make_wg_coordinator(enable=True, data=None)
+    _prune_wg(None, entry, coordinator)
+
+    assert _singleton_registry.async_get("device_tracker.wg_alice") is not None

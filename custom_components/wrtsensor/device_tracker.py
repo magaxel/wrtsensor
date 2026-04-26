@@ -27,16 +27,27 @@ async def async_setup_entry(
 ) -> None:
     coordinator: WrtsensorCoordinator = hass.data[DOMAIN][entry.entry_id]
     tracked: set[str] = set()
+    tracked_peers: set[str] = set()
 
     @callback
     def _handle_coordinator_update() -> None:
         data = coordinator.data or {}
-        new_entities = []
+        new_entities: list[ScannerEntity] = []
         for device in data.get("devices", []):
             mac = device.get("mac", "").lower()
             if mac and mac not in tracked:
                 tracked.add(mac)
                 new_entities.append(WrtsensorDeviceTracker(coordinator, entry, mac))
+        wg = data.get("wireguard") or {}
+        for iface in wg.get("interfaces", []):
+            for peer in iface.get("peers", []):
+                pid = peer.get("id")
+                if not pid or pid in tracked_peers:
+                    continue
+                tracked_peers.add(pid)
+                new_entities.append(
+                    WrtsensorWireguardPeerTracker(coordinator, entry, pid)
+                )
         if new_entities:
             async_add_entities(new_entities)
 
@@ -105,4 +116,85 @@ class WrtsensorDeviceTracker(CoordinatorEntity[WrtsensorCoordinator], ScannerEnt
             "rx_total": dev.get("rx_total"),
             "tx_total": dev.get("tx_total"),
             "random_mac": _is_random_mac(self._mac),
+        }
+
+
+class WrtsensorWireguardPeerTracker(
+    CoordinatorEntity[WrtsensorCoordinator], ScannerEntity
+):
+    _attr_has_entity_name = True
+    _attr_source_type = SourceType.ROUTER
+
+    def __init__(
+        self,
+        coordinator: WrtsensorCoordinator,
+        entry: ConfigEntry,
+        peer_id: str,
+    ) -> None:
+        super().__init__(coordinator)
+        self._peer_id = peer_id
+        self._attr_unique_id = f"{entry.entry_id}_wgpeer_{peer_id}"
+        self._attr_device_info = _device_info(entry)
+
+    def _get_peer(self) -> dict[str, Any] | None:
+        wg = (self.coordinator.data or {}).get("wireguard") or {}
+        for iface in wg.get("interfaces", []):
+            for peer in iface.get("peers", []):
+                if peer.get("id") == self._peer_id:
+                    return {**peer, "_iface": iface.get("name", "")}
+        return None
+
+    @property
+    def name(self) -> str:
+        peer = self._get_peer()
+        if peer:
+            label = peer.get("name") or peer.get("public_key", "")[:8]
+            return f"WG {label}"
+        return f"WG {self._peer_id}"
+
+    @property
+    def is_connected(self) -> bool:
+        peer = self._get_peer()
+        return bool(peer and peer.get("online"))
+
+    @property
+    def ip_address(self) -> str | None:
+        peer = self._get_peer()
+        if not peer:
+            return None
+        allowed = peer.get("allowed_ips") or []
+        if not allowed:
+            return None
+        first = allowed[0].split("/", 1)[0]
+        return first or None
+
+    @property
+    def mac_address(self) -> str | None:
+        return None
+
+    @property
+    def hostname(self) -> str | None:
+        peer = self._get_peer()
+        return peer.get("name") if peer else None
+
+    @property
+    def unique_id(self) -> str:
+        return self._attr_unique_id
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        peer = self._get_peer()
+        if not peer:
+            return {}
+        return {
+            "interface": peer.get("_iface"),
+            "endpoint": peer.get("endpoint"),
+            "allowed_ips": peer.get("allowed_ips"),
+            "last_handshake": peer.get("last_handshake"),
+            "rx_bytes": peer.get("rx_bytes"),
+            "tx_bytes": peer.get("tx_bytes"),
+            "rx_Bps": peer.get("rx_Bps"),
+            "tx_Bps": peer.get("tx_Bps"),
+            "persistent_keepalive_s": peer.get("persistent_keepalive_s"),
+            "public_key_short": (peer.get("public_key") or "")[:8],
         }

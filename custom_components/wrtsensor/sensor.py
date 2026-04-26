@@ -37,6 +37,8 @@ async def async_setup_entry(
             WrtsensorDNSHitPctSensor(coordinator, entry),
             WrtsensorDNSLatencySensor(coordinator, entry),
         ]
+    if coordinator._enable_wireguard:
+        entities.append(WrtsensorWireguardSensor(coordinator, entry))
 
     async_add_entities(entities)
 
@@ -213,6 +215,40 @@ class WrtsensorDNSLatencySensor(_WrtsensorBase):
         dns = data.get("dns_stats") or {}
         last_scan = dns.get("last_scan") or {}
         return last_scan.get("latency_ms")
+
+
+class WrtsensorWireguardSensor(_WrtsensorBase):
+    _attr_name = "WireGuard"
+    _attr_icon = "mdi:vpn"
+
+    def __init__(self, coordinator: WrtsensorCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_wireguard"
+
+    @property
+    def native_value(self) -> int | None:
+        data = self.coordinator.data
+        if not data:
+            return None
+        wg = data.get("wireguard")
+        if not wg:
+            return 0
+        return sum(
+            1
+            for iface in wg.get("interfaces", [])
+            for peer in iface.get("peers", [])
+            if peer.get("online")
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        data = self.coordinator.data or {}
+        wg = data.get("wireguard") or {
+            "available": False,
+            "stale_threshold_s": self.coordinator._wg_stale_threshold_s,
+            "interfaces": [],
+        }
+        return {"wireguard": wg}
 
 
 class _WrtsensorHostBase(_WrtsensorBase):
