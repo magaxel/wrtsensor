@@ -267,7 +267,6 @@ class DnsStatsCard extends LitElement {
       Math.floor(num(this._config.max_servers) ?? DEFAULT_MAX_SERVERS),
     );
     const periodServers = stats.servers ?? [];
-    const rawServers = d.servers ?? [];
     const servers = periodServers
       .filter((s) => this._config.show_ipv6 || !String(s.addr ?? "").includes(":"))
       .slice(0, maxServers);
@@ -302,7 +301,7 @@ class DnsStatsCard extends LitElement {
         <div class="grid">
           <div class="kv">
             <span class="k">Upstream latency</span>
-            <span class="v">${fmtMs(d.latency_ms)}</span>
+            <span class="v">${fmtMs(stats.latency_ms)}</span>
           </div>
           <div class="kv">
             <span class="k">Cache size</span>
@@ -319,15 +318,8 @@ class DnsStatsCard extends LitElement {
         </div>
 
         ${
-          rawServers.length && !periodServers.length
+          servers.length
             ? html`
-                <div class="servers">
-                  <div class="hdr">Upstream servers</div>
-                  <div class="unavailable">No upstream query data for this window yet</div>
-                </div>
-              `
-            : servers.length
-              ? html`
                 <div class="servers">
                   <div class="hdr">Upstream servers</div>
                   ${servers.map(
@@ -343,7 +335,7 @@ class DnsStatsCard extends LitElement {
                   )}
                 </div>
               `
-              : nothing
+            : nothing
         }
       </ha-card>
     `;

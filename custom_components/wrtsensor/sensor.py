@@ -211,7 +211,8 @@ class WrtsensorDNSLatencySensor(_WrtsensorBase):
         if not data:
             return None
         dns = data.get("dns_stats") or {}
-        return dns.get("latency_ms")
+        last_scan = dns.get("last_scan") or {}
+        return last_scan.get("latency_ms")
 
 
 class _WrtsensorHostBase(_WrtsensorBase):

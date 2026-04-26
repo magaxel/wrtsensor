@@ -607,6 +607,7 @@ def _dns_empty_rollup() -> dict[str, Any]:
         "elapsed_s": 0,
         "label": "just started",
         "servers": [],
+        "latency_ms": None,
     }
 
 
@@ -653,6 +654,29 @@ def _dns_clean_segment_start(history: list[dict[str, Any]]) -> int:
     return segment_start
 
 
+def _dns_window_latency(samples: list[dict[str, Any]]) -> float | None:
+    vals = [float(s["latency_ms"]) for s in samples if s.get("latency_ms") is not None]
+    if not vals:
+        return None
+    return round(sum(vals) / len(vals), 1)
+
+
+def _dns_window_server_latency(
+    samples: list[dict[str, Any]], addr: str
+) -> float | None:
+    vals: list[float] = []
+    for s in samples:
+        for srv in s.get("servers", []):
+            if srv.get("addr") != addr:
+                continue
+            lat = srv.get("latency_ms")
+            if lat is not None:
+                vals.append(float(lat))
+    if not vals:
+        return None
+    return round(sum(vals) / len(vals), 1)
+
+
 def _dns_period_rollup(
     segment: list[dict[str, Any]], now: int, window_s: int, full_label: str
 ) -> dict[str, Any]:
@@ -679,6 +703,14 @@ def _dns_period_rollup(
         return _dns_empty_rollup()
     if not rollup["servers"]:
         rollup["servers"] = _dns_period_server_rollup(segment[baseline_idx:], current)
+    window_samples = segment[baseline_idx:]
+    rollup["latency_ms"] = _dns_window_latency(window_samples)
+    for server in rollup["servers"]:
+        avg = _dns_window_server_latency(window_samples, server["addr"])
+        if avg is not None:
+            server["latency_ms"] = avg
+        else:
+            server.pop("latency_ms", None)
     return rollup
 
 
@@ -691,10 +723,11 @@ def _dns_last_scan_rollup(segment: list[dict[str, Any]]) -> dict[str, Any]:
     elapsed_s = int(current["ts"]) - int(previous["ts"])
     if elapsed_s <= 0 or elapsed_s > DNS_LAST_SCAN_MAX_GAP_S:
         return _dns_empty_rollup()
-    return (
-        _dns_rollup(previous, current, label="last scan", include_rates=False)
-        or _dns_empty_rollup()
-    )
+    rollup = _dns_rollup(previous, current, label="last scan", include_rates=False)
+    if rollup is None:
+        return _dns_empty_rollup()
+    rollup["latency_ms"] = current.get("latency_ms")
+    return rollup
 
 
 # ── Coordinator ────────────────────────────────────────────────────────────────
@@ -1138,8 +1171,6 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "last_8h": _dns_period_rollup(segment, now, 8 * 60 * 60, "last 8h"),
             "last_1h": _dns_period_rollup(segment, now, 60 * 60, "last 1h"),
             "last_scan": _dns_last_scan_rollup(segment),
-            "latency_ms": current.get("latency_ms"),
-            "servers": current.get("servers", []),
         }
 
     def _load_dns_history(self) -> list[dict[str, Any]]:
@@ -1149,10 +1180,13 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for line in self._dns_history_path.read_text().splitlines():
             try:
                 raw = json.loads(line)
+                if raw.get("latency_ms") is None:
+                    continue
                 sample = {
                     "ts": int(raw["ts"]),
                     "hits": int(raw["hits"]),
                     "misses": int(raw["misses"]),
+                    "latency_ms": raw["latency_ms"],
                     "servers": [
                         {
                             "addr": str(server["addr"]),
@@ -1180,6 +1214,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "ts": now,
             "hits": int(current["hits"]),
             "misses": int(current["misses"]),
+            "latency_ms": current.get("latency_ms"),
             "servers": current.get("servers", []),
         }
         history = [entry for entry in self._load_dns_history() if entry["ts"] >= cutoff]
