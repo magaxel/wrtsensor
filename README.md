@@ -34,6 +34,7 @@ Per scan (every 60 s) the integration produces a single JSON object with:
 - **Host stats** — CPU%, RAM%, root disk%, hardware model, and board name for the gateway and each AP. The hardware model (from `ubus call system board`) is shown in the HA device registry for each host's sensor cluster.
 - **WAN** — IPv4, IPv6, live RX/TX rate, cumulative byte totals.
 - **DNS cache** — dnsmasq cache hit/miss counts for 24h, 8h, 1h, and last-scan windows, per-window upstream query counts, per-upstream latency, and weighted average upstream latency.
+- **WireGuard** *(optional, off by default)* — per-peer endpoint, allowed IPs, last-handshake age, transfer counters, live throughput, and online state. Auto-detected on the gateway and each AP every scan via secret-free `wg show` subcommands; private and preshared keys are never read into HA.
 - **Event log** — HACS integration keeps the most recent 500 events in memory only (cleared on HA restart/reload). The manual `command_line` install keeps its separate JSONL event file.
 
 All of this comes from a single 20 s SSH call to the gateway plus parallel SSH calls to each AP — no redundant shell sensors.
@@ -67,6 +68,7 @@ All of this comes from a single 20 s SSH call to the gateway plus parallel SSH c
    - `/wrtsensor_static/network-topology-card.js?v=1.0.0` — JavaScript Module
    - `/wrtsensor_static/network-events-card.js?v=1.0.0` — JavaScript Module
    - `/wrtsensor_static/dns-stats-card.js?v=1.0.0` — JavaScript Module
+   - `/wrtsensor_static/wireguard-card.js?v=1.0.3` — JavaScript Module *(only needed if you enable the WireGuard option)*
 
 > If key authentication isn't set up yet, the config flow will ask for a password once and provision the public key into `/etc/dropbear/authorized_keys` on each OpenWrt box for you. The password is never stored.
 
@@ -158,6 +160,19 @@ max_servers: 8
 Breaking change: DNS period values are now exposed under `dns_stats.last_24h`, `dns_stats.last_8h`, `dns_stats.last_1h`, and `dns_stats.last_scan`; `dns_stats.lifetime` is no longer emitted.
 
 Breaking change: top-level `dns_stats.latency_ms` and `dns_stats.servers` are no longer emitted. Read the period equivalents instead — e.g. `dns_stats.last_1h.latency_ms` and `dns_stats.last_24h.servers`. The `sensor.<entry>_dns_latency` entity now reports the `last_scan` window. After upgrade, DNS history is reset (samples without latency data are discarded on first load), so the card briefly shows "collected for Xm" until the new window fills in.
+
+### `wireguard-card`
+
+Per-peer WireGuard tunnel status. Requires the **Show WireGuard connections** option (off by default; turn it on under **Settings → Devices & Services → wrtsensor → Configure**). The card reads from the `sensor.<entry>_wireguard` entity that the integration creates when the option is on, and shows one row per peer: name (from the UCI `option description` if set, else the first 8 chars of the public key), endpoint, allowed IPs, last-handshake age, RX/TX totals, and live rate. Stale peers (no handshake within the configured idle timeout, default 180 s) are greyed out.
+
+```yaml
+type: custom:wireguard-card
+entity: sensor.my_router_wireguard
+```
+
+Each peer also gets its own `device_tracker` entity with a stable `unique_id` of `<entry_id>_wgpeer_<sha1[:16]>`. State is `home` when the peer's last handshake is within the idle timeout, `not_home` otherwise — useful for presence automations driven by VPN state. HA picks the slugified entity_id; pick the entity from the picker rather than guessing the slug.
+
+Security: wrtsensor never reads WireGuard private or preshared keys. Collection uses `wg show <iface> <subcommand>` queries (`public-key`, `listen-port`, `peers`, `endpoints`, `allowed-ips`, `latest-handshakes`, `transfer`, `persistent-keepalive`) and an awk-filtered `uci -q show network` that drops every option name except `description`, `public_key`, `allowed_ips`, `endpoint_host`, `endpoint_port`. `wg show all dump`, `wg-quick`, `cat /etc/config/network`, and `cat /etc/wireguard/*` are never executed.
 
 ### `history-graph` — CPU
 
@@ -272,7 +287,7 @@ logbook:
 
 **All APs in log as "unreachable"** — APs must be reachable from HA over SSH with the same key as the gateway, on the SSH port configured for the integration (default 22; change in the integration's Options). Check with `ssh -i /config/ssh/id_ed25519 -p <port> root@<ap-ip> uptime` on the HA host.
 
-**Card shows "configuration error"** — the resource URL isn't registered, or the `type:` in the dashboard doesn't match the card's registered name (e.g. `custom:network-table-card`). For HACS installs, cards are auto-served under `/wrtsensor_static/`. Bump the `?v=` query on the resource URL to bust the companion app's JS cache after updates.
+**Card is missing from the picker or shows "Custom element doesn't exist"** — the card's JavaScript resource is not loaded by Lovelace. For HACS installs, wrtsensor serves card files under `/wrtsensor_static/`, but each card URL still needs to be present in **Settings → Dashboards → Resources**. If WireGuard is enabled, add `/wrtsensor_static/wireguard-card.js?v=1.0.3` as a JavaScript Module. Bump the `?v=` query to bust the companion app's JS cache after updates.
 
 **A device tracker won't show up** — trackers are disabled by default. Enable via **Settings → Entities → Show disabled entities**.
 

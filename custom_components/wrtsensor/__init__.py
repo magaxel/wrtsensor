@@ -54,6 +54,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     _prune_orphaned_host_entities(hass, entry, coordinator)
     _remove_legacy_event_log_entity(hass, entry)
+    _prune_wireguard_entities(hass, entry, coordinator)
 
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True
@@ -115,6 +116,64 @@ async def _register_static_path(hass: HomeAssistant) -> None:
         )
     except RuntimeError:
         pass  # already registered (e.g. integration reloaded)
+
+
+def _prune_wireguard_entities(
+    hass: HomeAssistant, entry: ConfigEntry, coordinator: WrtsensorCoordinator
+) -> None:
+    """Remove orphan WG peer trackers and the WG sensor when no longer wanted.
+
+    Two scenarios:
+    1. Option toggled off: coordinator._enable_wireguard is False — remove every
+       _wgpeer_* registry entry and the _wireguard sensor.
+    2. Option on, but a peer was removed from the server config: the live peer
+       set is missing that id — remove just that tracker. Skipped on partial
+       scans (data["wireguard"] is None or missing) to avoid nuking trackers
+       on a transient gateway failure.
+    """
+    reg = er.async_get(hass)
+    peer_prefix = f"{entry.entry_id}_wgpeer_"
+    sensor_uid = f"{entry.entry_id}_wireguard"
+
+    if not coordinator._enable_wireguard:
+        for reg_entry in list(er.async_entries_for_config_entry(reg, entry.entry_id)):
+            if (
+                reg_entry.unique_id.startswith(peer_prefix)
+                or reg_entry.unique_id == sensor_uid
+            ):
+                _LOGGER.info(
+                    "Removing wrtsensor WG entity %s (option disabled)",
+                    reg_entry.entity_id,
+                )
+                reg.async_remove(reg_entry.entity_id)
+        return
+
+    data = coordinator.data or {}
+    wg = data.get("wireguard")
+    if wg is None:
+        # Partial scan / pre-first-refresh — leave registry alone so we don't
+        # nuke trackers during a transient gateway failure.
+        return
+    # `wg` is a dict here (success). interfaces=[] with available=False means
+    # the scan succeeded but no host has `wg` installed any more — that's a
+    # legitimate "WG removed" signal, prune all peer trackers but keep the
+    # WG sensor (option still on; user may reinstall).
+    live_ids = {
+        peer["id"]
+        for iface in wg.get("interfaces", [])
+        for peer in iface.get("peers", [])
+        if peer.get("id")
+    }
+    for reg_entry in list(er.async_entries_for_config_entry(reg, entry.entry_id)):
+        if not reg_entry.unique_id.startswith(peer_prefix):
+            continue
+        peer_id = reg_entry.unique_id[len(peer_prefix) :]
+        if peer_id in live_ids:
+            continue
+        _LOGGER.info(
+            "Pruning orphaned wrtsensor WG peer entity %s", reg_entry.entity_id
+        )
+        reg.async_remove(reg_entry.entity_id)
 
 
 def _remove_legacy_event_log_entity(hass: HomeAssistant, entry: ConfigEntry) -> None:

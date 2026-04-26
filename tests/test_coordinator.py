@@ -691,3 +691,234 @@ def test_aps_only_no_prev_no_raise():
         )
         result = asyncio.run(c._async_update_data())
     assert not result.get("partial")
+
+
+# ── WireGuard ────────────────────────────────────────────────────────────────
+
+
+def test_wg_command_contains_no_secret_subcommands():
+    """The remote SSH command must never request private/preshared keys."""
+    cmd = WrtsensorCoordinator._build_wireguard_command()
+    forbidden = (
+        "dump",
+        "private-key",
+        "preshared",
+        "export network",
+        "cat /etc/",
+    )
+    for token in forbidden:
+        assert token not in cmd, f"forbidden token {token!r} in WG command"
+
+
+def test_wg_command_uses_safe_subcommands():
+    cmd = WrtsensorCoordinator._build_wireguard_command()
+    for safe in (
+        "---WG_PROBE---",
+        "wg show interfaces",
+        "public-key",
+        "listen-port",
+        "peers",
+        "endpoints",
+        "allowed-ips",
+        "latest-handshakes",
+        "transfer",
+        "persistent-keepalive",
+    ):
+        assert safe in cmd
+
+
+def test_wg_disabled_omits_key_from_result():
+    c = _make_coordinator()
+    c._enable_wireguard = False
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch.object(c, "_collect_gateway", new=AsyncMock(return_value=_MINIMAL_GW))
+        )
+        stack.enter_context(
+            patch.object(
+                c,
+                "_collect_wireguard",
+                new=AsyncMock(side_effect=AssertionError("must not be called")),
+            )
+        )
+        result = asyncio.run(c._async_update_data())
+    assert "wireguard" not in result
+
+
+def test_wg_enabled_no_hosts_have_wg_returns_unavailable():
+    c = _make_coordinator()
+    c._enable_wireguard = True
+    c._wg_stale_threshold_s = 180
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch.object(c, "_collect_gateway", new=AsyncMock(return_value=_MINIMAL_GW))
+        )
+        # Mock the SSH layer rather than the higher-level method so
+        # _collect_wireguard's own logic exercises.
+        stack.enter_context(
+            patch.object(
+                c,
+                "_ssh_run",
+                new=AsyncMock(return_value="---WG_PROBE---\nok\n"),
+            )
+        )
+        result = asyncio.run(c._async_update_data())
+    assert result["wireguard"] == {
+        "available": False,
+        "stale_threshold_s": 180,
+        "interfaces": [],
+    }
+
+
+def test_wg_probe_failure_returns_none_for_partial_wg_scan():
+    c = _make_coordinator()
+    c._enable_wireguard = True
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch.object(c, "_collect_gateway", new=AsyncMock(return_value=_MINIMAL_GW))
+        )
+        # Empty stdout means the WG probe itself did not complete; do not treat
+        # that as "no WireGuard installed".
+        stack.enter_context(patch.object(c, "_ssh_run", new=AsyncMock(return_value="")))
+        result = asyncio.run(c._async_update_data())
+    assert result["wireguard"] is None
+
+
+def test_wg_enabled_with_peers_populates_result():
+    """End-to-end: parse the fixture into a structured result via _collect_wireguard."""
+    c = _make_coordinator()
+    c._enable_wireguard = True
+    c._wg_stale_threshold_s = 180
+
+    fixture_text = (
+        Path(__file__).parent / "fixtures" / "wg_show_sections.txt"
+    ).read_text()
+
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch.object(c, "_collect_gateway", new=AsyncMock(return_value=_MINIMAL_GW))
+        )
+        stack.enter_context(
+            patch.object(c, "_ssh_run", new=AsyncMock(return_value=fixture_text))
+        )
+        result = asyncio.run(c._async_update_data())
+
+    wg = result["wireguard"]
+    assert wg["available"] is True
+    assert len(wg["interfaces"]) == 1
+    iface = wg["interfaces"][0]
+    assert iface["name"] == "Wireguard"
+    assert len(iface["peers"]) == 3
+
+
+def test_wg_partial_scan_emits_wireguard_none_not_zero():
+    """Cached/partial-scan path must emit wireguard=None so entities go
+    unavailable rather than reporting 0 peers + flipping presence to not_home."""
+    c = _make_coordinator()
+    c._enable_wireguard = True
+    c._prev_state = {
+        "11:22:33:44:55:66": StateEntry(mac="11:22:33:44:55:66", online=True),
+    }
+    with patch.object(c, "_collect_gateway", new=AsyncMock(return_value={})):
+        result = asyncio.run(c._async_update_data())
+    assert result["partial"] is True
+    assert "wireguard" in result
+    assert result["wireguard"] is None
+
+
+def test_wg_compute_rates_first_sample_is_none():
+    c = _make_coordinator()
+    interfaces = [
+        {
+            "host": "h",
+            "name": "wg0",
+            "peers": [
+                {
+                    "id": "abc",
+                    "public_key": "PK",
+                    "rx_bytes": 1_000_000,
+                    "tx_bytes": 500_000,
+                }
+            ],
+        }
+    ]
+    c._compute_wg_rates(interfaces)
+    [peer] = interfaces[0]["peers"]
+    assert peer["rx_Bps"] is None
+    assert peer["tx_Bps"] is None
+
+
+def test_wg_compute_rates_counter_reset_yields_none():
+    c = _make_coordinator()
+    interfaces = [
+        {
+            "host": "h",
+            "name": "wg0",
+            "peers": [
+                {
+                    "id": "abc",
+                    "public_key": "PK",
+                    "rx_bytes": 1_000_000,
+                    "tx_bytes": 500_000,
+                }
+            ],
+        }
+    ]
+    c._compute_wg_rates(interfaces)  # establish baseline
+    # Backdate the baseline so elapsed > BW_MIN_ELAPSED_S
+    c._wg_bw_state["abc"]["ts"] -= 60
+    interfaces[0]["peers"][0]["rx_bytes"] = 1  # counter went backward
+    interfaces[0]["peers"][0]["tx_bytes"] = 1
+    c._compute_wg_rates(interfaces)
+    [peer] = interfaces[0]["peers"]
+    assert peer["rx_Bps"] is None
+    assert peer["tx_Bps"] is None
+
+
+def test_wg_compute_rates_normal_delta():
+    c = _make_coordinator()
+    interfaces = [
+        {
+            "host": "h",
+            "name": "wg0",
+            "peers": [
+                {
+                    "id": "abc",
+                    "public_key": "PK",
+                    "rx_bytes": 1_000_000,
+                    "tx_bytes": 500_000,
+                }
+            ],
+        }
+    ]
+    c._compute_wg_rates(interfaces)
+    c._wg_bw_state["abc"]["ts"] -= 60  # 60s ago
+    interfaces[0]["peers"][0]["rx_bytes"] = 1_600_000  # +600k over ~60s = ~10 KB/s
+    interfaces[0]["peers"][0]["tx_bytes"] = 560_000  # +60k over ~60s = ~1 KB/s
+    c._compute_wg_rates(interfaces)
+    [peer] = interfaces[0]["peers"]
+    # int truncation + sub-second elapsed jitter — tolerate 1-byte rounding
+    assert peer["rx_Bps"] is not None and 9_990 <= peer["rx_Bps"] <= 10_010
+    assert peer["tx_Bps"] is not None and 990 <= peer["tx_Bps"] <= 1_010
+
+
+def test_wg_compute_rates_drops_baseline_for_disappeared_peer():
+    c = _make_coordinator()
+    interfaces = [
+        {
+            "host": "h",
+            "name": "wg0",
+            "peers": [
+                {
+                    "id": "abc",
+                    "public_key": "PK",
+                    "rx_bytes": 1_000_000,
+                    "tx_bytes": 500_000,
+                }
+            ],
+        }
+    ]
+    c._compute_wg_rates(interfaces)
+    assert "abc" in c._wg_bw_state
+    c._compute_wg_rates([{"host": "h", "name": "wg0", "peers": []}])
+    assert "abc" not in c._wg_bw_state

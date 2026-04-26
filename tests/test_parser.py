@@ -504,3 +504,155 @@ def test_parse_hoststat_from_gateway_fixture(version):
     assert 0 <= result["mem_avail"] <= result["mem_total"]
     if len(composed) == 3:
         assert 0 <= result["disk"] <= 100
+
+
+# ── WireGuard parsing ────────────────────────────────────────────────────────
+
+
+import json  # noqa: E402
+
+parse_wg_show_sections = parser.parse_wg_show_sections
+parse_wg_uci = parser.parse_wg_uci
+wg_peer_id = parser.wg_peer_id
+
+
+def _wg_fixture_sections() -> dict[str, list[str]]:
+    text = (FIXTURES / "wg_show_sections.txt").read_text()
+    sections: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in text.splitlines():
+        if line.startswith("---") and line.endswith("---"):
+            current = line[3:-3]
+            sections[current] = []
+        elif current is not None:
+            sections[current].append(line)
+    return sections
+
+
+class TestParseWgShowSections:
+    def setup_method(self):
+        self.sections = _wg_fixture_sections()
+        # `now` chosen so peer 1's handshake is recent (online), peer 2's is
+        # well past the threshold (offline).
+        self.now = 1777151913 + 30  # 30s after first peer's handshake
+        self.threshold = 180
+        self.interfaces = parse_wg_show_sections(
+            "192.0.2.1", self.sections, self.threshold, self.now
+        )
+
+    def test_single_interface_with_literal_capital_W_name(self):
+        assert len(self.interfaces) == 1
+        assert self.interfaces[0]["name"] == "Wireguard"
+
+    def test_listen_port_parsed(self):
+        assert self.interfaces[0]["listen_port"] == 51820
+
+    def test_three_peers(self):
+        assert len(self.interfaces[0]["peers"]) == 3
+
+    def test_online_flag_recent_handshake(self):
+        peer = self.interfaces[0]["peers"][0]
+        assert peer["online"] is True
+        assert peer["last_handshake"] == 1777151913
+
+    def test_offline_when_handshake_stale(self):
+        peer = self.interfaces[0]["peers"][1]
+        assert peer["online"] is False
+
+    def test_offline_when_never_handshaked(self):
+        peer = self.interfaces[0]["peers"][2]
+        assert peer["last_handshake"] == 0
+        assert peer["online"] is False
+
+    def test_endpoint_none_normalised_to_python_none(self):
+        peer = self.interfaces[0]["peers"][2]
+        assert peer["endpoint"] is None
+
+    def test_endpoint_string_preserved(self):
+        peer = self.interfaces[0]["peers"][0]
+        assert peer["endpoint"] == "172.16.42.130:51820"
+
+    def test_allowed_ips_csv_split(self):
+        peer = self.interfaces[0]["peers"][1]
+        assert peer["allowed_ips"] == ["172.16.52.3/32", "10.0.0.0/24"]
+
+    def test_transfer_columns(self):
+        peer = self.interfaces[0]["peers"][0]
+        assert peer["rx_bytes"] == 361795984
+        assert peer["tx_bytes"] == 10039865612
+
+    def test_keepalive_off_normalised(self):
+        peer = self.interfaces[0]["peers"][1]
+        assert peer["persistent_keepalive_s"] is None
+
+    def test_keepalive_seconds(self):
+        peer = self.interfaces[0]["peers"][0]
+        assert peer["persistent_keepalive_s"] == 25
+
+    def test_peer_id_is_opaque_hash(self):
+        peer = self.interfaces[0]["peers"][0]
+        # 16-char hex from sha1; not the raw pubkey
+        assert len(peer["id"]) == 16
+        assert all(c in "0123456789abcdef" for c in peer["id"])
+        assert peer["public_key"] not in peer["id"]
+
+
+def test_wg_peer_id_deterministic_for_same_inputs():
+    a = wg_peer_id("gw", "wg0", "PUBKEY_A")
+    b = wg_peer_id("gw", "wg0", "PUBKEY_A")
+    assert a == b
+
+
+def test_wg_peer_id_differs_across_hosts():
+    a = wg_peer_id("gw", "wg0", "PUBKEY_A")
+    b = wg_peer_id("ap1", "wg0", "PUBKEY_A")
+    assert a != b
+
+
+def test_wg_peer_id_differs_across_pubkeys():
+    a = wg_peer_id("gw", "wg0", "PUBKEY_A")
+    b = wg_peer_id("gw", "wg0", "PUBKEY_B")
+    assert a != b
+
+
+def test_parse_wg_show_sections_drops_malformed_transfer_rows():
+    sections = {
+        "WG_INTERFACES": ["wg0"],
+        "WG_IFACE wg0": ["IFACE_PK", "51820"],
+        "WG_PEERS wg0": ["PK_X"],
+        "WG_TRANSFER wg0": ["PK_X 1 2 3"],  # 4 cols, must be dropped
+        "WG_HANDSHAKES wg0": ["PK_X 0"],
+    }
+    [iface] = parse_wg_show_sections("h", sections, 180, 1_700_000_000.0)
+    [peer] = iface["peers"]
+    assert peer["rx_bytes"] == 0
+    assert peer["tx_bytes"] == 0
+
+
+def test_parse_wg_show_sections_no_interfaces_returns_empty():
+    assert parse_wg_show_sections("h", {}, 180, 0.0) == []
+
+
+class TestParseWgUci:
+    def setup_method(self):
+        self.lines = (FIXTURES / "wg_uci_with_secrets.txt").read_text().splitlines()
+        self.parsed = parse_wg_uci(self.lines)
+
+    def test_description_maps_to_name(self):
+        pk = "PEER_PUBKEY_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB="
+        assert self.parsed[pk]["name"] == "laptop-alice"
+
+    def test_peer_without_description_has_no_name(self):
+        pk = "PEER_PUBKEY_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC="
+        assert "name" not in self.parsed[pk]
+
+    def test_private_key_string_never_appears_in_output(self):
+        # Defence in depth: even though the awk filter on the SSH host blocks
+        # private_key lines, the Python parser must also discard them so a
+        # later code change can't accidentally surface secrets.
+        assert "WG_PRIV_KEY_FAKE_SHOULD_NEVER_LEAK_THROUGH" not in json.dumps(
+            self.parsed
+        )
+
+    def test_preshared_key_string_never_appears_in_output(self):
+        assert "WG_PSK_FAKE_SHOULD_NEVER_LEAK_THROUGH" not in json.dumps(self.parsed)

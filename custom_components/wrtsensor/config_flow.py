@@ -15,6 +15,7 @@ from .const import (
     CONF_AP_HOSTS,
     CONF_DISCONNECT_THRESHOLD,
     CONF_ENABLE_DNS_STATS,
+    CONF_ENABLE_WIREGUARD,
     CONF_GATEWAY_HOST,
     CONF_LAN_IFACE,
     CONF_PRESENCE_MACS,
@@ -22,13 +23,16 @@ from .const import (
     CONF_SSH_KEY_PATH,
     CONF_SSH_PORT,
     CONF_WAN_IFACE,
+    CONF_WG_STALE_THRESHOLD,
     DEFAULT_DISCONNECT_THRESHOLD,
     DEFAULT_ENABLE_DNS_STATS,
+    DEFAULT_ENABLE_WIREGUARD,
     DEFAULT_LAN_IFACE,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SSH_KEY,
     DEFAULT_SSH_PORT,
     DEFAULT_WAN_IFACE,
+    DEFAULT_WG_STALE_THRESHOLD,
     DOMAIN,
 )
 
@@ -465,6 +469,18 @@ class WrtsensorOptionsFlow(OptionsFlow):
                         CONF_ENABLE_DNS_STATS, DEFAULT_ENABLE_DNS_STATS
                     ),
                 ): bool,
+                vol.Optional(
+                    CONF_ENABLE_WIREGUARD,
+                    default=current.get(
+                        CONF_ENABLE_WIREGUARD, DEFAULT_ENABLE_WIREGUARD
+                    ),
+                ): bool,
+                vol.Optional(
+                    CONF_WG_STALE_THRESHOLD,
+                    default=current.get(
+                        CONF_WG_STALE_THRESHOLD, DEFAULT_WG_STALE_THRESHOLD
+                    ),
+                ): vol.All(vol.Coerce(int), vol.Range(min=30, max=3600)),
             }
         )
         return self.async_show_form(

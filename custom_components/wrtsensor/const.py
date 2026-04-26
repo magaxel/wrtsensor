@@ -45,6 +45,10 @@ CONF_SCAN_INTERVAL = "scan_interval"
 CONF_PRESENCE_MACS = "presence_macs"
 CONF_ENABLE_DNS_STATS = "enable_dns_stats"
 DEFAULT_ENABLE_DNS_STATS = True
+CONF_ENABLE_WIREGUARD = "enable_wireguard"
+DEFAULT_ENABLE_WIREGUARD = False
+CONF_WG_STALE_THRESHOLD = "wg_stale_threshold_s"
+DEFAULT_WG_STALE_THRESHOLD = 180
 
 # Static path served by HA http component
 STATIC_PATH_URL = "/wrtsensor_static"

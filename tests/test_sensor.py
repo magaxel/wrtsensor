@@ -69,6 +69,7 @@ if _sensor_name not in sys.modules:
 
 WrtsensorNetworkScannerSensor = sys.modules[_sensor_name].WrtsensorNetworkScannerSensor
 WrtsensorDNSHitPctSensor = sys.modules[_sensor_name].WrtsensorDNSHitPctSensor
+WrtsensorWireguardSensor = sys.modules[_sensor_name].WrtsensorWireguardSensor
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -78,6 +79,8 @@ class _FakeCoordinator:
     def __init__(self, data: dict | None) -> None:
         self.data = data
         self._gateway_host = None
+        self._enable_wireguard = False
+        self._wg_stale_threshold_s = 180
         self._listeners: list[object] = []
 
     def async_add_listener(self, listener):
@@ -278,3 +281,77 @@ def test_async_setup_entry_does_not_duplicate_host_sensors():
 
     host_entities = [e for e in added if getattr(e, "_hostname", None) == "192.0.2.22"]
     assert len(host_entities) == 3
+
+
+# ── WireGuard sensor ────────────────────────────────────────────────────────
+
+
+def _make_wg_sensor(data: dict | None) -> WrtsensorWireguardSensor:
+    coordinator = _FakeCoordinator(data)
+    coordinator._wg_stale_threshold_s = 180
+    return WrtsensorWireguardSensor(coordinator, _FakeEntry())
+
+
+def test_wireguard_sensor_counts_online_peers():
+    data = {
+        "wireguard": {
+            "available": True,
+            "stale_threshold_s": 180,
+            "interfaces": [
+                {
+                    "name": "wg0",
+                    "peers": [
+                        {"id": "a", "online": True},
+                        {"id": "b", "online": False},
+                        {"id": "c", "online": True},
+                    ],
+                },
+                {
+                    "name": "wg1",
+                    "peers": [{"id": "d", "online": True}],
+                },
+            ],
+        }
+    }
+    assert _make_wg_sensor(data).native_value == 3
+
+
+def test_wireguard_sensor_returns_zero_when_unavailable():
+    data = {
+        "wireguard": {
+            "available": False,
+            "stale_threshold_s": 180,
+            "interfaces": [],
+        }
+    }
+    assert _make_wg_sensor(data).native_value == 0
+
+
+def test_wireguard_sensor_unavailable_on_partial_scan():
+    """data['wireguard'] is None on partial scans — sensor must report None
+    (HA renders as 'unavailable') rather than flipping to 0."""
+    sensor = _make_wg_sensor({"wireguard": None, "partial": True})
+    assert sensor.native_value is None
+    assert sensor.available is False
+
+
+def test_wireguard_sensor_attributes_round_trip_dict():
+    wg = {
+        "available": True,
+        "stale_threshold_s": 180,
+        "interfaces": [{"name": "wg0", "peers": []}],
+    }
+    attrs = _make_wg_sensor({"wireguard": wg}).extra_state_attributes
+    assert attrs == {"wireguard": wg}
+
+
+def test_wireguard_sensor_falls_back_when_key_absent():
+    """When the option is on but coordinator hasn't seen WG yet, attrs synthesise unavailable."""
+    sensor = _make_wg_sensor({})
+    attrs = sensor.extra_state_attributes
+    assert attrs["wireguard"]["available"] is False
+    assert attrs["wireguard"]["interfaces"] == []
+
+
+def test_wireguard_sensor_native_value_none_when_no_data():
+    assert _make_wg_sensor(None).native_value is None

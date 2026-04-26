@@ -36,6 +36,8 @@ from .parser import (
     parse_hoststat,
     parse_leases,
     parse_ndp,
+    parse_wg_show_sections,
+    parse_wg_uci,
     parse_wifi_output,
 )
 from .const import (
@@ -47,20 +49,24 @@ from .const import (
     CONF_AP_HOSTS,
     CONF_DISCONNECT_THRESHOLD,
     CONF_ENABLE_DNS_STATS,
+    CONF_ENABLE_WIREGUARD,
     CONF_GATEWAY_HOST,
     CONF_LAN_IFACE,
     CONF_SCAN_INTERVAL,
     CONF_SSH_KEY_PATH,
     CONF_SSH_PORT,
     CONF_WAN_IFACE,
+    CONF_WG_STALE_THRESHOLD,
     DEFAULT_DHCP_LEASES,
     DEFAULT_DISCONNECT_THRESHOLD,
     DEFAULT_ENABLE_DNS_STATS,
+    DEFAULT_ENABLE_WIREGUARD,
     DEFAULT_LAN_IFACE,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SSH_KEY,
     DEFAULT_SSH_PORT,
     DEFAULT_WAN_IFACE,
+    DEFAULT_WG_STALE_THRESHOLD,
     DISCONNECT_MISS_THRESHOLD,
     DOMAIN,
     STATE_DIR_HA,
@@ -751,6 +757,12 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._enable_dns_stats = bool(
             data.get(CONF_ENABLE_DNS_STATS, DEFAULT_ENABLE_DNS_STATS)
         )
+        self._enable_wireguard = bool(
+            data.get(CONF_ENABLE_WIREGUARD, DEFAULT_ENABLE_WIREGUARD)
+        )
+        self._wg_stale_threshold_s = int(
+            data.get(CONF_WG_STALE_THRESHOLD, DEFAULT_WG_STALE_THRESHOLD)
+        )
 
         # State dir: /dev/shm on HA, /tmp/netscan locally
         state_dir = (
@@ -776,6 +788,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._dns_state: dict[str, Any] = {}
         self._device_bw: dict[str, Any] = {}
         self._device_bw_accum: dict[str, dict[str, int]] = {}
+        self._wg_bw_state: dict[str, dict[str, Any]] = {}
         self._wan_event_state: dict[str, str] = {}
         self._prev_state: dict[str, StateEntry] = {}
         self._host_models: dict[str, tuple[str, str]] = {}  # ip → (model, board_name)
@@ -1067,6 +1080,158 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if model:
             self._host_models[host] = (model, board_name)
         return parse_wifi_output(out, ap_name)
+
+    @staticmethod
+    def _build_wireguard_command() -> str:
+        """Secret-free `wg show` subcommand bundle.
+
+        Deliberately avoids `wg show all dump` (exposes interface private key,
+        peer preshared keys), `wg show <iface> private-key`, `wg show <iface>
+        preshared-keys`, and `uci -q export network` / any `cat /etc/...` reads
+        of WG configuration files. The awk filter on `uci -q show network`
+        restricts options to the same allowlist parse_wg_uci enforces.
+        """
+        return (
+            "echo '---WG_PROBE---'; echo ok; "
+            "if command -v wg >/dev/null 2>&1; then "
+            "echo '---WG_INTERFACES---'; "
+            "wg show interfaces 2>/dev/null | tr ' ' '\\n'; "
+            "for iface in $(wg show interfaces 2>/dev/null); do "
+            'echo "---WG_IFACE $iface---"; '
+            'wg show "$iface" public-key 2>/dev/null; '
+            'wg show "$iface" listen-port 2>/dev/null; '
+            'echo "---WG_PEERS $iface---"; '
+            'wg show "$iface" peers 2>/dev/null; '
+            'echo "---WG_ENDPOINTS $iface---"; '
+            'wg show "$iface" endpoints 2>/dev/null; '
+            'echo "---WG_ALLOWED_IPS $iface---"; '
+            'wg show "$iface" allowed-ips 2>/dev/null; '
+            'echo "---WG_HANDSHAKES $iface---"; '
+            'wg show "$iface" latest-handshakes 2>/dev/null; '
+            'echo "---WG_TRANSFER $iface---"; '
+            'wg show "$iface" transfer 2>/dev/null; '
+            'echo "---WG_KEEPALIVE $iface---"; '
+            'wg show "$iface" persistent-keepalive 2>/dev/null; '
+            "done; "
+            "echo '---WG_UCI---'; "
+            "uci -q show network 2>/dev/null | awk -F= '"
+            "$1 ~ /\\.description$/ || "
+            "$1 ~ /\\.public_key$/ || "
+            "$1 ~ /\\.allowed_ips$/ || "
+            "$1 ~ /\\.endpoint_host$/ || "
+            "$1 ~ /\\.endpoint_port$/ { print }'; "
+            "fi"
+        )
+
+    @staticmethod
+    def _parse_wg_sections(out: str) -> dict[str, list[str]]:
+        sections: dict[str, list[str]] = {}
+        current: str | None = None
+        for line in out.splitlines():
+            m = re.match(r"^---(WG_[A-Z_]+(?:\s+\S+)?)---$", line)
+            if m:
+                current = m.group(1)
+                sections[current] = []
+            elif current is not None:
+                sections[current].append(line)
+        return sections
+
+    async def _get_wireguard_info(self, host: str) -> dict[str, Any]:
+        """Run secret-free WG queries on `host` and return sanitised structure.
+
+        The raw SSH stdout is parsed inside this coroutine and discarded before
+        the call returns; only the structured dict reaches callers.
+        """
+        out = await self._ssh_run(host, self._build_wireguard_command(), timeout=8)
+        if not out or "---WG_PROBE---" not in out:
+            return {"failed": True}
+        if "---WG_INTERFACES---" not in out:
+            return {}
+        sections = self._parse_wg_sections(out)
+        now = time.time()
+        interfaces = parse_wg_show_sections(
+            host, sections, self._wg_stale_threshold_s, now
+        )
+        if not interfaces:
+            return {}
+        names = parse_wg_uci(sections.get("WG_UCI", []))
+        for iface in interfaces:
+            for peer in iface["peers"]:
+                pk = peer["public_key"]
+                desc = names.get(pk, {}).get("name")
+                if desc:
+                    peer["name"] = desc
+                else:
+                    peer["name"] = pk[:8]
+        return {"interfaces": interfaces}
+
+    def _compute_wg_rates(self, interfaces: list[dict[str, Any]]) -> None:
+        """Annotate each peer with rx_Bps / tx_Bps (bytes/sec).
+
+        Counter-reset, stale-baseline, and rate-clamp handling mirrors
+        _compute_device_rates (see const.py for the BW_* thresholds).
+        """
+        now = time.time()
+        live_ids: set[str] = set()
+        for iface in interfaces:
+            for peer in iface["peers"]:
+                pid = peer["id"]
+                live_ids.add(pid)
+                rx_b = peer["rx_bytes"]
+                tx_b = peer["tx_bytes"]
+                prev = self._wg_bw_state.get(pid)
+                rx_rate: int | None = None
+                tx_rate: int | None = None
+                if prev:
+                    elapsed = now - prev.get("ts", 0.0)
+                    if elapsed >= BW_MAX_AGE_S:
+                        prev = None
+                    elif elapsed >= BW_MIN_ELAPSED_S:
+                        prev_rx = prev.get("rx", 0)
+                        prev_tx = prev.get("tx", 0)
+                        if rx_b < prev_rx or tx_b < prev_tx:
+                            # Counter reset (interface restart, host reboot).
+                            rx_rate = tx_rate = None
+                        else:
+                            r = int((rx_b - prev_rx) / elapsed)
+                            t = int((tx_b - prev_tx) / elapsed)
+                            rx_rate = r if 0 <= r <= BW_MAX_RATE_BPS else None
+                            tx_rate = t if 0 <= t <= BW_MAX_RATE_BPS else None
+                peer["rx_Bps"] = rx_rate
+                peer["tx_Bps"] = tx_rate
+                self._wg_bw_state[pid] = {"ts": now, "rx": rx_b, "tx": tx_b}
+        # Drop baselines for peers that disappeared this scan.
+        for pid in list(self._wg_bw_state.keys()):
+            if pid not in live_ids:
+                self._wg_bw_state.pop(pid, None)
+
+    async def _collect_wireguard(self) -> dict[str, Any] | None:
+        """Gather WG data from gateway + APs in parallel.
+
+        Returns a dict suitable for direct insertion into coordinator.data under
+        the `wireguard` key. Returns None when any host's WG probe fails so
+        entities become unavailable instead of falsely going offline.
+        """
+        hosts = ([self._gateway_host] if self._gateway_host else []) + list(
+            self._ap_hosts
+        )
+        results = await asyncio.gather(
+            *[self._get_wireguard_info(h) for h in hosts],
+            return_exceptions=True,
+        )
+        interfaces: list[dict[str, Any]] = []
+        for res in results:
+            if isinstance(res, Exception):
+                return None
+            if res.get("failed"):
+                return None
+            interfaces.extend(res.get("interfaces", []))
+        self._compute_wg_rates(interfaces)
+        return {
+            "available": bool(interfaces),
+            "stale_threshold_s": self._wg_stale_threshold_s,
+            "interfaces": interfaces,
+        }
 
     async def _ping_stale(self, ips: list[str]) -> list[str]:
         safe = [ip for ip in ips if _valid_ipv4(ip)]
@@ -1381,6 +1546,8 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 }
                 if self._enable_dns_stats:
                     payload["dns_stats"] = None
+                if self._enable_wireguard:
+                    payload["wireguard"] = None
                 return payload
             raise UpdateFailed("Gateway unreachable")
 
@@ -1687,6 +1854,10 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 parse_dns_stats(gw_data.get("dns", [])),
             )
 
+        wireguard: dict[str, Any] | None = None
+        if self._enable_wireguard:
+            wireguard = await self._collect_wireguard()
+
         result: dict[str, Any] = {
             "device_count": sum(1 for d in devices if d.online),
             "scan_duration": round(time.time() - scan_start, 2),
@@ -1703,4 +1874,6 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
         if self._enable_dns_stats:
             result["dns_stats"] = dns_stats
+        if self._enable_wireguard:
+            result["wireguard"] = wireguard
         return result
