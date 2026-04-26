@@ -45,8 +45,9 @@ from .const import (
     COLLECTOR_REMOTE_PATH,
     COLLECTOR_SCRIPT_NAME,
     CONF_AP_HOSTS,
-    CONF_GATEWAY_HOST,
     CONF_DISCONNECT_THRESHOLD,
+    CONF_ENABLE_DNS_STATS,
+    CONF_GATEWAY_HOST,
     CONF_LAN_IFACE,
     CONF_SCAN_INTERVAL,
     CONF_SSH_KEY_PATH,
@@ -54,6 +55,7 @@ from .const import (
     CONF_WAN_IFACE,
     DEFAULT_DHCP_LEASES,
     DEFAULT_DISCONNECT_THRESHOLD,
+    DEFAULT_ENABLE_DNS_STATS,
     DEFAULT_LAN_IFACE,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SSH_KEY,
@@ -713,6 +715,9 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._disconnect_threshold_s = int(
             data.get(CONF_DISCONNECT_THRESHOLD, DEFAULT_DISCONNECT_THRESHOLD)
         )
+        self._enable_dns_stats = bool(
+            data.get(CONF_ENABLE_DNS_STATS, DEFAULT_ENABLE_DNS_STATS)
+        )
 
         # State dir: /dev/shm on HA, /tmp/netscan locally
         state_dir = (
@@ -933,10 +938,14 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "grep '^cpu ' /proc/stat 2>/dev/null; "
             "awk '/^MemTotal:/ {t=$2} /^MemAvailable:/ {a=$2} END{print t, a}' /proc/meminfo 2>/dev/null; "
             'df / 2>/dev/null | awk \'NR==2 {gsub("%","",$5); print $5+0}\'; '
-            "echo '---DNS---'; "
-            "kill -USR1 $(pidof dnsmasq) 2>/dev/null; sleep 1; "
-            "logread -l 60 2>/dev/null | grep 'dnsmasq\\[' | grep -E 'cache size|queries forwarded|avg\\. latency' | tail -20; "
-            "echo '---CONNTRACK---'; cat /proc/net/nf_conntrack 2>/dev/null; "
+            + (
+                "echo '---DNS---'; "
+                "kill -USR1 $(pidof dnsmasq) 2>/dev/null; sleep 1; "
+                "logread -l 60 2>/dev/null | grep 'dnsmasq\\[' | grep -E 'cache size|queries forwarded|avg\\. latency' | tail -20; "
+                if self._enable_dns_stats
+                else ""
+            )
+            + "echo '---CONNTRACK---'; cat /proc/net/nf_conntrack 2>/dev/null; "
             "echo '---BOARD---'; ubus call system board 2>/dev/null"
         )
         out = await self._ssh_run(self._gateway_host, cmd, timeout=25)
@@ -1323,7 +1332,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )
                     for e in self._prev_state.values()
                 ]
-                return {
+                payload: dict[str, Any] = {
                     "device_count": sum(1 for d in cached_devices if d.online),
                     "scan_duration": round(time.time() - scan_start, 2),
                     "wan_ip": "",
@@ -1332,10 +1341,12 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "wan_rx_rate": None,
                     "wan_tx_rate": None,
                     "host_stats": {},
-                    "dns_stats": None,
                     "devices": [asdict(d) for d in cached_devices],
                     "partial": True,
                 }
+                if self._enable_dns_stats:
+                    payload["dns_stats"] = None
+                return payload
             raise UpdateFailed("Gateway unreachable")
 
         if gw_data:
@@ -1632,15 +1643,16 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 }
 
         # DNS stats — file I/O lives in _compute_dns_rates_sync, run on executor.
-        if gw_data:
+        # Skipped entirely when disabled in options; the dns_stats key is then
+        # omitted from the data dict so the compat sensor does not surface it.
+        dns_stats: dict[str, Any] | None = None
+        if self._enable_dns_stats and gw_data:
             dns_stats = await self.hass.async_add_executor_job(
                 self._compute_dns_rates_sync,
                 parse_dns_stats(gw_data.get("dns", [])),
             )
-        else:
-            dns_stats = None
 
-        return {
+        result: dict[str, Any] = {
             "device_count": sum(1 for d in devices if d.online),
             "scan_duration": round(time.time() - scan_start, 2),
             "wan_ip": gw_data.get("wan_ip", "") if gw_data else "",
@@ -1651,7 +1663,9 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "wan_rx_rate": rx_rate,
             "wan_tx_rate": tx_rate,
             "host_stats": host_stats,
-            "dns_stats": dns_stats,
             "devices": [asdict(d) for d in devices],
             "partial": False,
         }
+        if self._enable_dns_stats:
+            result["dns_stats"] = dns_stats
+        return result

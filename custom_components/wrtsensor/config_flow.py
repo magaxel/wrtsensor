@@ -14,6 +14,7 @@ from homeassistant.data_entry_flow import FlowResult
 from .const import (
     CONF_AP_HOSTS,
     CONF_DISCONNECT_THRESHOLD,
+    CONF_ENABLE_DNS_STATS,
     CONF_GATEWAY_HOST,
     CONF_LAN_IFACE,
     CONF_PRESENCE_MACS,
@@ -22,6 +23,7 @@ from .const import (
     CONF_SSH_PORT,
     CONF_WAN_IFACE,
     DEFAULT_DISCONNECT_THRESHOLD,
+    DEFAULT_ENABLE_DNS_STATS,
     DEFAULT_LAN_IFACE,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SSH_KEY,
@@ -457,6 +459,12 @@ class WrtsensorOptionsFlow(OptionsFlow):
                     CONF_PRESENCE_MACS,
                     default=current.get(CONF_PRESENCE_MACS, ""),
                 ): str,
+                vol.Optional(
+                    CONF_ENABLE_DNS_STATS,
+                    default=current.get(
+                        CONF_ENABLE_DNS_STATS, DEFAULT_ENABLE_DNS_STATS
+                    ),
+                ): bool,
             }
         )
         return self.async_show_form(

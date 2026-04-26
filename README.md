@@ -140,6 +140,8 @@ shown_types:             # optional — limit to specific event types; [] shows 
 
 dnsmasq cache statistics. The main hit/miss bar defaults to the last 24 hours. If wrtsensor does not have enough history for the selected period yet, the card shows the available clean collection window instead, such as `collected for 3h`. Upstream server rows use the first available per-server counter baseline inside that same clean window, so they can appear even when older hit/miss history predates server tracking.
 
+Requires the **Collect DNS stats** option (on by default). When the option is off, or when no gateway is configured, the card displays a short message pointing back at the integration options instead of a chart.
+
 Breaking change: `lifetime` is no longer a selectable or displayed DNS card period. Existing cards with `period: lifetime` fall back to `last_24h`; re-save the card config to update it. Upstream query counts now follow the selected period instead of showing dnsmasq lifetime totals. `last_scan` rates are intentionally hidden and display as `—` because one-scan rates are noisy.
 
 ```yaml
@@ -216,8 +218,8 @@ In APs-only mode, only the AP rows appear.
 | `sensor.<entry>_network_scanner` | Main sensor for one config entry — device count as state, full JSON blob as attributes. |
 | `sensor.<entry>_wan_download` | WAN RX rate in Mbit/s |
 | `sensor.<entry>_wan_upload` | WAN TX rate in Mbit/s |
-| `sensor.<entry>_dns_cache_hit` | DNS cache hit % |
-| `sensor.<entry>_dns_latency` | Weighted upstream DNS latency in ms |
+| `sensor.<entry>_dns_cache_hit` | DNS cache hit % — `unknown` when **Collect DNS stats** option is off |
+| `sensor.<entry>_dns_latency` | Weighted upstream DNS latency in ms — `unknown` when **Collect DNS stats** option is off |
 | `sensor.<host>_cpu` | CPU % per host, e.g. `sensor.192_0_2_1_cpu` |
 | `sensor.<host>_ram` | RAM % per host |
 | `sensor.<host>_disk` | Disk % per host |
