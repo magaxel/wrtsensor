@@ -68,7 +68,7 @@ All of this comes from a single 20 s SSH call to the gateway plus parallel SSH c
    - `/wrtsensor_static/network-topology-card.js?v=1.0.0` — JavaScript Module
    - `/wrtsensor_static/network-events-card.js?v=1.0.0` — JavaScript Module
    - `/wrtsensor_static/dns-stats-card.js?v=1.0.0` — JavaScript Module
-   - `/wrtsensor_static/wireguard-card.js?v=1.0.0` — JavaScript Module *(only needed if you enable the WireGuard option)*
+   - `/wrtsensor_static/wireguard-card.js?v=1.0.3` — JavaScript Module *(only needed if you enable the WireGuard option)*
 
 > If key authentication isn't set up yet, the config flow will ask for a password once and provision the public key into `/etc/dropbear/authorized_keys` on each OpenWrt box for you. The password is never stored.
 
@@ -287,7 +287,7 @@ logbook:
 
 **All APs in log as "unreachable"** — APs must be reachable from HA over SSH with the same key as the gateway, on the SSH port configured for the integration (default 22; change in the integration's Options). Check with `ssh -i /config/ssh/id_ed25519 -p <port> root@<ap-ip> uptime` on the HA host.
 
-**Card shows "configuration error"** — the resource URL isn't registered, or the `type:` in the dashboard doesn't match the card's registered name (e.g. `custom:network-table-card`). For HACS installs, cards are auto-served under `/wrtsensor_static/`. Bump the `?v=` query on the resource URL to bust the companion app's JS cache after updates.
+**Card is missing from the picker or shows "Custom element doesn't exist"** — the card's JavaScript resource is not loaded by Lovelace. For HACS installs, wrtsensor serves card files under `/wrtsensor_static/`, but each card URL still needs to be present in **Settings → Dashboards → Resources**. If WireGuard is enabled, add `/wrtsensor_static/wireguard-card.js?v=1.0.3` as a JavaScript Module. Bump the `?v=` query to bust the companion app's JS cache after updates.
 
 **A device tracker won't show up** — trackers are disabled by default. Enable via **Settings → Entities → Show disabled entities**.
 

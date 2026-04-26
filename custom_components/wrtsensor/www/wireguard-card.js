@@ -5,7 +5,7 @@ import {
   nothing,
 } from "https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js";
 
-const CARD_VERSION = "1.0.0";
+const CARD_VERSION = "1.0.3";
 const CARD_TYPE = "wireguard-card";
 const EDITOR_TYPE = `${CARD_TYPE}-editor`;
 
@@ -51,6 +51,15 @@ class WireguardCard extends LitElement {
       padding: 16px;
       display: block;
       user-select: text;
+      container-type: inline-size;
+    }
+    .title {
+      font-size: var(--ha-card-header-font-size, 24px);
+      font-weight: var(--ha-card-header-font-weight, 400);
+      color: var(--primary-text-color);
+      line-height: 1.2;
+      margin-bottom: 12px;
+      letter-spacing: -0.012em;
     }
     .iface {
       margin-bottom: 16px;
@@ -58,33 +67,48 @@ class WireguardCard extends LitElement {
     .iface-header {
       font-weight: 600;
       margin-bottom: 8px;
-      font-size: 1.05em;
+      font-size: 0.95em;
+      color: var(--secondary-text-color);
     }
     .iface-meta {
       font-size: 0.85em;
       opacity: 0.7;
       margin-left: 6px;
     }
-    table {
-      width: 100%;
-      border-collapse: collapse;
+    .peer-list {
       font-size: 0.92em;
     }
-    th,
-    td {
-      padding: 4px 6px;
-      text-align: left;
+    .peer-row {
+      display: grid;
+      grid-template-columns:
+        minmax(0, 1.35fr)
+        minmax(0, 1.35fr)
+        minmax(0, 1.45fr)
+        minmax(0, 0.7fr)
+        minmax(0, 0.75fr)
+        minmax(0, 0.75fr)
+        minmax(0, 0.75fr);
+      gap: 4px 10px;
+      align-items: start;
+      padding: 5px 0;
       border-bottom: 1px solid var(--divider-color, rgba(127, 127, 127, 0.2));
+      min-width: 0;
     }
-    th {
+    .peer-row.header {
       font-weight: 600;
       opacity: 0.75;
     }
-    td.num {
+    .peer-row > div {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      word-break: normal;
+    }
+    .peer-row .num {
       text-align: right;
       font-variant-numeric: tabular-nums;
+      overflow-wrap: anywhere;
     }
-    tr.stale td {
+    .peer-row.stale {
       opacity: 0.45;
     }
     .empty {
@@ -105,6 +129,66 @@ class WireguardCard extends LitElement {
     }
     .dot.offline {
       background: var(--disabled-color, #888);
+    }
+    @container (max-width: 720px) {
+      .iface-header {
+        line-height: 1.35;
+      }
+      .iface-meta {
+        display: block;
+        margin-left: 0;
+      }
+      .peer-row.header {
+        display: none;
+      }
+      .peer-row {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        padding: 8px 0;
+      }
+      .peer-row > div::before {
+        content: attr(data-label);
+        display: block;
+        font-size: 0.75em;
+        font-weight: 600;
+        opacity: 0.65;
+        margin-bottom: 2px;
+      }
+      .peer-row .wide {
+        grid-column: 1 / -1;
+      }
+      .peer-row .num {
+        text-align: left;
+      }
+    }
+    @media (max-width: 640px) {
+      .iface-header {
+        line-height: 1.35;
+      }
+      .iface-meta {
+        display: block;
+        margin-left: 0;
+      }
+      .peer-row.header {
+        display: none;
+      }
+      .peer-row {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        padding: 8px 0;
+      }
+      .peer-row > div::before {
+        content: attr(data-label);
+        display: block;
+        font-size: 0.75em;
+        font-weight: 600;
+        opacity: 0.65;
+        margin-bottom: 2px;
+      }
+      .peer-row .wide {
+        grid-column: 1 / -1;
+      }
+      .peer-row .num {
+        text-align: left;
+      }
     }
   `;
 
@@ -144,53 +228,49 @@ class WireguardCard extends LitElement {
     // Both unknown -> "—". One known -> sum, treating null as 0.
     const rate = rx == null && tx == null ? null : (rx ?? 0) + (tx ?? 0);
     return html`
-      <tr class=${stale ? "stale" : ""}>
-        <td>
+      <div class="peer-row ${stale ? "stale" : ""}">
+        <div class="wide" data-label="Peer">
           <span class="dot ${peer.online ? "online" : "offline"}"></span>${peer.name ?? peer.public_key?.slice(0, 8) ?? "—"}
-        </td>
-        <td>${peer.endpoint ?? "—"}</td>
-        <td>${(peer.allowed_ips ?? []).join(", ") || "—"}</td>
-        <td>${fmtAge(peer.last_handshake)}</td>
-        <td class="num">${fmtBytes(peer.rx_bytes)}</td>
-        <td class="num">${fmtBytes(peer.tx_bytes)}</td>
-        <td class="num">${fmtRate(rate)}</td>
-      </tr>
+        </div>
+        <div class="wide" data-label="Endpoint">${peer.endpoint ?? "—"}</div>
+        <div class="wide" data-label="Allowed IPs">${(peer.allowed_ips ?? []).join(", ") || "—"}</div>
+        <div data-label="Last HS">${fmtAge(peer.last_handshake)}</div>
+        <div class="num" data-label="Down total">${fmtBytes(peer.rx_bytes)}</div>
+        <div class="num" data-label="Up total">${fmtBytes(peer.tx_bytes)}</div>
+        <div class="num" data-label="Rate">${fmtRate(rate)}</div>
+      </div>
     `;
   }
 
   _renderIface(iface) {
     const peers = iface.peers ?? [];
     const active = peers.filter((p) => p.online).length;
+    const ifaceName = String(iface.name ?? "").trim();
+    const showIfaceName = ifaceName && !["wireguard", "wg"].includes(ifaceName.toLowerCase());
+    const summary = `${active}/${peers.length} peers active${
+      iface.listen_port ? ` · port ${iface.listen_port}` : ""
+    }`;
     return html`
       <div class="iface">
         <div class="iface-header">
-          WireGuard — ${iface.name}
-          <span class="iface-meta">
-            (${active}/${peers.length} peers active${
-              iface.listen_port ? ` · port ${iface.listen_port}` : ""
-            })
-          </span>
+          ${showIfaceName ? html`${ifaceName}<span class="iface-meta">${summary}</span>` : summary}
         </div>
         ${
           peers.length === 0
             ? html`<div class="empty">No peers configured.</div>`
             : html`
-              <table>
-                <thead>
-                  <tr>
-                    <th>Peer</th>
-                    <th>Endpoint</th>
-                    <th>Allowed IPs</th>
-                    <th>Last HS</th>
-                    <th class="num">↓ Total</th>
-                    <th class="num">↑ Total</th>
-                    <th class="num">Rate</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${peers.map((p) => this._renderPeerRow(p))}
-                </tbody>
-              </table>
+              <div class="peer-list">
+                <div class="peer-row header" aria-hidden="true">
+                  <div>Peer</div>
+                  <div>Endpoint</div>
+                  <div>Allowed IPs</div>
+                  <div>Last HS</div>
+                  <div class="num">Down Total</div>
+                  <div class="num">Up Total</div>
+                  <div class="num">Rate</div>
+                </div>
+                ${peers.map((p) => this._renderPeerRow(p))}
+              </div>
             `
         }
       </div>
@@ -229,7 +309,10 @@ class WireguardCard extends LitElement {
       `;
     }
     return html`
-      <ha-card>${interfaces.map((iface) => this._renderIface(iface))}</ha-card>
+      <ha-card>
+        <div class="title">${this._config.title ?? "WireGuard"}</div>
+        ${interfaces.map((iface) => this._renderIface(iface))}
+      </ha-card>
     `;
   }
 }
