@@ -64,7 +64,6 @@ Copy the JS files in [`www/`](../www/) to `/config/www/`. Then **Settings → Da
 
 | URL | Type |
 |-----|------|
-| `/local/network-list-card.js` | JavaScript Module |
 | `/local/network-table-card.js` | JavaScript Module |
 | `/local/network-topology-card.js` | JavaScript Module |
 | `/local/network-events-card.js` | JavaScript Module |
