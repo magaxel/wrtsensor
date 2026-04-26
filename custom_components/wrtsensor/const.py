@@ -43,6 +43,8 @@ CONF_LAN_IFACE = "lan_iface"
 CONF_WAN_IFACE = "wan_iface"
 CONF_SCAN_INTERVAL = "scan_interval"
 CONF_PRESENCE_MACS = "presence_macs"
+CONF_ENABLE_DNS_STATS = "enable_dns_stats"
+DEFAULT_ENABLE_DNS_STATS = True
 
 # Static path served by HA http component
 STATIC_PATH_URL = "/wrtsensor_static"

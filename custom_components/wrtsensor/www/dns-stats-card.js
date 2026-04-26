@@ -240,7 +240,10 @@ class DnsStatsCard extends LitElement {
       return html`
         <ha-card>
           <div class="title">${this._config.title}</div>
-          <div class="unavailable">No dns_stats attribute on ${this._config.entity}</div>
+          <div class="unavailable">
+            DNS stats unavailable. Enable "Collect DNS stats" in the wrtsensor
+            integration options and make sure an OpenWrt gateway is configured.
+          </div>
         </ha-card>
       `;
     }
