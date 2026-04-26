@@ -68,8 +68,41 @@ Copy the JS files in [`www/`](../www/) to `/config/www/`. Then **Settings → Da
 | `/local/network-topology-card.js` | JavaScript Module |
 | `/local/network-events-card.js` | JavaScript Module |
 | `/local/dns-stats-card.js` | JavaScript Module |
+| `/local/wireguard-card.js` | JavaScript Module *(only needed if you opt into WireGuard collection — see below)* |
 
 Append `?v=1` (or any string) to bust the HA companion app's cache when you update a card.
+
+## (Optional) WireGuard collection
+
+WireGuard support is **opt-in** for the manual path too. Two small changes:
+
+1. Pass `--wireguard` to `diagnose.py` (or set `WRTSENSOR_ENABLE_WIREGUARD=1` in the environment) so the scanner runs the secret-free `wg show` subcommands and emits a `wireguard` block in its JSON output. Without the flag, no WG SSH calls are made and no `wireguard` key is produced.
+2. Add `wireguard` to the `json_attributes` allowlist in `command_line.yaml` so HA preserves the new top-level key on the `sensor.wrtsensor_network_scanner` entity. The `wireguard-card` reads it from there.
+
+```yaml
+# command_line.yaml — add the flag and the allowlist entry
+command: >-
+  python3 /config/wrtsensor/diagnose.py
+  --wireguard
+  root@192.0.2.1
+  root@192.0.2.10
+json_attributes:
+  - devices
+  # ...existing entries...
+  - dns_stats
+  - wireguard      # add this line
+  - scan_duration
+  - partial
+```
+
+Card config:
+
+```yaml
+type: custom:wireguard-card
+entity: sensor.wrtsensor_network_scanner
+```
+
+Security: `diagnose.py` and the HACS integration share the same secret-free command set — `wg show <iface> {public-key,listen-port,peers,endpoints,allowed-ips,latest-handshakes,transfer,persistent-keepalive}` plus an awk-filtered `uci -q show network` that only forwards `description`, `public_key`, `allowed_ips`, `endpoint_host`, `endpoint_port`. WireGuard private and preshared keys are never read. Per-peer rates (`rx_Bps` / `tx_Bps`) persist between runs in `.netscan_wg_bw_state.json` next to the existing bandwidth state.
 
 ## `command_line.yaml`
 

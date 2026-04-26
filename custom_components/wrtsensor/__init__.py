@@ -150,9 +150,14 @@ def _prune_wireguard_entities(
 
     data = coordinator.data or {}
     wg = data.get("wireguard")
-    if wg is None or not wg.get("interfaces"):
-        # Partial scan or no peers reported yet — leave registry alone.
+    if wg is None:
+        # Partial scan / pre-first-refresh — leave registry alone so we don't
+        # nuke trackers during a transient gateway failure.
         return
+    # `wg` is a dict here (success). interfaces=[] with available=False means
+    # the scan succeeded but no host has `wg` installed any more — that's a
+    # legitimate "WG removed" signal, prune all peer trackers but keep the
+    # WG sensor (option still on; user may reinstall).
     live_ids = {
         peer["id"]
         for iface in wg.get("interfaces", [])

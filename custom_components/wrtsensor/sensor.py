@@ -226,13 +226,24 @@ class WrtsensorWireguardSensor(_WrtsensorBase):
         self._attr_unique_id = f"{entry.entry_id}_wireguard"
 
     @property
+    def available(self) -> bool:
+        # Mark unavailable on partial scans (data["wireguard"] is None) so a
+        # router/AP outage doesn't incorrectly drive the peer count to 0.
+        data = self.coordinator.data
+        if data is None:
+            return False
+        if "wireguard" in data and data["wireguard"] is None:
+            return False
+        return super().available
+
+    @property
     def native_value(self) -> int | None:
         data = self.coordinator.data
         if not data:
             return None
         wg = data.get("wireguard")
-        if not wg:
-            return 0
+        if wg is None:
+            return None  # partial scan — entity is unavailable
         return sum(
             1
             for iface in wg.get("interfaces", [])
@@ -243,11 +254,13 @@ class WrtsensorWireguardSensor(_WrtsensorBase):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         data = self.coordinator.data or {}
-        wg = data.get("wireguard") or {
-            "available": False,
-            "stale_threshold_s": self.coordinator._wg_stale_threshold_s,
-            "interfaces": [],
-        }
+        wg = data.get("wireguard")
+        if wg is None:
+            wg = {
+                "available": False,
+                "stale_threshold_s": self.coordinator._wg_stale_threshold_s,
+                "interfaces": [],
+            }
         return {"wireguard": wg}
 
 

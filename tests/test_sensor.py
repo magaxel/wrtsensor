@@ -327,6 +327,14 @@ def test_wireguard_sensor_returns_zero_when_unavailable():
     assert _make_wg_sensor(data).native_value == 0
 
 
+def test_wireguard_sensor_unavailable_on_partial_scan():
+    """data['wireguard'] is None on partial scans — sensor must report None
+    (HA renders as 'unavailable') rather than flipping to 0."""
+    sensor = _make_wg_sensor({"wireguard": None, "partial": True})
+    assert sensor.native_value is None
+    assert sensor.available is False
+
+
 def test_wireguard_sensor_attributes_round_trip_dict():
     wg = {
         "available": True,

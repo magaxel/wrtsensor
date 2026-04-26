@@ -139,6 +139,10 @@ class WireguardCard extends LitElement {
 
   _renderPeerRow(peer) {
     const stale = !peer.online;
+    const rx = peer.rx_Bps;
+    const tx = peer.tx_Bps;
+    // Both unknown -> "—". One known -> sum, treating null as 0.
+    const rate = rx == null && tx == null ? null : (rx ?? 0) + (tx ?? 0);
     return html`
       <tr class=${stale ? "stale" : ""}>
         <td>
@@ -149,7 +153,7 @@ class WireguardCard extends LitElement {
         <td>${fmtAge(peer.last_handshake)}</td>
         <td class="num">${fmtBytes(peer.rx_bytes)}</td>
         <td class="num">${fmtBytes(peer.tx_bytes)}</td>
-        <td class="num">${fmtRate((peer.rx_Bps ?? 0) + (peer.tx_Bps ?? 0))}</td>
+        <td class="num">${fmtRate(rate)}</td>
       </tr>
     `;
   }

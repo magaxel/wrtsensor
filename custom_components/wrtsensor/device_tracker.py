@@ -136,13 +136,30 @@ class WrtsensorWireguardPeerTracker(
         self._attr_unique_id = f"{entry.entry_id}_wgpeer_{peer_id}"
         self._attr_device_info = _device_info(entry)
 
+    def _wg_data(self) -> dict[str, Any] | None:
+        """Return the wireguard block, or None on partial scan / no data."""
+        data = self.coordinator.data
+        if data is None:
+            return None
+        return data.get("wireguard")
+
     def _get_peer(self) -> dict[str, Any] | None:
-        wg = (self.coordinator.data or {}).get("wireguard") or {}
+        wg = self._wg_data() or {}
         for iface in wg.get("interfaces", []):
             for peer in iface.get("peers", []):
                 if peer.get("id") == self._peer_id:
                     return {**peer, "_iface": iface.get("name", "")}
         return None
+
+    @property
+    def available(self) -> bool:
+        # Mark unavailable on partial scans so VPN-presence automations don't
+        # fire `not_home` during a transient gateway/AP outage.
+        if self.coordinator.data is None:
+            return False
+        if self._wg_data() is None:
+            return False
+        return super().available
 
     @property
     def name(self) -> str:

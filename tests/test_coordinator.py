@@ -790,6 +790,21 @@ def test_wg_enabled_with_peers_populates_result():
     assert len(iface["peers"]) == 3
 
 
+def test_wg_partial_scan_emits_wireguard_none_not_zero():
+    """Cached/partial-scan path must emit wireguard=None so entities go
+    unavailable rather than reporting 0 peers + flipping presence to not_home."""
+    c = _make_coordinator()
+    c._enable_wireguard = True
+    c._prev_state = {
+        "11:22:33:44:55:66": StateEntry(mac="11:22:33:44:55:66", online=True),
+    }
+    with patch.object(c, "_collect_gateway", new=AsyncMock(return_value={})):
+        result = asyncio.run(c._async_update_data())
+    assert result["partial"] is True
+    assert "wireguard" in result
+    assert result["wireguard"] is None
+
+
 def test_wg_compute_rates_first_sample_is_none():
     c = _make_coordinator()
     interfaces = [

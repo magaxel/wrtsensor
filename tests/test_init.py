@@ -432,6 +432,37 @@ def test_wg_prune_skips_on_partial_scan():
     assert _singleton_registry.async_get("device_tracker.wg_alice") is not None
 
 
+def test_wg_prune_removes_all_peer_trackers_on_clean_no_wg():
+    """Successful scan that returns no interfaces (WG uninstalled, option still on)
+    must prune all peer trackers — but keep the WG sensor so it can recover when
+    WG comes back."""
+    _reset_registry()
+    entry = _make_entry()
+    _singleton_registry.add(
+        "device_tracker.wg_alice", "test-entry_wgpeer_aaa", "test-entry"
+    )
+    _singleton_registry.add(
+        "device_tracker.wg_bob", "test-entry_wgpeer_bbb", "test-entry"
+    )
+    _singleton_registry.add("sensor.wireguard", "test-entry_wireguard", "test-entry")
+
+    coordinator = _make_wg_coordinator(
+        enable=True,
+        data={
+            "wireguard": {
+                "available": False,
+                "stale_threshold_s": 180,
+                "interfaces": [],
+            }
+        },
+    )
+    _prune_wg(None, entry, coordinator)
+
+    assert _singleton_registry.async_get("device_tracker.wg_alice") is None
+    assert _singleton_registry.async_get("device_tracker.wg_bob") is None
+    assert _singleton_registry.async_get("sensor.wireguard") is not None
+
+
 def test_wg_prune_skips_when_no_data():
     """Cold start (coordinator.data is None): leave registry alone."""
     _reset_registry()

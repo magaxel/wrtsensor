@@ -123,6 +123,7 @@ BW_MAX_RATE_BPS = int(os.environ.get("NETSCAN_BW_MAX_RATE_BPS", "125000000"))  #
 DEVICE_BW_STATE = STATE_DIR / ".netscan_device_bw"
 WAN_EVENT_STATE = STATE_DIR / ".netscan_wan_state"
 DEVICE_BW_ACCUM = STATE_DIR / ".netscan_device_bw_accum"
+WG_BW_STATE = STATE_DIR / ".netscan_wg_bw_state.json"
 
 # ------------------------- Data types -------------------------
 
@@ -1245,6 +1246,51 @@ def collect_wireguard(host: str, stale_threshold_s: int = 180) -> dict[str, Any]
     return {"interfaces": interfaces}
 
 
+def compute_wg_rates(interfaces: list[dict[str, Any]]) -> None:
+    """Annotate each peer with rx_Bps/tx_Bps using a persistent baseline file.
+
+    Mirrors compute_wan_rates: counter resets emit None, stale baselines are
+    dropped, rates above BW_MAX_RATE_BPS are clamped to None.
+    """
+    now = int(time.time())
+    prev: dict[str, dict[str, int]] = {}
+    if WG_BW_STATE.exists():
+        try:
+            prev = json.loads(WG_BW_STATE.read_text())
+            if not isinstance(prev, dict):
+                prev = {}
+        except (ValueError, OSError):
+            prev = {}
+
+    new_state: dict[str, dict[str, int]] = {}
+    for iface in interfaces:
+        for peer in iface["peers"]:
+            pid = peer["id"]
+            rx_b = peer["rx_bytes"]
+            tx_b = peer["tx_bytes"]
+            rx_rate: int | None = None
+            tx_rate: int | None = None
+            p = prev.get(pid)
+            if p:
+                elapsed = now - int(p.get("ts", 0))
+                if BW_MIN_ELAPSED_S <= elapsed < BW_MAX_AGE_S:
+                    prev_rx = int(p.get("rx", 0))
+                    prev_tx = int(p.get("tx", 0))
+                    if rx_b < prev_rx or tx_b < prev_tx:
+                        # Counter reset (interface restart, host reboot)
+                        rx_rate = tx_rate = None
+                    else:
+                        r = (rx_b - prev_rx) // elapsed
+                        t = (tx_b - prev_tx) // elapsed
+                        rx_rate = r if 0 <= r <= BW_MAX_RATE_BPS else None
+                        tx_rate = t if 0 <= t <= BW_MAX_RATE_BPS else None
+            peer["rx_Bps"] = rx_rate
+            peer["tx_Bps"] = tx_rate
+            new_state[pid] = {"ts": now, "rx": rx_b, "tx": tx_b}
+
+    _atomic_write(WG_BW_STATE, json.dumps(new_state))
+
+
 def compute_device_rates(
     wifi_bytes: dict[str, dict[str, int]],
     wired_bytes: dict[str, dict[str, int]],
@@ -1927,11 +1973,24 @@ def prune_old_state(state: dict[str, StateEntry]) -> dict[str, StateEntry]:
 def main() -> None:
     scan_start = time.time()
 
-    if len(sys.argv) < 2:
-        emit_error(f"usage: {sys.argv[0]} <gw_user@gw_ip> [ap_user@ap_ip] ...")
+    raw_args = sys.argv[1:]
+    enable_wireguard = bool(int(os.environ.get("WRTSENSOR_ENABLE_WIREGUARD", "0")))
+    args: list[str] = []
+    for a in raw_args:
+        if a in ("--wireguard", "--wg"):
+            enable_wireguard = True
+        elif a == "--no-wireguard":
+            enable_wireguard = False
+        else:
+            args.append(a)
 
-    gw_host = sys.argv[1]
-    ap_hosts = sys.argv[2:]
+    if not args:
+        emit_error(
+            f"usage: {sys.argv[0]} [--wireguard] <gw_user@gw_ip> [ap_user@ap_ip] ..."
+        )
+
+    gw_host = args[0]
+    ap_hosts = args[1:]
 
     for arg in [gw_host, *ap_hosts]:
         if not _valid_host_arg(arg):
@@ -2170,25 +2229,30 @@ def main() -> None:
     # dnsmasq DNS cache stats
     dns_stats = compute_dns_rates(parse_dns_stats(gw_data.get("dns", [])))
 
-    # WireGuard (secret-free; private/preshared keys never read)
-    wg_interfaces: list[dict[str, Any]] = []
-    with concurrent.futures.ThreadPoolExecutor(
-        max_workers=max(1, 1 + len(ap_hosts))
-    ) as pool:
-        wg_futures = [pool.submit(collect_wireguard, gw_host)] + [
-            pool.submit(collect_wireguard, h) for h in ap_hosts
-        ]
-        for fut in wg_futures:
-            try:
-                res = fut.result(timeout=12)
-            except Exception:
-                continue
-            wg_interfaces.extend(res.get("interfaces", []))
-    wireguard = {
-        "available": bool(wg_interfaces),
-        "stale_threshold_s": 180,
-        "interfaces": wg_interfaces,
-    }
+    # WireGuard (secret-free; private/preshared keys never read).
+    # Default off to match the HACS integration's opt-in posture; enable with
+    # --wireguard / --wg or WRTSENSOR_ENABLE_WIREGUARD=1.
+    wireguard: dict[str, Any] | None = None
+    if enable_wireguard:
+        wg_interfaces: list[dict[str, Any]] = []
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=max(1, 1 + len(ap_hosts))
+        ) as pool:
+            wg_futures = [pool.submit(collect_wireguard, gw_host)] + [
+                pool.submit(collect_wireguard, h) for h in ap_hosts
+            ]
+            for fut in wg_futures:
+                try:
+                    res = fut.result(timeout=12)
+                except Exception:
+                    continue
+                wg_interfaces.extend(res.get("interfaces", []))
+        compute_wg_rates(wg_interfaces)
+        wireguard = {
+            "available": bool(wg_interfaces),
+            "stale_threshold_s": 180,
+            "interfaces": wg_interfaces,
+        }
 
     # Output JSON for HA sensor
     output = {
@@ -2201,7 +2265,7 @@ def main() -> None:
         "wan_tx_rate": tx_rate,
         "host_stats": host_stats,
         "dns_stats": dns_stats,
-        "wireguard": wireguard,
+        **({"wireguard": wireguard} if enable_wireguard else {}),
         "devices": [
             {
                 "mac": d.mac,
