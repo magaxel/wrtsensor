@@ -42,7 +42,6 @@ openwrt_collector.sh         # Symlink → custom_components/wrtsensor/openwrt_c
 command_line.yaml            # Example command_line sensor definitions (manual path)
 templates.yaml               # Example derived template sensors (manual path)
 www/                         # Lovelace custom cards (manual path — copy to /config/www/)
-  network-list-card.js
   network-table-card.js
   network-topology-card.js
   network-events-card.js

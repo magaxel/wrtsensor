@@ -63,7 +63,6 @@ All of this comes from a single 20 s SSH call to the gateway plus parallel SSH c
 
 6. Add the Lovelace resources manually in **Settings → Dashboards → Resources**:
 
-   - `/wrtsensor_static/network-list-card.js?v=1.0.0` — JavaScript Module
    - `/wrtsensor_static/network-table-card.js?v=1.0.0` — JavaScript Module
    - `/wrtsensor_static/network-topology-card.js?v=1.0.0` — JavaScript Module
    - `/wrtsensor_static/network-events-card.js?v=1.0.0` — JavaScript Module
@@ -80,27 +79,6 @@ Open the integration in **Settings → Devices & Services**, hit the triple-dot 
 ## Card configuration
 
 Each wrtsensor config entry creates its own scanner entity. Use the entity picker in the card editor, or replace the example IDs below with the entity IDs created for your entry. Drop these snippets into a dashboard via **Raw configuration editor** or the **+ ADD CARD → Manual** editor.
-
-### `network-list-card`
-
-Compact, searchable, sortable device list. Each row expands to show Wi-Fi metrics, byte totals, first-seen, etc.
-
-```yaml
-type: custom:network-list-card
-entity: sensor.my_router_network_scanner
-title: Devices
-show_offline: false      # default false — offline devices are hidden
-max_height: 560          # px; 0 = fill container in sections/grid layouts
-columns:                 # which detail fields to show on expand (optional)
-  - ip
-  - mac
-  - vendor
-  - ap
-  - signal
-  - rx_total
-  - tx_total
-  - first_seen
-```
 
 ### `network-table-card`
 
