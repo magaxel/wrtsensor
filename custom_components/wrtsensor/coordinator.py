@@ -1654,8 +1654,4 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "dns_stats": dns_stats,
             "devices": [asdict(d) for d in devices],
             "partial": False,
-            # Pass through for entity platform use
-            "_gw_mac": gw_mac,
-            "_gw_hostname": gw_hostname,
-            "_ap_hosts": self._ap_hosts,
         }
