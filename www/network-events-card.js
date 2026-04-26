@@ -5,7 +5,7 @@ import {
   nothing,
 } from "https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js";
 
-const CARD_VERSION = "1.1.1";
+const CARD_VERSION = "1.1.2";
 const CARD_TYPE = "network-events-card";
 const EDITOR_TYPE = `${CARD_TYPE}-editor`;
 const WS_TYPE_RECENT_EVENTS = "wrtsensor/recent_events";
@@ -376,6 +376,13 @@ class NetworkEventsCard extends LitElement {
       this._setStatus("ready");
     } catch (e) {
       if (requestSeq !== this._requestSeq) return;
+      const code = e?.code ?? "";
+      if (code === "unknown_command" || code === "entry_not_loaded") {
+        // Integration still starting up — wait for the next state push to retry.
+        this._lastUpdated = null;
+        this._setStatus("loading");
+        return;
+      }
       this._setStatus("error", String(e?.message ?? e));
     }
   }
