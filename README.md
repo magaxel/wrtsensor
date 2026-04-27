@@ -65,7 +65,7 @@ All of this comes from a single 20 s SSH call to the gateway plus parallel SSH c
 6. Add the Lovelace resources manually in **Settings → Dashboards → Resources**:
 
    - `/wrtsensor_static/network-table-card.js?v=1.0.0` — JavaScript Module
-   - `/wrtsensor_static/network-topology-card.js?v=1.0.0` — JavaScript Module
+   - `/wrtsensor_static/network-topology-card.js?v=1.1.0` — JavaScript Module
    - `/wrtsensor_static/network-events-card.js?v=1.0.0` — JavaScript Module
    - `/wrtsensor_static/dns-stats-card.js?v=1.0.0` — JavaScript Module
    - `/wrtsensor_static/wireguard-card.js?v=1.1.0` — JavaScript Module *(only needed if you enable the WireGuard option)*
@@ -114,9 +114,13 @@ entity: sensor.my_router_network_scanner
 title: Network Map
 gateway_label: gw        # fallback label shown when gateway device is missing
 column_width: 200        # px between AP columns
-show_bandwidth: false    # true = draw live throughput labels on each link
 show_offline: false
+show_wireguard_peers: false      # true = draw WireGuard peers above Internet
+show_offline_wireguard: true     # include offline WireGuard peers dimmed
+wireguard_entity: null           # optional sensor override if auto-detect is wrong
 ```
+
+WireGuard peers are auto-detected from a sibling `sensor.*_wireguard` entity on the same wrtsensor device. If auto-detect cannot choose a sensor, set `wireguard_entity` explicitly. The editor shows the WireGuard controls when a sensor is discoverable or an override is configured; if the sensor reports `available: false`, peers appear after the next successful WireGuard scan.
 
 Breaking change in v2.x: `gateway_hostname` was renamed to `gateway_label`, and `col_width` was renamed to `column_width`.
 
@@ -290,7 +294,7 @@ logbook:
 
 **All APs in log as "unreachable"** — APs must be reachable from HA over SSH with the same key as the gateway, on the SSH port configured for the integration (default 22; change in the integration's Options). Check with `ssh -i /config/ssh/id_ed25519 -p <port> root@<ap-ip> uptime` on the HA host.
 
-**Card is missing from the picker or shows "Custom element doesn't exist"** — the card's JavaScript resource is not loaded by Lovelace. For HACS installs, wrtsensor serves card files under `/wrtsensor_static/`, but each card URL still needs to be present in **Settings → Dashboards → Resources**. If WireGuard is enabled, add `/wrtsensor_static/wireguard-card.js?v=1.0.3` as a JavaScript Module. Bump the `?v=` query to bust the companion app's JS cache after updates.
+**Card is missing from the picker or shows "Custom element doesn't exist"** — the card's JavaScript resource is not loaded by Lovelace. For HACS installs, wrtsensor serves card files under `/wrtsensor_static/`, but each card URL still needs to be present in **Settings → Dashboards → Resources**. If WireGuard is enabled, add `/wrtsensor_static/wireguard-card.js?v=1.1.0` as a JavaScript Module. Bump the `?v=` query to bust the companion app's JS cache after updates.
 
 **A device tracker won't show up** — trackers are disabled by default. Enable via **Settings → Entities → Show disabled entities**.
 

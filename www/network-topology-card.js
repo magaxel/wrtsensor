@@ -50,6 +50,11 @@ const ICON_TABLET = `
   <rect x="4" y="2" width="12" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/>
   <circle cx="10" cy="15.5" r="0.9" fill="currentColor"/>`;
 
+const ICON_VPN = `
+  <path d="M10 2 L17 5 V11 C17 14.5 14 17.5 10 18 C6 17.5 3 14.5 3 11 V5 Z"
+        fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+  <circle cx="10" cy="10" r="2" fill="currentColor"/>`;
+
 // Hostname-based patterns — checked against "hostname vendor" combined hint
 const HOSTNAME_PATTERNS = [
   [/phone|mobile|iphone|android|pixel|galaxy|oneplus|xiaomi|huawei|cmf|sm-|redmi/, ICON_PHONE],
@@ -133,6 +138,46 @@ function _truncate(str, n) {
   return `${boundary > n * 0.6 ? cut.slice(0, boundary) : cut}…`;
 }
 
+function findWireguardSensor(hass, entityId, override) {
+  const empty = { state: null, entityId: null, configured: false, available: false };
+  if (!hass) return empty;
+  const wrap = (eid) => {
+    const state = hass.states?.[eid] ?? null;
+    return {
+      state,
+      entityId: eid,
+      configured: true,
+      available: !!state?.attributes?.wireguard?.available,
+    };
+  };
+
+  if (override) return wrap(override);
+
+  const entities = hass.entities ?? {};
+  const deviceId = entities[entityId]?.device_id;
+  if (deviceId) {
+    for (const [eid, reg] of Object.entries(entities)) {
+      if (reg.device_id !== deviceId) continue;
+      const uniq = (reg.unique_id ?? "").toLowerCase();
+      if (eid.endsWith("_wireguard") || uniq.endsWith("_wireguard")) return wrap(eid);
+    }
+  }
+
+  const fallback = Object.keys(hass.states ?? {}).filter(
+    (eid) => eid.startsWith("sensor.") && eid.endsWith("_wireguard"),
+  );
+  return fallback.length === 1 ? wrap(fallback[0]) : empty;
+}
+
+function _endpointHost(endpoint) {
+  const value = String(endpoint ?? "");
+  if (!value) return "";
+  if (value.startsWith("[")) return value.slice(1, value.indexOf("]"));
+  const colon = value.lastIndexOf(":");
+  if (colon > -1 && value.indexOf(":") === colon) return value.slice(0, colon);
+  return value;
+}
+
 // SVG embedded stylesheet — inherits HA CSS custom properties through shadow DOM
 const SVG_STYLE = `
   <defs><style>
@@ -141,13 +186,17 @@ const SVG_STYLE = `
     .ntc-gw       { fill: var(--teal-color, #009688); }
     .ntc-ap       { fill: var(--indigo-color, #3f51b5); }
     .ntc-wire     { fill: var(--blue-grey-color, #607d8b); }
+    .ntc-wg-peer  { fill: #88171a; }
+    .ntc-wg-icon  { color: #fff; }
     .ntc-icon     { color: #fff; }
     .ntc-label    { fill: var(--primary-text-color, #e1e1e1); font-family: var(--ha-font-family-body, Roboto, sans-serif); }
     .ntc-sub      { fill: var(--secondary-text-color, #9b9b9b); font-family: var(--ha-font-family-body, Roboto, sans-serif); }
     .ntc-wan      { fill: var(--secondary-text-color, #9b9b9b); font-family: var(--ha-font-family-body, Roboto, sans-serif); }
     .ntc-link      { fill: none; stroke: rgba(var(--rgb-primary-text-color, 225,225,225), 0.18); stroke-width: 1.5; }
-    .ntc-link-wifi { fill: none; stroke-width: 1.5; stroke-dasharray: 5 3; stroke-opacity: 0.65; }
-    .ntc-link-inet { fill: none; stroke: var(--primary-color, #009ac7); stroke-width: 1.5; stroke-opacity: 0.6; }
+    .ntc-link-wifi { fill: none; stroke: rgba(var(--rgb-primary-text-color, 225,225,225), 0.18); stroke-width: 1.5; stroke-dasharray: 5 3; stroke-opacity: 0.65; }
+    .ntc-link-inet { fill: none; stroke: rgba(var(--rgb-primary-text-color, 225,225,225), 0.18); stroke-width: 1.5; stroke-opacity: 0.6; }
+    .ntc-link-wg    { fill: none; stroke: rgba(var(--rgb-primary-text-color, 225,225,225), 0.18); stroke-width: 1.4; stroke-dasharray: 4 3; stroke-opacity: 0.75; }
+    .ntc-link-wg-off{ stroke: var(--secondary-text-color, #888); stroke-opacity: 0.4; }
     .ntc-warn      { fill: var(--warning-color, #ffa600); font-family: var(--ha-font-family-body, Roboto, sans-serif); }
     .ntc-unknown   { opacity: 0.6; font-style: italic; }
   </style></defs>`;
@@ -168,8 +217,10 @@ class NetworkTopologyCard extends HTMLElement {
       title: config.title ?? "Network Map",
       gateway_label: config.gateway_label ?? config.gateway_hostname ?? "gw",
       column_width: config.column_width ?? config.col_width ?? 200,
-      show_bandwidth: config.show_bandwidth ?? false,
       show_offline: config.show_offline ?? false,
+      show_wireguard_peers: config.show_wireguard_peers ?? false,
+      show_offline_wireguard: config.show_offline_wireguard ?? true,
+      wireguard_entity: config.wireguard_entity ?? null,
     };
     // Fix: reset so a config change always triggers a re-render
     this._lastUpdated = null;
@@ -186,10 +237,21 @@ class NetworkTopologyCard extends HTMLElement {
       this._renderUnavailable(`${this._config.entity} is ${state.state}`);
       return;
     }
-    if (state.last_updated === this._lastUpdated) return;
-    this._lastUpdated = state.last_updated;
+    const wg = findWireguardSensor(hass, this._config.entity, this._config.wireguard_entity);
+    const wgState = wg.available ? wg.state : null;
+    const cacheKey = [
+      this._config.entity,
+      state.last_updated,
+      this._config.wireguard_entity ?? "",
+      wg.entityId ?? "",
+      wgState?.last_updated ?? "",
+      this._config.show_wireguard_peers ? 1 : 0,
+      this._config.show_offline_wireguard ? 1 : 0,
+    ].join("|");
+    if (cacheKey === this._lastUpdated) return;
+    this._lastUpdated = cacheKey;
     try {
-      this._render(state);
+      this._render(state, wgState);
     } catch (e) {
       this._renderError(String(e));
     }
@@ -223,7 +285,7 @@ class NetworkTopologyCard extends HTMLElement {
     return "#f44336";
   }
 
-  _render(state) {
+  _render(state, wgState) {
     const attr = state.attributes ?? {};
     const allDevices = attr.devices ?? [];
     const wanIp = attr.wan_ip ?? "";
@@ -235,6 +297,14 @@ class NetworkTopologyCard extends HTMLElement {
     const devices = this._config.show_offline
       ? allDevices
       : allDevices.filter((d) => d.online !== false);
+    const wgEnabled = this._config.show_wireguard_peers && wgState != null;
+    const wgIfaces = wgEnabled ? (wgState.attributes?.wireguard?.interfaces ?? []) : [];
+    const allWgPeers = wgIfaces.flatMap((iface) =>
+      (iface.peers ?? []).map((peer) => ({ ...peer, _iface: iface.name, _host: iface.host })),
+    );
+    const wgPeers = this._config.show_offline_wireguard
+      ? allWgPeers
+      : allWgPeers.filter((peer) => peer.online === true);
 
     const apHostnames = new Set();
     for (const d of allDevices) {
@@ -271,7 +341,11 @@ class NetworkTopologyCard extends HTMLElement {
     const NODE_R = 20,
       GW_R = 26,
       AP_R = 22,
-      ROW_H = 52;
+      ROW_H = 52,
+      WG_R = AP_R,
+      WG_ROW_GAP = 110,
+      WG_ROW_H = 56,
+      WG_CELL_W = 190;
     const COL_PAD = 40,
       COL_WIDTH = this._config.column_width;
     const MAX_COL = 8;
@@ -296,7 +370,12 @@ class NetworkTopologyCard extends HTMLElement {
     // Dynamic width — each column gets a fixed minimum, no shrinking on mobile
     const W = Math.max(columns.length * COL_WIDTH + COL_PAD * 2, 600);
 
-    const topMargin = 80,
+    const wgPerRow = Math.max(1, Math.floor((W - 2 * COL_PAD) / WG_CELL_W));
+    const wgCount = wgEnabled ? wgPeers.length : 0;
+    const wgRows = wgCount ? Math.ceil(wgCount / wgPerRow) : 0;
+    const wgBlockH = wgCount ? (wgRows - 1) * WG_ROW_H + WG_ROW_GAP : 0;
+
+    const topMargin = 80 + wgBlockH,
       gwY = topMargin + 90,
       apRowY = gwY + 110,
       devStartY = apRowY + 90;
@@ -306,10 +385,9 @@ class NetworkTopologyCard extends HTMLElement {
     const nCols = Math.max(columns.length, 1);
     const colW = (W - 2 * COL_PAD) / nCols;
     const colCenters = columns.map((_, i) => COL_PAD + colW * i + colW / 2);
-    const gwX = W / 2,
+    const inetX = W / 2;
+    const gwX = inetX,
       inetY = topMargin;
-
-    const showBandwidth = this._config.show_bandwidth ?? false;
 
     const nodeTitle = (d) => {
       const parts = [];
@@ -344,6 +422,22 @@ class NetworkTopologyCard extends HTMLElement {
       return parts.join("\n");
     };
 
+    const wgTitle = (p) => {
+      const parts = [];
+      if (p.name) parts.push(p.name);
+      if (p._host) parts.push(`Host: ${p._host}${p._iface ? ` (${p._iface})` : ""}`);
+      if (p.public_key) parts.push(`Pubkey: ${p.public_key.slice(0, 16)}…`);
+      if (p.endpoint) parts.push(`Endpoint: ${p.endpoint}`);
+      if (p.allowed_ips?.length) parts.push(`Allowed IPs: ${p.allowed_ips.join(", ")}`);
+      if (p.last_handshake) parts.push(`Handshake: ${_fmtAge(p.last_handshake)}`);
+      const rxT = _fmtBytes(p.rx_bytes),
+        txT = _fmtBytes(p.tx_bytes);
+      if (rxT != null || txT != null) parts.push(`Total: ↓ ${rxT ?? "—"}  ↑ ${txT ?? "—"}`);
+      if (p.persistent_keepalive_s) parts.push(`Keepalive: ${p.persistent_keepalive_s}s`);
+      parts.push(`Status: ${p.online === true ? "online" : "offline"}`);
+      return parts.join("\n");
+    };
+
     const svgNode = (
       x,
       y,
@@ -370,6 +464,15 @@ class NetworkTopologyCard extends HTMLElement {
       </g>`;
     };
 
+    const svgWgPeerNode = (x, y, r, label, sublabel, opacity, title) => `
+      <g opacity="${opacity}">
+        <title>${_esc(title)}</title>
+        <circle cx="${x}" cy="${y}" r="${r}" class="ntc-wg-peer" stroke="var(--card-background-color, #1c1c1c)" stroke-width="2"/>
+        <svg x="${x - 10}" y="${y - 10}" width="20" height="20" viewBox="0 0 20 20" class="ntc-icon ntc-wg-icon" pointer-events="none">${ICON_VPN}</svg>
+        <text x="${x + r + 6}" y="${y + 4}" class="ntc-label" font-size="11" text-anchor="start">${_esc(_truncate(label, 20))}</text>
+        ${sublabel ? `<text x="${x + r + 6}" y="${y + 16}" class="ntc-sub" font-size="9" text-anchor="start">${_esc(sublabel)}</text>` : ""}
+      </g>`;
+
     const curve = (x1, y1, x2, y2, cls = "ntc-link") =>
       `<path class="${cls}" d="M${x1},${y1} C${x1},${(y1 + y2) / 2} ${x2},${(y1 + y2) / 2} ${x2},${y2}"/>`;
 
@@ -387,14 +490,36 @@ class NetworkTopologyCard extends HTMLElement {
     nodes.push(`
       <g>
         <title>${_esc(inetTooltip)}</title>
-        <ellipse cx="${gwX}" cy="${inetY}" rx="44" ry="22" class="ntc-inet" opacity="0.9"/>
-        <text x="${gwX}" y="${inetY + 5}" text-anchor="middle" font-size="11" fill="#fff"
+        <ellipse cx="${inetX}" cy="${inetY}" rx="44" ry="22" class="ntc-inet" opacity="0.9"/>
+        <text x="${inetX}" y="${inetY + 5}" text-anchor="middle" font-size="11" fill="#fff"
               font-family="var(--ha-font-family-body, Roboto, sans-serif)" font-weight="500">Internet</text>
-        ${wanIp ? `<text x="${gwX}" y="${inetY + 38}" text-anchor="middle" font-size="9" class="ntc-wan">${_esc(wanIp)}</text>` : ""}
-        ${wanIp6 ? `<text x="${gwX}" y="${inetY + 50}" text-anchor="middle" font-size="8" class="ntc-wan" opacity="0.75">${_esc(wanIp6)}</text>` : ""}
+        ${wanIp ? `<text x="${inetX + 50}" y="${inetY - 2}" text-anchor="start" font-size="9" class="ntc-wan">${_esc(wanIp)}</text>` : ""}
+        ${wanIp6 ? `<text x="${inetX + 50}" y="${inetY + 10}" text-anchor="start" font-size="8" class="ntc-wan" opacity="0.75">${_esc(wanIp6)}</text>` : ""}
       </g>`);
 
-    paths.push(curve(gwX, inetY + 22, gwX, gwY - GW_R, "ntc-link-inet"));
+    if (wgEnabled && wgPeers.length) {
+      const inetTopY = inetY - 22;
+      for (let i = 0; i < wgPeers.length; i++) {
+        const peer = wgPeers[i];
+        const row = Math.floor(i / wgPerRow);
+        const inRow = i % wgPerRow;
+        const peersInRow = Math.min(wgPerRow, wgPeers.length - row * wgPerRow);
+        const px = inetX + (inRow - (peersInRow - 1) / 2) * WG_CELL_W;
+        const py = inetY - WG_ROW_GAP - (wgRows - 1 - row) * WG_ROW_H;
+        const online = peer.online === true;
+        const opacity = online ? "1" : "0.45";
+        const linkClass = online ? "ntc-link-wg" : "ntc-link-wg ntc-link-wg-off";
+        const label =
+          peer.name || (peer.public_key ? peer.public_key.slice(0, 8) : `peer-${i + 1}`);
+
+        paths.push(curve(px, py + WG_R, inetX, inetTopY, linkClass));
+        nodes.push(
+          svgWgPeerNode(px, py, WG_R, label, _endpointHost(peer.endpoint), opacity, wgTitle(peer)),
+        );
+      }
+    }
+
+    paths.push(curve(inetX, inetY + 22, gwX, gwY - GW_R, "ntc-link-inet"));
 
     const gwOp = gateway ? (gateway.online !== false ? "1" : "0.4") : "1";
     nodes.push(
@@ -444,15 +569,8 @@ class NetworkTopologyCard extends HTMLElement {
           const d = col.devices[di];
           const dy = devStartY + di * ROW_H;
           const sc = this._signalColor(d.signal);
-          paths.push(line(cx, apRowY + AP_R, cx, dy - NODE_R, "ntc-link-wifi", sc));
-          const bwSub = [
-            _fmtMbps(d.rx_bps) != null ? `↓${_fmtMbps(d.rx_bps)}` : null,
-            _fmtMbps(d.tx_bps) != null ? `↑${_fmtMbps(d.tx_bps)}` : null,
-          ]
-            .filter(Boolean)
-            .join(" ");
-          const devSub =
-            showBandwidth && bwSub ? bwSub : d.signal != null ? `${d.signal} dBm` : (d.ip ?? "");
+          paths.push(line(cx, apRowY + AP_R, cx, dy - NODE_R, "ntc-link-wifi"));
+          const devSub = d.ip ?? "";
           const unknown = !d.hostname && !d.vendor;
           if (!this._iconCache[d.mac]) this._iconCache[d.mac] = _deviceIcon(d);
           const icon = this._iconCache[d.mac];
@@ -484,13 +602,7 @@ class NetworkTopologyCard extends HTMLElement {
           if (!this._iconCache[d.mac]) this._iconCache[d.mac] = _deviceIcon(d);
           const icon = this._iconCache[d.mac];
           const unknown = !d.hostname && !d.vendor;
-          const wBwSub = [
-            _fmtMbps(d.rx_bps) != null ? `↓${_fmtMbps(d.rx_bps)}` : null,
-            _fmtMbps(d.tx_bps) != null ? `↑${_fmtMbps(d.tx_bps)}` : null,
-          ]
-            .filter(Boolean)
-            .join(" ");
-          const wiredSub = showBandwidth && wBwSub ? wBwSub : (d.ip ?? "");
+          const wiredSub = d.ip ?? "";
           const wireOp = d.online !== false ? "1" : "0.4";
           nodes.push(
             svgNode(
@@ -549,7 +661,10 @@ class NetworkTopologyCard extends HTMLElement {
           const onlineCount = allDevices.filter((d) => d.online !== false).length;
           const offlineCount = allDevices.filter((d) => d.online === false).length;
           const updated = new Date(state.last_updated).toLocaleTimeString();
-          return `Updated: ${updated} · ${onlineCount} online${offlineCount ? ` · ${offlineCount} offline` : ""}`;
+          const wgText = wgEnabled
+            ? ` · WG ${allWgPeers.filter((p) => p.online === true).length}/${allWgPeers.length} online`
+            : "";
+          return `Updated: ${updated} · ${onlineCount} online${offlineCount ? ` · ${offlineCount} offline` : ""}${wgText}`;
         })()}</div>
       </ha-card>`;
 
@@ -975,8 +1090,17 @@ class NetworkTopologyCardEditor extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
-    const picker = this.shadowRoot.querySelector("ha-entity-picker");
+    const wg = findWireguardSensor(hass, this._config?.entity, this._config?.wireguard_entity);
+    const sig = `${wg.configured ? 1 : 0}|${wg.available ? 1 : 0}|${wg.entityId ?? ""}`;
+    if (sig !== this._wgSig) {
+      this._wgSig = sig;
+      this._render();
+      return;
+    }
+    const picker = this.shadowRoot.querySelector("#entity_picker");
     if (picker) picker.hass = hass;
+    const wgPicker = this.shadowRoot.querySelector("#wg_picker");
+    if (wgPicker) wgPicker.hass = hass;
   }
 
   _fire(config) {
@@ -1009,6 +1133,7 @@ class NetworkTopologyCardEditor extends HTMLElement {
       </style>
       <div class="form">
         <ha-entity-picker
+          id="entity_picker"
           label="Entity"
           allow-custom-entity
         ></ha-entity-picker>
@@ -1016,16 +1141,13 @@ class NetworkTopologyCardEditor extends HTMLElement {
         <ha-textfield id="gateway_label" label="Gateway label"></ha-textfield>
         <ha-textfield id="column_width" label="Column width" type="number" min="120" step="10"></ha-textfield>
         <label class="cb-row">
-          <ha-checkbox id="show_bandwidth"></ha-checkbox>
-          <span>Show bandwidth labels</span>
-        </label>
-        <label class="cb-row">
           <ha-checkbox id="show_offline"></ha-checkbox>
           <span>Show offline devices (dimmed)</span>
         </label>
+        <div id="wg-section"></div>
       </div>`;
 
-    const picker = this.shadowRoot.querySelector("ha-entity-picker");
+    const picker = this.shadowRoot.querySelector("#entity_picker");
     picker.value = c.entity ?? "";
     picker.includeDomains = ["sensor"];
     if (this._hass) picker.hass = this._hass;
@@ -1055,17 +1177,69 @@ class NetworkTopologyCardEditor extends HTMLElement {
       });
     });
 
-    const bandwidthCb = this.shadowRoot.querySelector("#show_bandwidth");
-    bandwidthCb.checked = c.show_bandwidth ?? false;
-    bandwidthCb.addEventListener("change", () => {
-      this._fire({ ...this._config, show_bandwidth: bandwidthCb.checked });
-    });
-
     const offlineCb = this.shadowRoot.querySelector("#show_offline");
     offlineCb.checked = c.show_offline ?? false;
     offlineCb.addEventListener("change", () => {
       this._fire({ ...this._config, show_offline: offlineCb.checked });
     });
+
+    const wgSection = this.shadowRoot.querySelector("#wg-section");
+    if (!wgSection) return;
+    const wg = findWireguardSensor(this._hass, c.entity, c.wireguard_entity);
+    if (wg.configured) {
+      wgSection.innerHTML = `
+        <label class="cb-row">
+          <ha-checkbox id="show_wg"></ha-checkbox>
+          <span>Show WireGuard peers</span>
+        </label>
+        <label class="cb-row" id="show_wg_off_row" style="margin-left:24px">
+          <ha-checkbox id="show_wg_off"></ha-checkbox>
+          <span>Show offline WireGuard peers (dimmed)</span>
+        </label>
+        <ha-entity-picker id="wg_picker" label="WireGuard sensor (override, optional)" allow-custom-entity></ha-entity-picker>
+        ${
+          wg.available
+            ? ""
+            : `<div style="font-size:var(--ha-font-size-s,12px);color:var(--secondary-text-color)">Selected WireGuard sensor reports no interfaces right now (available: false). Peers will appear once an integration scan succeeds.</div>`
+        }`;
+
+      const wgCb = wgSection.querySelector("#show_wg");
+      const wgOffRow = wgSection.querySelector("#show_wg_off_row");
+      const wgOffCb = wgSection.querySelector("#show_wg_off");
+      const wgPicker = wgSection.querySelector("#wg_picker");
+
+      wgCb.checked = c.show_wireguard_peers ?? false;
+      wgOffCb.checked = c.show_offline_wireguard ?? true;
+      wgOffRow.style.display = wgCb.checked ? "" : "none";
+
+      wgCb.addEventListener("change", () => {
+        wgOffRow.style.display = wgCb.checked ? "" : "none";
+        this._fire({ ...this._config, show_wireguard_peers: wgCb.checked });
+      });
+      wgOffCb.addEventListener("change", () => {
+        this._fire({ ...this._config, show_offline_wireguard: wgOffCb.checked });
+      });
+
+      wgPicker.value = c.wireguard_entity ?? "";
+      wgPicker.includeDomains = ["sensor"];
+      if (this._hass) wgPicker.hass = this._hass;
+      wgPicker.addEventListener("value-changed", (e) => {
+        this._fire({ ...this._config, wireguard_entity: e.detail.value || null });
+      });
+    } else {
+      wgSection.innerHTML = `
+        <ha-entity-picker id="wg_picker" label="WireGuard sensor (override, optional)" allow-custom-entity></ha-entity-picker>
+        <div style="font-size:var(--ha-font-size-s,12px);color:var(--secondary-text-color)">
+          WireGuard peers: enable WireGuard in the integration, or choose a WireGuard sensor override if auto-detect cannot pick one.
+        </div>`;
+      const wgPicker = wgSection.querySelector("#wg_picker");
+      wgPicker.value = c.wireguard_entity ?? "";
+      wgPicker.includeDomains = ["sensor"];
+      if (this._hass) wgPicker.hass = this._hass;
+      wgPicker.addEventListener("value-changed", (e) => {
+        this._fire({ ...this._config, wireguard_entity: e.detail.value || null });
+      });
+    }
   }
 }
 
