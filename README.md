@@ -68,7 +68,7 @@ All of this comes from a single 20 s SSH call to the gateway plus parallel SSH c
    - `/wrtsensor_static/network-topology-card.js?v=1.0.0` — JavaScript Module
    - `/wrtsensor_static/network-events-card.js?v=1.0.0` — JavaScript Module
    - `/wrtsensor_static/dns-stats-card.js?v=1.0.0` — JavaScript Module
-   - `/wrtsensor_static/wireguard-card.js?v=1.0.3` — JavaScript Module *(only needed if you enable the WireGuard option)*
+   - `/wrtsensor_static/wireguard-card.js?v=1.1.0` — JavaScript Module *(only needed if you enable the WireGuard option)*
 
 > If key authentication isn't set up yet, the config flow will ask for a password once and provision the public key into `/etc/dropbear/authorized_keys` on each OpenWrt box for you. The password is never stored.
 
@@ -163,11 +163,14 @@ Breaking change: top-level `dns_stats.latency_ms` and `dns_stats.servers` are no
 
 ### `wireguard-card`
 
-Per-peer WireGuard tunnel status. Requires the **Show WireGuard connections** option (off by default; turn it on under **Settings → Devices & Services → wrtsensor → Configure**). The card reads from the `sensor.<entry>_wireguard` entity that the integration creates when the option is on, and shows one row per peer: name (from the UCI `option description` if set, else the first 8 chars of the public key), endpoint, allowed IPs, last-handshake age, RX/TX totals, and live rate. Stale peers (no handshake within the configured idle timeout, default 180 s) are greyed out.
+Per-peer WireGuard tunnel status. Requires the **Show WireGuard connections** option (off by default; turn it on under **Settings → Devices & Services → wrtsensor → Configure**). The card reads from the `sensor.<entry>_wireguard` entity that the integration creates when the option is on. Each peer renders as a collapsible row showing a green/grey status dot and its name (from the UCI `option description` if set, else the first 8 chars of the public key); tapping or pressing Enter expands the row to show endpoint, allowed IPs, last-handshake age, RX/TX totals, and live rate. Stale peers (no handshake within the configured idle timeout, default 180 s) are greyed out.
+
+Set `max_peers` (default `0` = unlimited) to cap how many peers are shown at once. When the total peer count across all interfaces exceeds the limit, prev/next arrows appear at the bottom of the card and you can also swipe left/right on touch devices to page. Pagination is global across interfaces — when an interface's peers cross a page boundary they are split between pages, so the page boundaries follow the global peer order rather than per-interface counts.
 
 ```yaml
 type: custom:wireguard-card
 entity: sensor.my_router_wireguard
+max_peers: 0
 ```
 
 Each peer also gets its own `device_tracker` entity with a stable `unique_id` of `<entry_id>_wgpeer_<sha1[:16]>`. State is `home` when the peer's last handshake is within the idle timeout, `not_home` otherwise — useful for presence automations driven by VPN state. HA picks the slugified entity_id; pick the entity from the picker rather than guessing the slug.
