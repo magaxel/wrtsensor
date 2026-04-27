@@ -286,8 +286,12 @@ class WireguardCard extends LitElement {
   }
 
   _peerKey(iface, peer, ifaceLocalIndex) {
-    if (peer.public_key) return peer.public_key;
-    return `${iface.name ?? "wg"}|${ifaceLocalIndex}`;
+    // Prefer the backend's host|iface|public_key id so the same client public
+    // key configured on multiple interfaces/hosts gets independent expansion
+    // state and unique panel ids.
+    if (peer.id) return peer.id;
+    if (peer.public_key) return `${iface.host ?? ""}|${iface.name ?? "wg"}|${peer.public_key}`;
+    return `${iface.host ?? ""}|${iface.name ?? "wg"}|${ifaceLocalIndex}`;
   }
 
   _toggleExpand(key) {
@@ -327,15 +331,19 @@ class WireguardCard extends LitElement {
     const dy = t.clientY - start.y;
     if (Math.abs(dx) <= SWIPE_DX_THRESHOLD) return;
     if (Math.abs(dx) <= Math.abs(dy) * SWIPE_RATIO) return;
-    const targetPage = dx < 0 ? effectivePage + 1 : effectivePage - 1;
-    const clamped = Math.max(0, Math.min(targetPage, pages - 1));
-    if (clamped === effectivePage) return;
+    // Once the gesture qualifies as a horizontal swipe, suppress the follow-up
+    // synthetic click even if pagination is blocked at a boundary — otherwise
+    // a right-swipe on page 0 (or left-swipe on the last page) would still
+    // toggle whichever peer was under the finger.
     this._swiped = true;
     if (this._swipeClearTimer != null) clearTimeout(this._swipeClearTimer);
     this._swipeClearTimer = window.setTimeout(() => {
       this._swiped = false;
       this._swipeClearTimer = null;
     }, SWIPE_CLEAR_MS);
+    const targetPage = dx < 0 ? effectivePage + 1 : effectivePage - 1;
+    const clamped = Math.max(0, Math.min(targetPage, pages - 1));
+    if (clamped === effectivePage) return;
     this._goPage(clamped, pages);
   }
 
