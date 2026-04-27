@@ -5,9 +5,13 @@ import {
   nothing,
 } from "https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js";
 
-const CARD_VERSION = "1.0.3";
+const CARD_VERSION = "1.1.0";
 const CARD_TYPE = "wireguard-card";
 const EDITOR_TYPE = `${CARD_TYPE}-editor`;
+
+const SWIPE_DX_THRESHOLD = 40;
+const SWIPE_RATIO = 1.5;
+const SWIPE_CLEAR_MS = 250;
 
 const num = (n) => (Number.isFinite(Number(n)) ? Number(n) : null);
 
@@ -40,11 +44,32 @@ const fmtAge = (epoch) => {
   return `${Math.floor(elapsed / 86400)}d ago`;
 };
 
+const sanitizeId = (s) => String(s).replace(/[^a-zA-Z0-9_-]/g, "_");
+
 class WireguardCard extends LitElement {
   static properties = {
     hass: { attribute: false },
     _config: { state: true },
+    _expanded: { state: true },
+    _page: { state: true },
   };
+
+  constructor() {
+    super();
+    this._expanded = new Set();
+    this._page = 0;
+    this._swiped = false;
+    this._swipeClearTimer = null;
+    this._touchStart = null;
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this._swipeClearTimer != null) {
+      clearTimeout(this._swipeClearTimer);
+      this._swipeClearTimer = null;
+    }
+  }
 
   static styles = css`
     ha-card {
@@ -64,9 +89,12 @@ class WireguardCard extends LitElement {
     .iface {
       margin-bottom: 16px;
     }
+    .iface:last-child {
+      margin-bottom: 0;
+    }
     .iface-header {
       font-weight: 600;
-      margin-bottom: 8px;
+      margin-bottom: 4px;
       font-size: 0.95em;
       color: var(--secondary-text-color);
     }
@@ -75,54 +103,63 @@ class WireguardCard extends LitElement {
       opacity: 0.7;
       margin-left: 6px;
     }
-    .peer-list {
-      font-size: 0.92em;
-    }
-    .peer-row {
-      display: grid;
-      grid-template-columns:
-        minmax(0, 1.35fr)
-        minmax(0, 1.35fr)
-        minmax(0, 1.45fr)
-        minmax(0, 0.7fr)
-        minmax(0, 0.75fr)
-        minmax(0, 0.75fr)
-        minmax(0, 0.75fr);
-      gap: 4px 10px;
-      align-items: start;
-      padding: 5px 0;
-      border-bottom: 1px solid var(--divider-color, rgba(127, 127, 127, 0.2));
-      min-width: 0;
-    }
-    .peer-row.header {
-      font-weight: 600;
-      opacity: 0.75;
-    }
-    .peer-row > div {
-      min-width: 0;
-      overflow-wrap: anywhere;
-      word-break: normal;
-    }
-    .peer-row .num {
-      text-align: right;
-      font-variant-numeric: tabular-nums;
-      overflow-wrap: anywhere;
-    }
-    .peer-row.stale {
-      opacity: 0.45;
+    @container (max-width: 640px) {
+      .iface-meta {
+        display: block;
+        margin-left: 0;
+      }
     }
     .empty {
       opacity: 0.6;
       font-style: italic;
       padding: 8px 0;
     }
+    .peer-scroll {
+      display: block;
+    }
+    .peer-list {
+      display: flex;
+      flex-direction: column;
+    }
+    .peer {
+      border-bottom: 1px solid var(--divider-color, rgba(127, 127, 127, 0.2));
+    }
+    .peer:last-child {
+      border-bottom: 0;
+    }
+    .peer.stale .peer-row,
+    .peer.stale .detail {
+      opacity: 0.45;
+    }
+    .peer-row {
+      appearance: none;
+      background: transparent;
+      border: 0;
+      margin: 0;
+      padding: 8px 0;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      text-align: left;
+      font: inherit;
+      color: inherit;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .peer-row:hover {
+      background: var(--state-hover-color, rgba(127, 127, 127, 0.06));
+    }
+    .peer-row:focus-visible {
+      outline: 2px solid var(--primary-color);
+      outline-offset: 2px;
+    }
     .dot {
       display: inline-block;
       width: 8px;
       height: 8px;
       border-radius: 50%;
-      margin-right: 6px;
-      vertical-align: middle;
+      flex-shrink: 0;
     }
     .dot.online {
       background: var(--success-color, #4caf50);
@@ -130,65 +167,84 @@ class WireguardCard extends LitElement {
     .dot.offline {
       background: var(--disabled-color, #888);
     }
-    @container (max-width: 720px) {
-      .iface-header {
-        line-height: 1.35;
-      }
-      .iface-meta {
-        display: block;
-        margin-left: 0;
-      }
-      .peer-row.header {
-        display: none;
-      }
-      .peer-row {
-        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-        padding: 8px 0;
-      }
-      .peer-row > div::before {
-        content: attr(data-label);
-        display: block;
-        font-size: 0.75em;
-        font-weight: 600;
-        opacity: 0.65;
-        margin-bottom: 2px;
-      }
-      .peer-row .wide {
-        grid-column: 1 / -1;
-      }
-      .peer-row .num {
-        text-align: left;
-      }
+    .peer-name {
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 0.95em;
     }
-    @media (max-width: 640px) {
-      .iface-header {
-        line-height: 1.35;
-      }
-      .iface-meta {
-        display: block;
-        margin-left: 0;
-      }
-      .peer-row.header {
-        display: none;
-      }
-      .peer-row {
-        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-        padding: 8px 0;
-      }
-      .peer-row > div::before {
-        content: attr(data-label);
-        display: block;
-        font-size: 0.75em;
-        font-weight: 600;
-        opacity: 0.65;
-        margin-bottom: 2px;
-      }
-      .peer-row .wide {
-        grid-column: 1 / -1;
-      }
-      .peer-row .num {
-        text-align: left;
-      }
+    .chevron {
+      --mdc-icon-size: 20px;
+      flex-shrink: 0;
+      color: var(--secondary-text-color);
+      transition: transform 0.2s;
+    }
+    .peer.expanded .chevron {
+      transform: rotate(180deg);
+    }
+    .detail {
+      padding: 4px 0 10px 16px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 6px 16px;
+    }
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      min-width: 0;
+    }
+    .flabel {
+      font-size: 0.7rem;
+      color: var(--secondary-text-color);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .fvalue {
+      font-size: 0.9rem;
+      color: var(--primary-text-color);
+      overflow-wrap: anywhere;
+      word-break: normal;
+    }
+    .pager {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      padding-top: 10px;
+      margin-top: 4px;
+      border-top: 1px solid var(--divider-color, rgba(127, 127, 127, 0.2));
+    }
+    .page-btn {
+      appearance: none;
+      background: transparent;
+      border: 0;
+      padding: 4px;
+      border-radius: 50%;
+      color: var(--secondary-text-color);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .page-btn:hover:not(:disabled) {
+      color: var(--primary-color);
+      background: var(--divider-color, rgba(127, 127, 127, 0.15));
+    }
+    .page-btn:focus-visible {
+      outline: 2px solid var(--primary-color);
+      outline-offset: 2px;
+    }
+    .page-btn:disabled {
+      opacity: 0.35;
+      cursor: default;
+    }
+    .page-label {
+      font-size: 0.85em;
+      color: var(--secondary-text-color);
+      font-variant-numeric: tabular-nums;
     }
   `;
 
@@ -196,18 +252,26 @@ class WireguardCard extends LitElement {
     if (!config?.entity) {
       throw new Error("wireguard-card: `entity` is required");
     }
-    this._config = { ...config };
+    const rawMax = Math.floor(Number(config.max_peers));
+    const maxPeers = Number.isFinite(rawMax) && rawMax > 0 ? rawMax : 0;
+    const prevMax = this._config?.max_peers;
+    this._config = { ...config, max_peers: maxPeers };
+    if (prevMax !== undefined && prevMax !== maxPeers) {
+      this._page = 0;
+    }
   }
 
   getCardSize() {
     const wg = this._wg();
     if (!wg?.interfaces?.length) return 2;
     const peers = wg.interfaces.reduce((n, iface) => n + (iface.peers?.length ?? 0), 0);
-    return Math.max(2, 2 + Math.ceil(peers / 2));
+    const max = this._config?.max_peers ?? 0;
+    const visible = max > 0 ? Math.min(peers, max) : peers;
+    return Math.max(2, 2 + Math.ceil(visible / 2));
   }
 
   static getStubConfig() {
-    return { entity: "" };
+    return { entity: "", max_peers: 0 };
   }
 
   static getConfigElement() {
@@ -221,28 +285,122 @@ class WireguardCard extends LitElement {
     return state.attributes?.wireguard ?? null;
   }
 
-  _renderPeerRow(peer) {
+  _peerKey(iface, peer, ifaceLocalIndex) {
+    if (peer.public_key) return peer.public_key;
+    return `${iface.name ?? "wg"}|${ifaceLocalIndex}`;
+  }
+
+  _toggleExpand(key) {
+    if (this._swiped) {
+      this._swiped = false;
+      if (this._swipeClearTimer != null) {
+        clearTimeout(this._swipeClearTimer);
+        this._swipeClearTimer = null;
+      }
+      return;
+    }
+    const next = new Set(this._expanded);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    this._expanded = next;
+  }
+
+  _goPage(target, pages) {
+    const clamped = Math.max(0, Math.min(target, pages - 1));
+    if (clamped !== this._page) this._page = clamped;
+  }
+
+  _onTouchStart(ev) {
+    const t = ev.touches?.[0];
+    if (!t) return;
+    this._touchStart = { x: t.clientX, y: t.clientY };
+    this._swiped = false;
+  }
+
+  _onTouchEnd(ev, effectivePage, pages) {
+    const start = this._touchStart;
+    this._touchStart = null;
+    if (!start) return;
+    const t = ev.changedTouches?.[0];
+    if (!t) return;
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    if (Math.abs(dx) <= SWIPE_DX_THRESHOLD) return;
+    if (Math.abs(dx) <= Math.abs(dy) * SWIPE_RATIO) return;
+    const targetPage = dx < 0 ? effectivePage + 1 : effectivePage - 1;
+    const clamped = Math.max(0, Math.min(targetPage, pages - 1));
+    if (clamped === effectivePage) return;
+    this._swiped = true;
+    if (this._swipeClearTimer != null) clearTimeout(this._swipeClearTimer);
+    this._swipeClearTimer = window.setTimeout(() => {
+      this._swiped = false;
+      this._swipeClearTimer = null;
+    }, SWIPE_CLEAR_MS);
+    this._goPage(clamped, pages);
+  }
+
+  _renderPeer(iface, peer, ifaceLocalIndex) {
+    const key = this._peerKey(iface, peer, ifaceLocalIndex);
+    const expanded = this._expanded.has(key);
     const stale = !peer.online;
+    const panelId = `wg-detail-${sanitizeId(key)}`;
+    const name = peer.name ?? peer.public_key?.slice(0, 8) ?? "—";
     const rx = peer.rx_Bps;
     const tx = peer.tx_Bps;
-    // Both unknown -> "—". One known -> sum, treating null as 0.
     const rate = rx == null && tx == null ? null : (rx ?? 0) + (tx ?? 0);
+    const cls = ["peer"];
+    if (stale) cls.push("stale");
+    if (expanded) cls.push("expanded");
     return html`
-      <div class="peer-row ${stale ? "stale" : ""}">
-        <div class="wide" data-label="Peer">
-          <span class="dot ${peer.online ? "online" : "offline"}"></span>${peer.name ?? peer.public_key?.slice(0, 8) ?? "—"}
-        </div>
-        <div class="wide" data-label="Endpoint">${peer.endpoint ?? "—"}</div>
-        <div class="wide" data-label="Allowed IPs">${(peer.allowed_ips ?? []).join(", ") || "—"}</div>
-        <div data-label="Last HS">${fmtAge(peer.last_handshake)}</div>
-        <div class="num" data-label="Down total">${fmtBytes(peer.rx_bytes)}</div>
-        <div class="num" data-label="Up total">${fmtBytes(peer.tx_bytes)}</div>
-        <div class="num" data-label="Rate">${fmtRate(rate)}</div>
+      <div class=${cls.join(" ")}>
+        <button
+          type="button"
+          class="peer-row"
+          aria-expanded=${expanded ? "true" : "false"}
+          aria-controls=${panelId}
+          @click=${() => this._toggleExpand(key)}
+        >
+          <span class="dot ${peer.online ? "online" : "offline"}"></span>
+          <span class="peer-name">${name}</span>
+          <ha-icon class="chevron" icon="mdi:chevron-down"></ha-icon>
+        </button>
+        ${
+          expanded
+            ? html`
+              <div id=${panelId} class="detail" role="region" aria-label=${`${name} details`}>
+                <div class="field">
+                  <div class="flabel">Endpoint</div>
+                  <div class="fvalue">${peer.endpoint ?? "—"}</div>
+                </div>
+                <div class="field">
+                  <div class="flabel">Allowed IPs</div>
+                  <div class="fvalue">${(peer.allowed_ips ?? []).join(", ") || "—"}</div>
+                </div>
+                <div class="field">
+                  <div class="flabel">Last HS</div>
+                  <div class="fvalue">${fmtAge(peer.last_handshake)}</div>
+                </div>
+                <div class="field">
+                  <div class="flabel">Down total</div>
+                  <div class="fvalue">${fmtBytes(peer.rx_bytes)}</div>
+                </div>
+                <div class="field">
+                  <div class="flabel">Up total</div>
+                  <div class="fvalue">${fmtBytes(peer.tx_bytes)}</div>
+                </div>
+                <div class="field">
+                  <div class="flabel">Rate</div>
+                  <div class="fvalue">${fmtRate(rate)}</div>
+                </div>
+              </div>
+            `
+            : nothing
+        }
       </div>
     `;
   }
 
-  _renderIface(iface) {
+  _renderIface(iface, entries) {
     const peers = iface.peers ?? [];
     const active = peers.filter((p) => p.online).length;
     const ifaceName = String(iface.name ?? "").trim();
@@ -256,20 +414,11 @@ class WireguardCard extends LitElement {
           ${showIfaceName ? html`${ifaceName}<span class="iface-meta">${summary}</span>` : summary}
         </div>
         ${
-          peers.length === 0
+          entries.length === 0
             ? html`<div class="empty">No peers configured.</div>`
             : html`
               <div class="peer-list">
-                <div class="peer-row header" aria-hidden="true">
-                  <div>Peer</div>
-                  <div>Endpoint</div>
-                  <div>Allowed IPs</div>
-                  <div>Last HS</div>
-                  <div class="num">Down Total</div>
-                  <div class="num">Up Total</div>
-                  <div class="num">Rate</div>
-                </div>
-                ${peers.map((p) => this._renderPeerRow(p))}
+                ${entries.map(({ peer, ifaceLocalIndex }) => this._renderPeer(iface, peer, ifaceLocalIndex))}
               </div>
             `
         }
@@ -308,10 +457,74 @@ class WireguardCard extends LitElement {
         </ha-card>
       `;
     }
+
+    const flat = [];
+    for (const iface of interfaces) {
+      const peers = iface.peers ?? [];
+      peers.forEach((peer, ifaceLocalIndex) => {
+        flat.push({ iface, peer, ifaceLocalIndex });
+      });
+    }
+
+    const total = flat.length;
+    const max = this._config.max_peers ?? 0;
+    const paginated = max > 0 && total > max;
+    const pages = paginated ? Math.ceil(total / max) : 1;
+    const effectivePage = paginated ? Math.min(this._page, Math.max(0, pages - 1)) : 0;
+
+    const visible = paginated ? flat.slice(effectivePage * max, effectivePage * max + max) : flat;
+
+    // Re-group visible entries by interface, preserving interface order.
+    const groups = new Map();
+    for (const entry of visible) {
+      const arr = groups.get(entry.iface) ?? [];
+      arr.push(entry);
+      groups.set(entry.iface, arr);
+    }
+    // When paginated, only render interfaces that contributed peers to this page.
+    // Empty interfaces (no peers configured at all) still render their header
+    // when not paginated, matching the previous "No peers configured." state.
+    const ifacesToRender = paginated
+      ? [...groups.keys()].map((iface) => [iface, groups.get(iface)])
+      : interfaces.map((iface) => [iface, groups.get(iface) ?? []]);
+
     return html`
       <ha-card>
         <div class="title">${this._config.title ?? "WireGuard"}</div>
-        ${interfaces.map((iface) => this._renderIface(iface))}
+        <div
+          class="peer-scroll"
+          @touchstart=${this._onTouchStart}
+          @touchend=${(e) => this._onTouchEnd(e, effectivePage, pages)}
+        >
+          ${ifacesToRender.map(([iface, entries]) => this._renderIface(iface, entries))}
+        </div>
+        ${
+          paginated
+            ? html`
+              <div class="pager">
+                <button
+                  type="button"
+                  class="page-btn"
+                  aria-label="Previous page"
+                  ?disabled=${effectivePage === 0}
+                  @click=${() => this._goPage(effectivePage - 1, pages)}
+                >
+                  <ha-icon icon="mdi:chevron-left"></ha-icon>
+                </button>
+                <span class="page-label">Page ${effectivePage + 1} / ${pages}</span>
+                <button
+                  type="button"
+                  class="page-btn"
+                  aria-label="Next page"
+                  ?disabled=${effectivePage >= pages - 1}
+                  @click=${() => this._goPage(effectivePage + 1, pages)}
+                >
+                  <ha-icon icon="mdi:chevron-right"></ha-icon>
+                </button>
+              </div>
+            `
+            : nothing
+        }
       </ha-card>
     `;
   }
@@ -339,12 +552,17 @@ class WireguardCardEditor extends LitElement {
           },
         },
       },
+      {
+        name: "max_peers",
+        selector: { number: { min: 0, mode: "box" } },
+      },
     ];
   }
 
   _computeLabel = (s) =>
     ({
       entity: "Entity",
+      max_peers: "Peers per page (0 = all)",
     })[s.name] ?? s.name;
 
   _valueChanged = (ev) => {
@@ -361,6 +579,7 @@ class WireguardCardEditor extends LitElement {
     if (!this.hass || !this._config) return nothing;
     const data = {
       entity: this._config.entity ?? "",
+      max_peers: this._config.max_peers ?? 0,
     };
     return html`
       <ha-form
