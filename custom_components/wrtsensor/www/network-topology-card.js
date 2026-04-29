@@ -1243,11 +1243,15 @@ class NetworkTopologyCardEditor extends HTMLElement {
   }
 }
 
-customElements.define("network-topology-card-editor", NetworkTopologyCardEditor);
+if (!customElements.get("network-topology-card-editor")) {
+  customElements.define("network-topology-card-editor", NetworkTopologyCardEditor);
+}
 
 // ── Registration ──────────────────────────────────────────────────────────────
 
-customElements.define("network-topology-card", NetworkTopologyCard);
+if (!customElements.get("network-topology-card")) {
+  customElements.define("network-topology-card", NetworkTopologyCard);
+}
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: "network-topology-card",

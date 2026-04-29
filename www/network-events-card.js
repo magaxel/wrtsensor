@@ -968,8 +968,12 @@ class NetworkEventsCardEditor extends LitElement {
   }
 }
 
-customElements.define(EDITOR_TYPE, NetworkEventsCardEditor);
-customElements.define(CARD_TYPE, NetworkEventsCard);
+if (!customElements.get(EDITOR_TYPE)) {
+  customElements.define(EDITOR_TYPE, NetworkEventsCardEditor);
+}
+if (!customElements.get(CARD_TYPE)) {
+  customElements.define(CARD_TYPE, NetworkEventsCard);
+}
 
 window.customCards = window.customCards || [];
 window.customCards.push({

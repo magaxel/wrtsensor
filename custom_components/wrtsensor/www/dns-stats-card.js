@@ -438,8 +438,12 @@ class DnsStatsCardEditor extends LitElement {
   }
 }
 
-customElements.define(EDITOR_TYPE, DnsStatsCardEditor);
-customElements.define(CARD_TYPE, DnsStatsCard);
+if (!customElements.get(EDITOR_TYPE)) {
+  customElements.define(EDITOR_TYPE, DnsStatsCardEditor);
+}
+if (!customElements.get(CARD_TYPE)) {
+  customElements.define(CARD_TYPE, DnsStatsCard);
+}
 
 window.customCards = window.customCards || [];
 window.customCards.push({

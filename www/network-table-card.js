@@ -790,8 +790,12 @@ class NetworkTableCardEditor extends LitElement {
 
 // ── registration ──────────────────────────────────────────────────────────────
 
-customElements.define(EDITOR_TYPE, NetworkTableCardEditor);
-customElements.define(CARD_TYPE, NetworkTableCard);
+if (!customElements.get(EDITOR_TYPE)) {
+  customElements.define(EDITOR_TYPE, NetworkTableCardEditor);
+}
+if (!customElements.get(CARD_TYPE)) {
+  customElements.define(CARD_TYPE, NetworkTableCard);
+}
 
 window.customCards = window.customCards || [];
 window.customCards.push({

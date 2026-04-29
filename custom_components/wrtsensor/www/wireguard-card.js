@@ -601,8 +601,12 @@ class WireguardCardEditor extends LitElement {
   }
 }
 
-customElements.define(EDITOR_TYPE, WireguardCardEditor);
-customElements.define(CARD_TYPE, WireguardCard);
+if (!customElements.get(EDITOR_TYPE)) {
+  customElements.define(EDITOR_TYPE, WireguardCardEditor);
+}
+if (!customElements.get(CARD_TYPE)) {
+  customElements.define(CARD_TYPE, WireguardCard);
+}
 
 window.customCards = window.customCards || [];
 window.customCards.push({
