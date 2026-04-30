@@ -818,6 +818,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._vendor_cache: dict[str, str] = {}
         self._dns_cache: dict[str, str] = {}
         self._oui_db: dict[str, str] = {}
+        self._needs_oui_download = False
         self._collector_script: str = ""
 
         scan_interval = timedelta(
@@ -833,6 +834,8 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_setup(self) -> None:
         """Load caches and deploy collector script. Called once from async_setup_entry."""
         await self.hass.async_add_executor_job(self._load_caches)
+        if self._needs_oui_download:
+            self.hass.async_create_task(self._download_oui_db())
         await self._deploy_collector()
 
     def _load_caches(self) -> None:
@@ -865,7 +868,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             return db
         if not self._oui_db_path.exists():
-            self.hass.async_create_task(self._download_oui_db())
+            self._needs_oui_download = True
             return {}
         db = {}
         for line in self._oui_db_path.read_text().splitlines():
