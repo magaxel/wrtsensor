@@ -183,7 +183,7 @@ Security: wrtsensor never reads WireGuard private or preshared keys. Collection 
 
 ### `history-graph` — CPU
 
-Per-host CPU % over time using HA's built-in graph card. Requires the **Collect host metrics** option (on by default). Entity IDs follow `sensor.wrtsensor_<ip_with_underscores>_cpu`.
+Per-host CPU % over time using HA's built-in graph card. Requires the **Collect host metrics** option (on by default). New host metric entities use the suggested ID pattern `sensor.wrtsensor_<ip_with_underscores>_cpu`.
 
 ```yaml
 type: history-graph
@@ -221,7 +221,7 @@ entities:
 
 ### `entities` — Storage
 
-Disk use per host as a static list. Requires the **Collect host metrics** option. Entity IDs follow `sensor.wrtsensor_<ip_with_underscores>_disk`.
+Disk use per host as a static list. Requires the **Collect host metrics** option. New host metric entities use the suggested ID pattern `sensor.wrtsensor_<ip_with_underscores>_disk`.
 
 ```yaml
 type: entities
@@ -237,6 +237,8 @@ entities:
 
 In APs-only mode, only the AP rows appear.
 
+Breaking change: host CPU/RAM/Disk entities were reset to avoid duplicated host names in Home Assistant generated IDs, such as `sensor.172_16_42_22_172_16_42_22_ram`. After upgrading, update dashboards and automations to the new `sensor.wrtsensor_<host>_<metric>` IDs, or pick the current entities from Home Assistant's entity picker if you customized names manually.
+
 ## Entities
 
 | Entity ID | What it is |
@@ -246,9 +248,9 @@ In APs-only mode, only the AP rows appear.
 | `sensor.<entry>_wan_upload` | WAN TX rate in Mbit/s |
 | `sensor.<entry>_dns_cache_hit` | DNS cache hit % — `unknown` when **Collect DNS stats** option is off |
 | `sensor.<entry>_dns_latency` | Weighted upstream DNS latency in ms — `unknown` when **Collect DNS stats** option is off |
-| `sensor.<host>_cpu` | CPU % per host, e.g. `sensor.192_0_2_1_cpu` — requires **Collect host metrics** |
-| `sensor.<host>_ram` | RAM % per host — requires **Collect host metrics** |
-| `sensor.<host>_disk` | Disk % per host — requires **Collect host metrics** |
+| `sensor.wrtsensor_<host>_cpu` | CPU % per host, e.g. `sensor.wrtsensor_192_0_2_1_cpu` — requires **Collect host metrics** |
+| `sensor.wrtsensor_<host>_ram` | RAM % per host — requires **Collect host metrics** |
+| `sensor.wrtsensor_<host>_disk` | Disk % per host — requires **Collect host metrics** |
 | `binary_sensor.<entry>_presence_<mac>` | Online/offline per configured MAC (set in Options) |
 | `device_tracker.<hostname>` | home/not_home tracker per discovered device — **disabled by default** |
 

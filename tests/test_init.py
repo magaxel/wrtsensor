@@ -95,10 +95,11 @@ def _make_coordinator(host_stats, *, enable_host_metrics=True):
     )
 
 
-def test_prune_removes_stale_host_entity():
+def test_prune_removes_stale_and_legacy_host_entities():
     _reset_registry()
     entry = _make_entry()
-    # One live host, one stale ghost — all three sensor types for each.
+    # One live host, one stale ghost, plus legacy live IDs from the pre-reset
+    # host sensor scheme.
     for host, kind in [
         ("live", "cpu"),
         ("live", "ram"),
@@ -109,7 +110,13 @@ def test_prune_removes_stale_host_entity():
     ]:
         _singleton_registry.add(
             entity_id=f"sensor.wrtsensor_{host}_{kind}",
-            unique_id=f"{entry.entry_id}_host_{host}_{kind}",
+            unique_id=f"{entry.entry_id}_host_metric_{host}_{kind}",
+            config_entry_id=entry.entry_id,
+        )
+    for kind in ["cpu", "ram", "disk"]:
+        _singleton_registry.add(
+            entity_id=f"sensor.legacy_live_{kind}",
+            unique_id=f"{entry.entry_id}_host_live_{kind}",
             config_entry_id=entry.entry_id,
         )
     coordinator = _make_coordinator({"live": {"cpu": 1.0}})

@@ -26,6 +26,7 @@ _LOGGER = logging.getLogger(__name__)
 _WWW_DIR = Path(__file__).parent / "www"
 _WS_TYPE_RECENT_EVENTS = f"{DOMAIN}/recent_events"
 _WS_REGISTERED_KEY = f"{DOMAIN}_ws_registered"
+_HOST_METRICS = ("cpu", "ram", "disk")
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -69,11 +70,13 @@ def _prune_orphaned_host_entities(
     data = coordinator.data or {}
     host_stats = data.get("host_stats") or {}
     reg = er.async_get(hass)
-    prefix = f"{entry.entry_id}_host_"
 
     if not getattr(coordinator, "_enable_host_metrics", True):
         for reg_entry in list(er.async_entries_for_config_entry(reg, entry.entry_id)):
-            if not reg_entry.unique_id.startswith(prefix):
+            if (
+                _parse_host_metric_unique_id(entry.entry_id, reg_entry.unique_id)
+                is None
+            ):
                 continue
             _LOGGER.info(
                 "Removing wrtsensor host metric entity %s (option disabled)",
@@ -89,22 +92,41 @@ def _prune_orphaned_host_entities(
         return
     live = set(host_stats.keys())
     for reg_entry in list(er.async_entries_for_config_entry(reg, entry.entry_id)):
-        if not reg_entry.unique_id.startswith(prefix):
+        parsed = _parse_host_metric_unique_id(entry.entry_id, reg_entry.unique_id)
+        if parsed is None:
             continue
-        rest = reg_entry.unique_id[len(prefix) :]
-        hostname = None
-        for suffix in ("_cpu", "_ram", "_disk"):
-            if rest.endswith(suffix):
-                hostname = rest[: -len(suffix)]
-                break
-        if hostname is None or hostname in live:
+        hostname, metric, legacy = parsed
+        if not legacy and hostname in live:
             continue
         _LOGGER.info(
-            "Pruning orphaned wrtsensor entity %s (hostname %s no longer scanned)",
+            "Pruning wrtsensor host entity %s (hostname %s, metric %s)",
             reg_entry.entity_id,
             hostname,
+            metric,
         )
         reg.async_remove(reg_entry.entity_id)
+
+
+def _parse_host_metric_unique_id(
+    entry_id: str, unique_id: str
+) -> tuple[str, str, bool] | None:
+    """Return (hostname, metric, legacy) for wrtsensor host metric entities."""
+    new_prefix = f"{entry_id}_host_metric_"
+    old_prefix = f"{entry_id}_host_"
+    if unique_id.startswith(new_prefix):
+        rest = unique_id[len(new_prefix) :]
+        legacy = False
+    elif unique_id.startswith(old_prefix):
+        rest = unique_id[len(old_prefix) :]
+        legacy = True
+    else:
+        return None
+    for metric in _HOST_METRICS:
+        suffix = f"_{metric}"
+        if rest.endswith(suffix):
+            hostname = rest[: -len(suffix)]
+            return (hostname, metric, legacy)
+    return None
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

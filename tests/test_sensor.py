@@ -70,6 +70,9 @@ if _sensor_name not in sys.modules:
 WrtsensorNetworkScannerSensor = sys.modules[_sensor_name].WrtsensorNetworkScannerSensor
 WrtsensorDNSHitPctSensor = sys.modules[_sensor_name].WrtsensorDNSHitPctSensor
 WrtsensorWireguardSensor = sys.modules[_sensor_name].WrtsensorWireguardSensor
+WrtsensorHostCPUSensor = sys.modules[_sensor_name].WrtsensorHostCPUSensor
+WrtsensorHostRAMSensor = sys.modules[_sensor_name].WrtsensorHostRAMSensor
+WrtsensorHostDiskSensor = sys.modules[_sensor_name].WrtsensorHostDiskSensor
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -296,6 +299,29 @@ def test_async_setup_entry_does_not_duplicate_host_sensors():
 
     host_entities = [e for e in added if getattr(e, "_hostname", None) == "192.0.2.22"]
     assert len(host_entities) == 3
+
+
+def test_host_sensor_entity_names_are_metric_local():
+    coordinator = _FakeCoordinator({"host_stats": {"192.0.2.22": {}}})
+    entry = _FakeEntry()
+
+    sensors = [
+        WrtsensorHostCPUSensor(coordinator, entry, "192.0.2.22"),
+        WrtsensorHostRAMSensor(coordinator, entry, "192.0.2.22"),
+        WrtsensorHostDiskSensor(coordinator, entry, "192.0.2.22"),
+    ]
+
+    assert [sensor._attr_name for sensor in sensors] == ["CPU", "RAM", "Disk"]
+    assert [sensor._attr_unique_id for sensor in sensors] == [
+        "test-entry_host_metric_192.0.2.22_cpu",
+        "test-entry_host_metric_192.0.2.22_ram",
+        "test-entry_host_metric_192.0.2.22_disk",
+    ]
+    assert [sensor._attr_suggested_object_id for sensor in sensors] == [
+        "wrtsensor_192_0_2_22_cpu",
+        "wrtsensor_192_0_2_22_ram",
+        "wrtsensor_192_0_2_22_disk",
+    ]
 
 
 # ── WireGuard sensor ────────────────────────────────────────────────────────
