@@ -186,7 +186,7 @@ const SVG_STYLE = `
     .ntc-gw       { fill: var(--teal-color, #009688); }
     .ntc-ap       { fill: var(--indigo-color, #3f51b5); }
     .ntc-wire     { fill: var(--blue-grey-color, #607d8b); }
-    .ntc-wg-peer  { fill: #88171a; }
+    .ntc-wg-peer  { fill: var(--red-color, #88171a); }
     .ntc-wg-icon  { color: #fff; }
     .ntc-icon     { color: #fff; }
     .ntc-label    { fill: var(--primary-text-color, #e1e1e1); font-family: var(--ha-font-family-body, Roboto, sans-serif); }
@@ -224,6 +224,32 @@ class NetworkTopologyCard extends HTMLElement {
     };
     // Fix: reset so a config change always triggers a re-render
     this._lastUpdated = null;
+    this._wgCache = null;
+  }
+
+  // Cache the WG-sensor lookup so a single registry walk survives across
+  // hass ticks; full registry walks per state update add up on large installs.
+  _resolveWgEntity(hass) {
+    const entityId = this._config.entity;
+    const override = this._config.wireguard_entity;
+    const cached = this._wgCache;
+    const fresh = cached && cached.entityId === entityId && cached.override === override;
+    const stillResolves = fresh && (!cached.eid || hass.states?.[cached.eid]);
+    if (stillResolves) {
+      if (!cached.eid) {
+        return { state: null, entityId: null, configured: false, available: false };
+      }
+      const state = hass.states[cached.eid];
+      return {
+        state,
+        entityId: cached.eid,
+        configured: true,
+        available: !!state?.attributes?.wireguard?.available,
+      };
+    }
+    const result = findWireguardSensor(hass, entityId, override);
+    this._wgCache = { entityId, override, eid: result.entityId };
+    return result;
   }
 
   set hass(hass) {
@@ -237,7 +263,7 @@ class NetworkTopologyCard extends HTMLElement {
       this._renderUnavailable(`${this._config.entity} is ${state.state}`);
       return;
     }
-    const wg = findWireguardSensor(hass, this._config.entity, this._config.wireguard_entity);
+    const wg = this._resolveWgEntity(hass);
     const wgState = wg.available ? wg.state : null;
     const cacheKey = [
       this._config.entity,

@@ -65,7 +65,7 @@ All of this comes from a single 20 s SSH call to the gateway plus parallel SSH c
 6. Add the Lovelace resources manually in **Settings → Dashboards → Resources**:
 
    - `/wrtsensor_static/network-table-card.js?v=1.0.0` — JavaScript Module
-   - `/wrtsensor_static/network-topology-card.js?v=1.1.0` — JavaScript Module
+   - `/wrtsensor_static/network-topology-card.js?v=1.1.1` — JavaScript Module
    - `/wrtsensor_static/network-events-card.js?v=1.0.0` — JavaScript Module
    - `/wrtsensor_static/dns-stats-card.js?v=1.0.0` — JavaScript Module
    - `/wrtsensor_static/wireguard-card.js?v=1.1.0` — JavaScript Module *(only needed if you enable the WireGuard option)*
@@ -122,7 +122,7 @@ wireguard_entity: null           # optional sensor override if auto-detect is wr
 
 WireGuard peers are auto-detected from a sibling `sensor.*_wireguard` entity on the same wrtsensor device. If auto-detect cannot choose a sensor, set `wireguard_entity` explicitly. The editor shows the WireGuard controls when a sensor is discoverable or an override is configured; if the sensor reports `available: false`, peers appear after the next successful WireGuard scan.
 
-Breaking change in v2.x: `gateway_hostname` was renamed to `gateway_label`, and `col_width` was renamed to `column_width`.
+Breaking change in v2.x: `gateway_hostname` was renamed to `gateway_label`, `col_width` was renamed to `column_width`, and `show_bandwidth` was removed (per-device throughput is still visible in the node tooltip).
 
 ### `network-events-card`
 
