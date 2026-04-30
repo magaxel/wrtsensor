@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
@@ -16,6 +17,11 @@ from .const import DOMAIN
 from .coordinator import WrtsensorCoordinator
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _host_object_id(hostname: str, metric: str) -> str:
+    host_slug = re.sub(r"[^a-z0-9_]+", "_", hostname.lower()).strip("_")
+    return f"wrtsensor_{host_slug}_{metric}"
 
 
 async def async_setup_entry(
@@ -284,6 +290,7 @@ class _WrtsensorHostBase(_WrtsensorBase):
 
 
 class WrtsensorHostCPUSensor(_WrtsensorHostBase):
+    _attr_name = "CPU"
     _attr_native_unit_of_measurement = "%"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:cpu-64-bit"
@@ -296,8 +303,8 @@ class WrtsensorHostCPUSensor(_WrtsensorHostBase):
     ) -> None:
         super().__init__(coordinator, entry)
         self._hostname = hostname
-        self._attr_name = f"{hostname} CPU"
-        self._attr_unique_id = f"{entry.entry_id}_host_{hostname}_cpu"
+        self._attr_unique_id = f"{entry.entry_id}_host_metric_{hostname}_cpu"
+        self._attr_suggested_object_id = _host_object_id(hostname, "cpu")
 
     @property
     def native_value(self) -> float | None:
@@ -308,6 +315,7 @@ class WrtsensorHostCPUSensor(_WrtsensorHostBase):
 
 
 class WrtsensorHostRAMSensor(_WrtsensorHostBase):
+    _attr_name = "RAM"
     _attr_native_unit_of_measurement = "%"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:memory"
@@ -320,8 +328,8 @@ class WrtsensorHostRAMSensor(_WrtsensorHostBase):
     ) -> None:
         super().__init__(coordinator, entry)
         self._hostname = hostname
-        self._attr_name = f"{hostname} RAM"
-        self._attr_unique_id = f"{entry.entry_id}_host_{hostname}_ram"
+        self._attr_unique_id = f"{entry.entry_id}_host_metric_{hostname}_ram"
+        self._attr_suggested_object_id = _host_object_id(hostname, "ram")
 
     @property
     def native_value(self) -> float | None:
@@ -332,6 +340,7 @@ class WrtsensorHostRAMSensor(_WrtsensorHostBase):
 
 
 class WrtsensorHostDiskSensor(_WrtsensorHostBase):
+    _attr_name = "Disk"
     _attr_native_unit_of_measurement = "%"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:harddisk"
@@ -344,8 +353,8 @@ class WrtsensorHostDiskSensor(_WrtsensorHostBase):
     ) -> None:
         super().__init__(coordinator, entry)
         self._hostname = hostname
-        self._attr_name = f"{hostname} Disk"
-        self._attr_unique_id = f"{entry.entry_id}_host_{hostname}_disk"
+        self._attr_unique_id = f"{entry.entry_id}_host_metric_{hostname}_disk"
+        self._attr_suggested_object_id = _host_object_id(hostname, "disk")
 
     @property
     def native_value(self) -> float | None:
