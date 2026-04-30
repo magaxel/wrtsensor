@@ -80,7 +80,10 @@ class _FakeEntry:
 
 
 def _make_coordinator(
-    *, ap_hosts: str = "", gateway_host: str = "192.0.2.1"
+    *,
+    ap_hosts: str = "",
+    gateway_host: str = "192.0.2.1",
+    options: dict | None = None,
 ) -> WrtsensorCoordinator:
     hass = _FakeHass()
     entry = _FakeEntry(
@@ -92,6 +95,7 @@ def _make_coordinator(
             "disconnect_threshold_s": 120,
         }
     )
+    entry.options = options or {}
     c = WrtsensorCoordinator(hass, entry)
     c.hass = hass
     c.update_interval = timedelta(seconds=60)
@@ -691,6 +695,60 @@ def test_aps_only_no_prev_no_raise():
         )
         result = asyncio.run(c._async_update_data())
     assert not result.get("partial")
+
+
+def test_host_metrics_disabled_omits_host_stats_from_update():
+    c = _make_coordinator(
+        ap_hosts="192.0.2.22",
+        options={const_mod.CONF_ENABLE_HOST_METRICS: False},
+    )
+    gw_data = {
+        **_MINIMAL_GW,
+        "hoststat": [
+            "cpu  10 0 10 80",
+            "1000 500",
+            "25",
+        ],
+    }
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch.object(c, "_collect_gateway", new=AsyncMock(return_value=gw_data))
+        )
+        stack.enter_context(
+            patch.object(
+                c,
+                "_collect_wifi",
+                new=AsyncMock(return_value=([], ["cpu  10 0 10 80", "1000 500", "25"])),
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                c, "_get_ap_info", new=AsyncMock(return_value=("AP1", "", [], []))
+            )
+        )
+        stack.enter_context(
+            patch.object(c, "_ping_stale", new=AsyncMock(return_value=[]))
+        )
+        stack.enter_context(
+            patch.object(c, "_resolve_hostnames", new=AsyncMock(return_value={}))
+        )
+        stack.enter_context(patch.object(c, "_detect_wan_events", return_value=[]))
+        compute = stack.enter_context(patch.object(c, "_compute_host_stats"))
+        result = asyncio.run(c._async_update_data())
+
+    assert "host_stats" not in result
+    compute.assert_not_called()
+
+
+def test_collect_wifi_passes_no_host_metrics_flag_when_disabled():
+    c = _make_coordinator(options={const_mod.CONF_ENABLE_HOST_METRICS: False})
+    with patch.object(c, "_ssh_run", new=AsyncMock(return_value="")) as ssh_run:
+        result = asyncio.run(c._collect_wifi("192.0.2.22", "AP1"))
+
+    assert result == ([], [])
+    assert (
+        ssh_run.await_args.args[1] == "sh /tmp/wrtsensor_collector.sh --no-host-metrics"
+    )
 
 
 # ── WireGuard ────────────────────────────────────────────────────────────────

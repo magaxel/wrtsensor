@@ -89,8 +89,10 @@ def _make_entry(entry_id="test-entry"):
     return types.SimpleNamespace(entry_id=entry_id)
 
 
-def _make_coordinator(host_stats):
-    return types.SimpleNamespace(data={"host_stats": host_stats})
+def _make_coordinator(host_stats, *, enable_host_metrics=True):
+    return types.SimpleNamespace(
+        data={"host_stats": host_stats}, _enable_host_metrics=enable_host_metrics
+    )
 
 
 def test_prune_removes_stale_host_entity():
@@ -136,6 +138,33 @@ def test_prune_skips_when_host_stats_empty():
     _prune(hass=None, entry=entry, coordinator=coordinator)
 
     assert "sensor.wrtsensor_live_cpu" in _singleton_registry._entries
+
+
+def test_prune_removes_all_host_entities_when_host_metrics_disabled():
+    _reset_registry()
+    entry = _make_entry()
+    _singleton_registry.add(
+        entity_id="sensor.wrtsensor_live_cpu",
+        unique_id=f"{entry.entry_id}_host_live_cpu",
+        config_entry_id=entry.entry_id,
+    )
+    _singleton_registry.add(
+        entity_id="sensor.wrtsensor_live_ram",
+        unique_id=f"{entry.entry_id}_host_live_ram",
+        config_entry_id=entry.entry_id,
+    )
+    _singleton_registry.add(
+        entity_id="sensor.wrtsensor_wan_download",
+        unique_id=f"{entry.entry_id}_wan_download",
+        config_entry_id=entry.entry_id,
+    )
+    coordinator = _make_coordinator({}, enable_host_metrics=False)
+
+    _prune(hass=None, entry=entry, coordinator=coordinator)
+
+    assert "sensor.wrtsensor_live_cpu" not in _singleton_registry._entries
+    assert "sensor.wrtsensor_live_ram" not in _singleton_registry._entries
+    assert "sensor.wrtsensor_wan_download" in _singleton_registry._entries
 
 
 def test_prune_ignores_non_host_entities():

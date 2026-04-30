@@ -31,7 +31,7 @@ Per scan (every 60 s) the integration produces a single JSON object with:
 
 - **Devices** — MAC, IPv4, IPv6, hostname, vendor (OUI lookup), connection type, online status.
 - **Wi-Fi metrics** — for associated clients: AP, band, signal, noise, SNR, TX/RX PHY rates, expected throughput, per-station byte counters.
-- **Host stats** — CPU%, RAM%, root disk%, hardware model, and board name for the gateway and each AP. The hardware model (from `ubus call system board`) is shown in the HA device registry for each host's sensor cluster.
+- **Host stats** *(optional, on by default)* — CPU%, RAM%, root disk%, hardware model, and board name for the gateway and each AP. The hardware model (from `ubus call system board`) is shown in the HA device registry for each host's sensor cluster. Disable **Collect host metrics** in Options to skip CPU/RAM/storage collection and remove those sensors.
 - **WAN** — IPv4, IPv6, live RX/TX rate, cumulative byte totals.
 - **DNS cache** — dnsmasq cache hit/miss counts for 24h, 8h, 1h, and last-scan windows, per-window upstream query counts, per-upstream latency, and weighted average upstream latency.
 - **WireGuard** *(optional, off by default)* — per-peer endpoint, allowed IPs, last-handshake age, transfer counters, live throughput, and online state. Auto-detected on the gateway and each AP every scan via secret-free `wg show` subcommands; private and preshared keys are never read into HA.
@@ -76,7 +76,7 @@ Prefer not to use HACS? See [docs/manual-install.md](docs/manual-install.md) for
 
 ### Changing gateway or APs
 
-Open the integration in **Settings → Devices & Services**, hit the triple-dot menu → **Reconfigure** to change gateway, APs, SSH key path, or SSH port in place. Every host is re-probed; if authentication fails, the flow prompts for a password and re-provisions the key, same as initial setup. Removing a host prunes its CPU/RAM/Disk sensors automatically on the next reload. The public SSH key stays in `/etc/dropbear/authorized_keys` on the removed device — delete it manually there if you no longer trust the host.
+Open the integration in **Settings → Devices & Services**, hit the triple-dot menu → **Reconfigure** to change gateway, APs, SSH key path, or SSH port in place. Every host is re-probed; if authentication fails, the flow prompts for a password and re-provisions the key, same as initial setup. Removing a host prunes its CPU/RAM/Disk sensors automatically on the next reload. Turning off **Collect host metrics** in Options also removes those per-host metric sensors on reload. The public SSH key stays in `/etc/dropbear/authorized_keys` on the removed device — delete it manually there if you no longer trust the host.
 
 ## Card configuration
 
@@ -183,7 +183,7 @@ Security: wrtsensor never reads WireGuard private or preshared keys. Collection 
 
 ### `history-graph` — CPU
 
-Per-host CPU % over time using HA's built-in graph card. Entity IDs follow `sensor.wrtsensor_<ip_with_underscores>_cpu`.
+Per-host CPU % over time using HA's built-in graph card. Requires the **Collect host metrics** option (on by default). Entity IDs follow `sensor.wrtsensor_<ip_with_underscores>_cpu`.
 
 ```yaml
 type: history-graph
@@ -202,7 +202,7 @@ entities:
 
 ### `history-graph` — RAM
 
-Same pattern as CPU, with `_ram` sensors.
+Same pattern as CPU, with `_ram` sensors. Requires the **Collect host metrics** option.
 
 ```yaml
 type: history-graph
@@ -221,7 +221,7 @@ entities:
 
 ### `entities` — Storage
 
-Disk use per host as a static list. Entity IDs follow `sensor.wrtsensor_<ip_with_underscores>_disk`.
+Disk use per host as a static list. Requires the **Collect host metrics** option. Entity IDs follow `sensor.wrtsensor_<ip_with_underscores>_disk`.
 
 ```yaml
 type: entities
@@ -246,9 +246,9 @@ In APs-only mode, only the AP rows appear.
 | `sensor.<entry>_wan_upload` | WAN TX rate in Mbit/s |
 | `sensor.<entry>_dns_cache_hit` | DNS cache hit % — `unknown` when **Collect DNS stats** option is off |
 | `sensor.<entry>_dns_latency` | Weighted upstream DNS latency in ms — `unknown` when **Collect DNS stats** option is off |
-| `sensor.<host>_cpu` | CPU % per host, e.g. `sensor.192_0_2_1_cpu` |
-| `sensor.<host>_ram` | RAM % per host |
-| `sensor.<host>_disk` | Disk % per host |
+| `sensor.<host>_cpu` | CPU % per host, e.g. `sensor.192_0_2_1_cpu` — requires **Collect host metrics** |
+| `sensor.<host>_ram` | RAM % per host — requires **Collect host metrics** |
+| `sensor.<host>_disk` | Disk % per host — requires **Collect host metrics** |
 | `binary_sensor.<entry>_presence_<mac>` | Online/offline per configured MAC (set in Options) |
 | `device_tracker.<hostname>` | home/not_home tracker per discovered device — **disabled by default** |
 

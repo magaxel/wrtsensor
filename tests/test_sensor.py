@@ -79,6 +79,7 @@ class _FakeCoordinator:
     def __init__(self, data: dict | None) -> None:
         self.data = data
         self._gateway_host = None
+        self._enable_host_metrics = True
         self._enable_wireguard = False
         self._wg_stale_threshold_s = 180
         self._listeners: list[object] = []
@@ -236,10 +237,11 @@ def test_dns_hit_pct_sensor_returns_none_when_all_periods_empty():
 
 
 async def _setup_platform_with_hosts(
-    host_stats: dict,
+    host_stats: dict, *, enable_host_metrics: bool = True
 ) -> tuple[list[object], _FakeCoordinator]:
     added: list[object] = []
     coordinator = _FakeCoordinator({"host_stats": host_stats})
+    coordinator._enable_host_metrics = enable_host_metrics
     entry = _FakeEntry()
     hass = types.SimpleNamespace(data={"wrtsensor": {entry.entry_id: coordinator}})
 
@@ -270,6 +272,19 @@ def test_async_setup_entry_adds_new_host_sensors_on_update():
 
     host_entities = [e for e in added if getattr(e, "_hostname", None) == "192.0.2.22"]
     assert len(host_entities) == 3
+
+
+def test_async_setup_entry_skips_host_sensors_when_disabled():
+    added, coordinator = asyncio.run(
+        _setup_platform_with_hosts(
+            {"192.0.2.1": {"cpu": 1.0}}, enable_host_metrics=False
+        )
+    )
+
+    coordinator.data = {"host_stats": {"192.0.2.22": {"cpu": 2.0}}}
+    coordinator.fire_update()
+
+    assert not [e for e in added if getattr(e, "_hostname", None)]
 
 
 def test_async_setup_entry_does_not_duplicate_host_sensors():

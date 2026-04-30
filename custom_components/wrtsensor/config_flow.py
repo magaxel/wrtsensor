@@ -15,6 +15,7 @@ from .const import (
     CONF_AP_HOSTS,
     CONF_DISCONNECT_THRESHOLD,
     CONF_ENABLE_DNS_STATS,
+    CONF_ENABLE_HOST_METRICS,
     CONF_ENABLE_WIREGUARD,
     CONF_GATEWAY_HOST,
     CONF_LAN_IFACE,
@@ -26,6 +27,7 @@ from .const import (
     CONF_WG_STALE_THRESHOLD,
     DEFAULT_DISCONNECT_THRESHOLD,
     DEFAULT_ENABLE_DNS_STATS,
+    DEFAULT_ENABLE_HOST_METRICS,
     DEFAULT_ENABLE_WIREGUARD,
     DEFAULT_LAN_IFACE,
     DEFAULT_SCAN_INTERVAL,
@@ -467,6 +469,12 @@ class WrtsensorOptionsFlow(OptionsFlow):
                     CONF_ENABLE_DNS_STATS,
                     default=current.get(
                         CONF_ENABLE_DNS_STATS, DEFAULT_ENABLE_DNS_STATS
+                    ),
+                ): bool,
+                vol.Optional(
+                    CONF_ENABLE_HOST_METRICS,
+                    default=current.get(
+                        CONF_ENABLE_HOST_METRICS, DEFAULT_ENABLE_HOST_METRICS
                     ),
                 ): bool,
                 vol.Optional(

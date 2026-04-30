@@ -428,6 +428,33 @@ def test_options_flow_accepts_wireguard_toggle():
     assert result["data"][cf.CONF_WG_STALE_THRESHOLD] == 240
 
 
+def test_options_flow_accepts_host_metrics_toggle():
+    """The host metrics toggle round-trips through the options flow."""
+    entry = types.SimpleNamespace(
+        data={
+            cf.CONF_GATEWAY_HOST: "192.0.2.1",
+            cf.CONF_SSH_KEY_PATH: "/tmp/key",
+            cf.CONF_SSH_PORT: 22,
+            cf.CONF_AP_HOSTS: "192.0.2.22",
+        },
+        options={},
+    )
+    flow = cf.WrtsensorOptionsFlow(entry)
+    with patch.object(cf, "_test_ssh", new=AsyncMock(return_value=None)):
+        result = asyncio.run(
+            flow.async_step_init(
+                {
+                    cf.CONF_SSH_KEY_PATH: "/tmp/key",
+                    cf.CONF_SSH_PORT: 22,
+                    cf.CONF_AP_HOSTS: "192.0.2.22",
+                    cf.CONF_ENABLE_HOST_METRICS: False,
+                }
+            )
+        )
+    assert result["type"] == "create_entry"
+    assert result["data"][cf.CONF_ENABLE_HOST_METRICS] is False
+
+
 def test_options_flow_failure_names_host():
     """Options-flow reconfiguration surfaces the failing host."""
     # Build a minimal fake entry; we only need .data and .options.
