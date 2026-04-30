@@ -968,15 +968,21 @@ class NetworkEventsCardEditor extends LitElement {
   }
 }
 
-customElements.define(EDITOR_TYPE, NetworkEventsCardEditor);
-customElements.define(CARD_TYPE, NetworkEventsCard);
+if (!customElements.get(EDITOR_TYPE)) {
+  customElements.define(EDITOR_TYPE, NetworkEventsCardEditor);
+}
+if (!customElements.get(CARD_TYPE)) {
+  customElements.define(CARD_TYPE, NetworkEventsCard);
+}
 
 window.customCards = window.customCards || [];
-window.customCards.push({
-  type: CARD_TYPE,
-  name: "Network Events",
-  description: "Filterable network event log from a wrtsensor network_scanner entity",
-});
+if (!window.customCards.some((c) => c.type === CARD_TYPE)) {
+  window.customCards.push({
+    type: CARD_TYPE,
+    name: "Network Events",
+    description: "Filterable network event log from a wrtsensor network_scanner entity",
+  });
+}
 
 console.info(
   `%c NETWORK-EVENTS-CARD %c v${CARD_VERSION} `,

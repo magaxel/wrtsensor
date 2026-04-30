@@ -438,16 +438,22 @@ class DnsStatsCardEditor extends LitElement {
   }
 }
 
-customElements.define(EDITOR_TYPE, DnsStatsCardEditor);
-customElements.define(CARD_TYPE, DnsStatsCard);
+if (!customElements.get(EDITOR_TYPE)) {
+  customElements.define(EDITOR_TYPE, DnsStatsCardEditor);
+}
+if (!customElements.get(CARD_TYPE)) {
+  customElements.define(CARD_TYPE, DnsStatsCard);
+}
 
 window.customCards = window.customCards || [];
-window.customCards.push({
-  type: CARD_TYPE,
-  name: "DNS Stats",
-  description: "dnsmasq cache hit rate, latency and totals from network_scanner sensor",
-  preview: false,
-});
+if (!window.customCards.some((c) => c.type === CARD_TYPE)) {
+  window.customCards.push({
+    type: CARD_TYPE,
+    name: "DNS Stats",
+    description: "dnsmasq cache hit rate, latency and totals from network_scanner sensor",
+    preview: false,
+  });
+}
 
 console.info(
   `%c DNS-STATS-CARD %c ${CARD_VERSION} `,

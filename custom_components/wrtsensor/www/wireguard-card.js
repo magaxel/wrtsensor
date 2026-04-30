@@ -601,16 +601,22 @@ class WireguardCardEditor extends LitElement {
   }
 }
 
-customElements.define(EDITOR_TYPE, WireguardCardEditor);
-customElements.define(CARD_TYPE, WireguardCard);
+if (!customElements.get(EDITOR_TYPE)) {
+  customElements.define(EDITOR_TYPE, WireguardCardEditor);
+}
+if (!customElements.get(CARD_TYPE)) {
+  customElements.define(CARD_TYPE, WireguardCard);
+}
 
 window.customCards = window.customCards || [];
-window.customCards.push({
-  type: CARD_TYPE,
-  name: "WireGuard",
-  description: "Per-peer WireGuard tunnel status, transfer totals, and live rate from wrtsensor",
-  preview: false,
-});
+if (!window.customCards.some((c) => c.type === CARD_TYPE)) {
+  window.customCards.push({
+    type: CARD_TYPE,
+    name: "WireGuard",
+    description: "Per-peer WireGuard tunnel status, transfer totals, and live rate from wrtsensor",
+    preview: false,
+  });
+}
 
 console.info(
   `%c WIREGUARD-CARD %c ${CARD_VERSION} `,
