@@ -49,17 +49,18 @@ from .const import (
     CONF_AP_HOSTS,
     CONF_DISCONNECT_THRESHOLD,
     CONF_ENABLE_DNS_STATS,
+    CONF_ENABLE_HOST_METRICS,
     CONF_ENABLE_WIREGUARD,
     CONF_GATEWAY_HOST,
     CONF_LAN_IFACE,
     CONF_SCAN_INTERVAL,
     CONF_SSH_KEY_PATH,
-    CONF_SSH_PORT,
     CONF_WAN_IFACE,
     CONF_WG_STALE_THRESHOLD,
     DEFAULT_DHCP_LEASES,
     DEFAULT_DISCONNECT_THRESHOLD,
     DEFAULT_ENABLE_DNS_STATS,
+    DEFAULT_ENABLE_HOST_METRICS,
     DEFAULT_ENABLE_WIREGUARD,
     DEFAULT_LAN_IFACE,
     DEFAULT_SCAN_INTERVAL,
@@ -73,6 +74,7 @@ from .const import (
     STATE_DIR_LOCAL,
     STATE_MAX_AGE_DAYS,
 )
+from .hosts import HostEndpoint, parse_host_endpoint
 
 _LOGGER = logging.getLogger(__name__)
 DNS_HISTORY_MAX_AGE_S = 25 * 60 * 60
@@ -744,11 +746,26 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         data = {**entry.data, **entry.options}
-        self._gateway_host: str | None = data.get(CONF_GATEWAY_HOST, "") or None
+        gateway_raw = data.get(CONF_GATEWAY_HOST, "") or ""
+        self._gateway_endpoint: HostEndpoint | None = (
+            parse_host_endpoint(gateway_raw) if gateway_raw else None
+        )
+        self._gateway_host: str | None = (
+            self._gateway_endpoint.host if self._gateway_endpoint else None
+        )
         self._ssh_key = data.get(CONF_SSH_KEY_PATH, DEFAULT_SSH_KEY)
-        self._ssh_port: int = int(data.get(CONF_SSH_PORT, DEFAULT_SSH_PORT))
         raw_aps = data.get(CONF_AP_HOSTS, "")
-        self._ap_hosts: list[str] = [h.strip() for h in raw_aps.split(",") if h.strip()]
+        self._ap_endpoints: list[HostEndpoint] = [
+            parse_host_endpoint(h.strip()) for h in raw_aps.split(",") if h.strip()
+        ]
+        self._ap_hosts: list[str] = [ep.host for ep in self._ap_endpoints]
+        self._endpoint_ports: dict[str, int] = {
+            ep.host: ep.port
+            for ep in (
+                ([self._gateway_endpoint] if self._gateway_endpoint else [])
+                + self._ap_endpoints
+            )
+        }
         self._lan_iface = data.get(CONF_LAN_IFACE, DEFAULT_LAN_IFACE)
         self._wan_iface = data.get(CONF_WAN_IFACE, DEFAULT_WAN_IFACE)
         self._disconnect_threshold_s = int(
@@ -756,6 +773,9 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self._enable_dns_stats = bool(
             data.get(CONF_ENABLE_DNS_STATS, DEFAULT_ENABLE_DNS_STATS)
+        )
+        self._enable_host_metrics = bool(
+            data.get(CONF_ENABLE_HOST_METRICS, DEFAULT_ENABLE_HOST_METRICS)
         )
         self._enable_wireguard = bool(
             data.get(CONF_ENABLE_WIREGUARD, DEFAULT_ENABLE_WIREGUARD)
@@ -901,7 +921,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             async with asyncssh.connect(
                 host,
-                port=self._ssh_port,
+                port=self._endpoint_ports.get(host, DEFAULT_SSH_PORT),
                 username="root",
                 client_keys=[self._ssh_key],
                 known_hosts=None,
@@ -937,7 +957,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             async with asyncio.timeout(timeout):
                 async with asyncssh.connect(
                     host,
-                    port=self._ssh_port,
+                    port=self._endpoint_ports.get(host, DEFAULT_SSH_PORT),
                     username="root",
                     client_keys=[self._ssh_key],
                     known_hosts=None,
@@ -980,10 +1000,14 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "echo '---BW---'; "
             f"cat /sys/class/net/{wi}/statistics/rx_bytes 2>/dev/null; "
             f"cat /sys/class/net/{wi}/statistics/tx_bytes 2>/dev/null; "
-            "echo '---HOSTSTAT---'; "
-            "grep '^cpu ' /proc/stat 2>/dev/null; "
-            "awk '/^MemTotal:/ {t=$2} /^MemAvailable:/ {a=$2} END{print t, a}' /proc/meminfo 2>/dev/null; "
-            'df / 2>/dev/null | awk \'NR==2 {gsub("%","",$5); print $5+0}\'; '
+            + (
+                "echo '---HOSTSTAT---'; "
+                "grep '^cpu ' /proc/stat 2>/dev/null; "
+                "awk '/^MemTotal:/ {t=$2} /^MemAvailable:/ {a=$2} END{print t, a}' /proc/meminfo 2>/dev/null; "
+                'df / 2>/dev/null | awk \'NR==2 {gsub("%","",$5); print $5+0}\'; '
+                if self._enable_host_metrics
+                else ""
+            )
             + (
                 "echo '---DNS---'; "
                 "kill -USR1 $(pidof dnsmasq) 2>/dev/null; sleep 1; "
@@ -1075,7 +1099,10 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _collect_wifi(
         self, host: str, ap_name: str
     ) -> tuple[list[dict[str, Any]], list[str]]:
-        out = await self._ssh_run(host, f"sh {COLLECTOR_REMOTE_PATH}", timeout=12)
+        metrics_arg = "" if self._enable_host_metrics else " --no-host-metrics"
+        out = await self._ssh_run(
+            host, f"sh {COLLECTOR_REMOTE_PATH}{metrics_arg}", timeout=12
+        )
         model, board_name = parse_board_model(out)
         if model:
             self._host_models[host] = (model, board_name)
@@ -1540,10 +1567,11 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "gateway_mac": "",
                     "wan_rx_rate": None,
                     "wan_tx_rate": None,
-                    "host_stats": {},
                     "devices": [asdict(d) for d in cached_devices],
                     "partial": True,
                 }
+                if self._enable_host_metrics:
+                    payload["host_stats"] = {}
                 if self._enable_dns_stats:
                     payload["dns_stats"] = None
                 if self._enable_wireguard:
@@ -1814,9 +1842,8 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self.hass.async_add_executor_job(self._save_state, new_state)
         self._append_event_buffer(all_events)
 
-        # Host stats
         host_stats: dict[str, dict[str, Any]] = {}
-        if self._gateway_host and gw_data:
+        if self._enable_host_metrics and self._gateway_host and gw_data:
             gw_stats = self._compute_host_stats(
                 self._gateway_host, parse_hoststat(gw_data.get("hoststat", []))
             )
@@ -1828,7 +1855,11 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "board_name": gw_model_info[1],
                     **gw_stats,
                 }
-        for host in self._ap_hosts:
+        if self._enable_host_metrics:
+            hosts_for_stats = self._ap_hosts
+        else:
+            hosts_for_stats = []
+        for host in hosts_for_stats:
             stats = self._compute_host_stats(
                 host, parse_hoststat(ap_hoststats.get(host, []))
             )
@@ -1868,10 +1899,11 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "gateway_mac": gw_mac,
             "wan_rx_rate": rx_rate,
             "wan_tx_rate": tx_rate,
-            "host_stats": host_stats,
             "devices": [asdict(d) for d in devices],
             "partial": False,
         }
+        if self._enable_host_metrics:
+            result["host_stats"] = host_stats
         if self._enable_dns_stats:
             result["dns_stats"] = dns_stats
         if self._enable_wireguard:

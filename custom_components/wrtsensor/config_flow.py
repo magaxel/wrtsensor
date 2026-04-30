@@ -15,26 +15,27 @@ from .const import (
     CONF_AP_HOSTS,
     CONF_DISCONNECT_THRESHOLD,
     CONF_ENABLE_DNS_STATS,
+    CONF_ENABLE_HOST_METRICS,
     CONF_ENABLE_WIREGUARD,
     CONF_GATEWAY_HOST,
     CONF_LAN_IFACE,
     CONF_PRESENCE_MACS,
     CONF_SCAN_INTERVAL,
     CONF_SSH_KEY_PATH,
-    CONF_SSH_PORT,
     CONF_WAN_IFACE,
     CONF_WG_STALE_THRESHOLD,
     DEFAULT_DISCONNECT_THRESHOLD,
     DEFAULT_ENABLE_DNS_STATS,
+    DEFAULT_ENABLE_HOST_METRICS,
     DEFAULT_ENABLE_WIREGUARD,
     DEFAULT_LAN_IFACE,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SSH_KEY,
-    DEFAULT_SSH_PORT,
     DEFAULT_WAN_IFACE,
     DEFAULT_WG_STALE_THRESHOLD,
     DOMAIN,
 )
+from .hosts import HostEndpoint, HostEndpointError, parse_host_endpoint
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -49,6 +50,7 @@ _ERROR_LABELS = {
     "ssh_key_not_found": "SSH key file not found",
     "auth_failed": "SSH authentication failed",
     "auth_failed_after_provision": "still rejects key after provisioning",
+    "invalid_host": "invalid host",
     "provision_auth_failed": "password authentication failed",
     "provision_cannot_connect": "cannot connect for provisioning",
     "pub_key_unreadable": "public key unreadable",
@@ -59,16 +61,21 @@ def _format_failures(pairs: list[tuple[str, str]]) -> str:
     return ", ".join(f"{h} — {_ERROR_LABELS.get(k, k)}" for h, k in pairs)
 
 
-async def _test_ssh(
-    gateway_host: str, ssh_key_path: str, ssh_port: int = 22
-) -> str | None:
+def _parse_config_endpoints(
+    gateway_host: str, ap_hosts: list[str]
+) -> list[HostEndpoint]:
+    raw_hosts = ([gateway_host] if gateway_host else []) + ap_hosts
+    return [parse_host_endpoint(host) for host in raw_hosts]
+
+
+async def _test_ssh(host: str, ssh_key_path: str, ssh_port: int = 22) -> str | None:
     """Return None on success or an error key string."""
     if not Path(ssh_key_path).exists():
         return "ssh_key_not_found"
     try:
         async with asyncio.timeout(10):
             async with asyncssh.connect(
-                gateway_host,
+                host,
                 port=ssh_port,
                 username="root",
                 client_keys=[ssh_key_path],
@@ -135,16 +142,15 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def _async_probe_hosts(
         self, user_input: dict[str, Any]
-    ) -> tuple[dict[str, str], dict[str, str], bool, str, str, int, str]:
+    ) -> tuple[dict[str, str], dict[str, str], bool, str, str, str]:
         """Parse user input, validate, and SSH-probe all configured hosts.
 
         Returns (errors, placeholders, needs_provision, gateway_host,
-        ssh_key_path, ssh_port, ap_hosts_raw).
+        ssh_key_path, ap_hosts_raw).
         When needs_provision is True, self._pending has been populated.
         """
         gateway_host = user_input.get(CONF_GATEWAY_HOST, "").strip()
         ssh_key_path = user_input[CONF_SSH_KEY_PATH].strip()
-        ssh_port = user_input.get(CONF_SSH_PORT, DEFAULT_SSH_PORT)
         ap_hosts_raw = user_input.get(CONF_AP_HOSTS, "")
         ap_hosts = _parse_hosts(ap_hosts_raw)
 
@@ -159,26 +165,41 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
                 False,
                 gateway_host,
                 ssh_key_path,
-                ssh_port,
                 ap_hosts_raw,
             )
 
-        all_hosts = ([gateway_host] if gateway_host else []) + ap_hosts
+        try:
+            all_endpoints = _parse_config_endpoints(gateway_host, ap_hosts)
+        except HostEndpointError:
+            errors["base"] = "invalid_host"
+            placeholders["failures"] = ", ".join(
+                ([gateway_host] if gateway_host else []) + ap_hosts
+            )
+            return (
+                errors,
+                placeholders,
+                False,
+                gateway_host,
+                ssh_key_path,
+                ap_hosts_raw,
+            )
+
         # Probe every host so a single working gateway can't mask an AP
         # with a missing key. Any auth_failed → provision; any other
         # error → surface it and stop.
         results = await asyncio.gather(
-            *[_test_ssh(h, ssh_key_path, ssh_port) for h in all_hosts]
+            *[_test_ssh(ep.host, ssh_key_path, ep.port) for ep in all_endpoints]
         )
         needs_provision = any(r == "auth_failed" for r in results)
         other_failures = [
-            (h, r) for h, r in zip(all_hosts, results) if r and r != "auth_failed"
+            (ep.raw, r)
+            for ep, r in zip(all_endpoints, results)
+            if r and r != "auth_failed"
         ]
         if needs_provision:
             self._pending = {
                 CONF_GATEWAY_HOST: gateway_host,
                 CONF_SSH_KEY_PATH: ssh_key_path,
-                CONF_SSH_PORT: ssh_port,
                 CONF_AP_HOSTS: ap_hosts_raw,
             }
         elif other_failures:
@@ -191,7 +212,6 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
             needs_provision,
             gateway_host,
             ssh_key_path,
-            ssh_port,
             ap_hosts_raw,
         )
 
@@ -208,13 +228,16 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
                 needs_provision,
                 gateway_host,
                 ssh_key_path,
-                ssh_port,
                 ap_hosts_raw,
             ) = await self._async_probe_hosts(user_input)
             if needs_provision:
                 return await self.async_step_provision_key()
             if not errors:
-                unique_id = gateway_host or _parse_hosts(ap_hosts_raw)[0]
+                unique_id = (
+                    parse_host_endpoint(gateway_host).host
+                    if gateway_host
+                    else parse_host_endpoint(_parse_hosts(ap_hosts_raw)[0]).host
+                )
                 await self.async_set_unique_id(unique_id)
                 self._abort_if_unique_id_configured()
                 title = (
@@ -227,7 +250,6 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
                     data={
                         CONF_GATEWAY_HOST: gateway_host,
                         CONF_SSH_KEY_PATH: ssh_key_path,
-                        CONF_SSH_PORT: ssh_port,
                         CONF_AP_HOSTS: ap_hosts_raw,
                     },
                 )
@@ -243,10 +265,6 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_SSH_KEY_PATH,
                     default=DEFAULT_SSH_KEY,
                 ): str,
-                vol.Optional(
-                    CONF_SSH_PORT,
-                    default=DEFAULT_SSH_PORT,
-                ): vol.All(vol.Coerce(int), vol.Range(min=1, max=65535)),
                 vol.Optional(CONF_AP_HOSTS, default=""): str,
             }
         )
@@ -274,7 +292,6 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
                 needs_provision,
                 gateway_host,
                 ssh_key_path,
-                ssh_port,
                 ap_hosts_raw,
             ) = await self._async_probe_hosts(user_input)
             if needs_provision:
@@ -284,9 +301,9 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
                     **entry.data,
                     CONF_GATEWAY_HOST: gateway_host,
                     CONF_SSH_KEY_PATH: ssh_key_path,
-                    CONF_SSH_PORT: ssh_port,
                     CONF_AP_HOSTS: ap_hosts_raw,
                 }
+                new_data.pop("ssh_port", None)
                 return self.async_update_reload_and_abort(
                     entry, data=new_data, reason="reconfigure_successful"
                 )
@@ -301,10 +318,6 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_SSH_KEY_PATH,
                     default=current.get(CONF_SSH_KEY_PATH, DEFAULT_SSH_KEY),
                 ): str,
-                vol.Optional(
-                    CONF_SSH_PORT,
-                    default=current.get(CONF_SSH_PORT, DEFAULT_SSH_PORT),
-                ): vol.All(vol.Coerce(int), vol.Range(min=1, max=65535)),
                 vol.Optional(
                     CONF_AP_HOSTS,
                     default=current.get(CONF_AP_HOSTS, ""),
@@ -328,27 +341,30 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
             ssh_user = user_input["ssh_user"].strip()
             ssh_password = user_input["ssh_password"]
             key_path = self._pending[CONF_SSH_KEY_PATH]
-            port = self._pending[CONF_SSH_PORT]
             gateway = self._pending.get(CONF_GATEWAY_HOST, "")
             ap_hosts = _parse_hosts(self._pending.get(CONF_AP_HOSTS, ""))
-            hosts = ([gateway] if gateway else []) + ap_hosts
+            endpoints = _parse_config_endpoints(gateway, ap_hosts)
 
             prov_results = await asyncio.gather(
                 *[
-                    _provision_ssh_key(h, port, ssh_user, ssh_password, key_path)
-                    for h in hosts
+                    _provision_ssh_key(
+                        ep.host, ep.port, ssh_user, ssh_password, key_path
+                    )
+                    for ep in endpoints
                 ]
             )
-            prov_failures = [(h, r) for h, r in zip(hosts, prov_results) if r]
+            prov_failures = [(ep.raw, r) for ep, r in zip(endpoints, prov_results) if r]
 
             if prov_failures:
                 errors["base"] = "provision_failed"
                 placeholders["failures"] = _format_failures(prov_failures)
             else:
                 post_results = await asyncio.gather(
-                    *[_test_ssh(h, key_path, port) for h in hosts]
+                    *[_test_ssh(ep.host, key_path, ep.port) for ep in endpoints]
                 )
-                post_failures = [(h, r) for h, r in zip(hosts, post_results) if r]
+                post_failures = [
+                    (ep.raw, r) for ep, r in zip(endpoints, post_results) if r
+                ]
                 if post_failures:
                     errors["base"] = "auth_failed_after_provision"
                     placeholders["failures"] = _format_failures(post_failures)
@@ -358,6 +374,7 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
                             self.context["entry_id"]
                         )
                         new_data = {**entry.data, **self._pending}
+                        new_data.pop("ssh_port", None)
                         return self.async_update_reload_and_abort(
                             entry,
                             data=new_data,
@@ -410,22 +427,26 @@ class WrtsensorOptionsFlow(OptionsFlow):
             ssh_key_path = user_input.get(
                 CONF_SSH_KEY_PATH, current.get(CONF_SSH_KEY_PATH, DEFAULT_SSH_KEY)
             )
-            ssh_port = user_input.get(
-                CONF_SSH_PORT, current.get(CONF_SSH_PORT, DEFAULT_SSH_PORT)
-            )
             if not gateway_host and not ap_hosts:
                 errors["base"] = "at_least_one_host"
             else:
-                all_hosts = ([gateway_host] if gateway_host else []) + ap_hosts
-                results = await asyncio.gather(
-                    *[_test_ssh(h, ssh_key_path, ssh_port) for h in all_hosts]
-                )
-                failures = [(h, r) for h, r in zip(all_hosts, results) if r]
-                if failures:
-                    errors["base"] = "setup_failed"
-                    placeholders["failures"] = _format_failures(failures)
+                try:
+                    endpoints = _parse_config_endpoints(gateway_host, ap_hosts)
+                except HostEndpointError:
+                    errors["base"] = "invalid_host"
+                    placeholders["failures"] = ", ".join(
+                        ([gateway_host] if gateway_host else []) + ap_hosts
+                    )
                 else:
-                    return self.async_create_entry(title="", data=user_input)
+                    results = await asyncio.gather(
+                        *[_test_ssh(ep.host, ssh_key_path, ep.port) for ep in endpoints]
+                    )
+                    failures = [(ep.raw, r) for ep, r in zip(endpoints, results) if r]
+                    if failures:
+                        errors["base"] = "setup_failed"
+                        placeholders["failures"] = _format_failures(failures)
+                    else:
+                        return self.async_create_entry(title="", data=user_input)
 
         schema = vol.Schema(
             {
@@ -433,10 +454,6 @@ class WrtsensorOptionsFlow(OptionsFlow):
                     CONF_SSH_KEY_PATH,
                     default=current.get(CONF_SSH_KEY_PATH, DEFAULT_SSH_KEY),
                 ): str,
-                vol.Optional(
-                    CONF_SSH_PORT,
-                    default=current.get(CONF_SSH_PORT, DEFAULT_SSH_PORT),
-                ): vol.All(vol.Coerce(int), vol.Range(min=1, max=65535)),
                 vol.Optional(
                     CONF_AP_HOSTS,
                     default=current.get(CONF_AP_HOSTS, ""),
@@ -467,6 +484,12 @@ class WrtsensorOptionsFlow(OptionsFlow):
                     CONF_ENABLE_DNS_STATS,
                     default=current.get(
                         CONF_ENABLE_DNS_STATS, DEFAULT_ENABLE_DNS_STATS
+                    ),
+                ): bool,
+                vol.Optional(
+                    CONF_ENABLE_HOST_METRICS,
+                    default=current.get(
+                        CONF_ENABLE_HOST_METRICS, DEFAULT_ENABLE_HOST_METRICS
                     ),
                 ): bool,
                 vol.Optional(

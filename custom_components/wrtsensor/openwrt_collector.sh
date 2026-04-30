@@ -7,6 +7,11 @@
 # Called remotely over SSH by diagnose.py / coordinator.py.
 # Requires: iwinfo (hard dependency — exits 1 if missing)
 
+collect_host_metrics=1
+if [ "${1:-}" = "--no-host-metrics" ]; then
+    collect_host_metrics=0
+fi
+
 # Clean up any background jobs on exit/interrupt
 trap 'kill 0' EXIT INT TERM
 
@@ -17,10 +22,12 @@ if ! command -v iwinfo >/dev/null 2>&1; then
 fi
 
 echo "BOARD|$(ubus call system board 2>/dev/null)"
-cpu_line=$(grep '^cpu ' /proc/stat 2>/dev/null)
-mem=$(awk '/^MemTotal:/ {t=$2} /^MemAvailable:/ {a=$2} END{print t "|" a}' /proc/meminfo 2>/dev/null)
-disk=$(df / 2>/dev/null | awk 'NR==2 {gsub("%","",$5); print $5+0}')
-echo "STAT|${cpu_line}|${mem}|${disk}"
+if [ "$collect_host_metrics" -eq 1 ]; then
+    cpu_line=$(grep '^cpu ' /proc/stat 2>/dev/null)
+    mem=$(awk '/^MemTotal:/ {t=$2} /^MemAvailable:/ {a=$2} END{print t "|" a}' /proc/meminfo 2>/dev/null)
+    disk=$(df / 2>/dev/null | awk 'NR==2 {gsub("%","",$5); print $5+0}')
+    echo "STAT|${cpu_line}|${mem}|${disk}"
+fi
 
 # Exit cleanly if no wireless interfaces are up
 ifaces=$(iwinfo 2>/dev/null | grep "ESSID" | cut -d" " -f1)
