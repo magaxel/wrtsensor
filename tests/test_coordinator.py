@@ -73,7 +73,6 @@ class _FakeEntry:
             "gateway_host": "192.0.2.1",
             "ssh_key_path": "/tmp/test_key",
             "ap_hosts": "",
-            "ssh_port": 22,
             "disconnect_threshold_s": 120,
         }
         self.options = options or {}
@@ -91,7 +90,6 @@ def _make_coordinator(
             "gateway_host": gateway_host,
             "ssh_key_path": "/tmp/test_key",
             "ap_hosts": ap_hosts,
-            "ssh_port": 22,
             "disconnect_threshold_s": 120,
         }
     )
@@ -120,16 +118,47 @@ _MINIMAL_GW = {
 }
 
 
+def test_coordinator_parses_inline_ports_and_normalizes_identity():
+    c = _make_coordinator(
+        gateway_host="[2001:db8::1]:2222",
+        ap_hosts="192.0.2.22:2200, 2001:db8::23",
+    )
+
+    assert c._gateway_host == "2001:db8::1"
+    assert c._ap_hosts == ["192.0.2.22", "2001:db8::23"]
+    assert c._endpoint_ports == {
+        "2001:db8::1": 2222,
+        "192.0.2.22": 2200,
+        "2001:db8::23": 22,
+    }
+
+
+def test_coordinator_ignores_legacy_ssh_port():
+    c = WrtsensorCoordinator(
+        _FakeHass(),
+        _FakeEntry(
+            data={
+                "gateway_host": "192.0.2.1",
+                "ssh_key_path": "/tmp/test_key",
+                "ap_hosts": "192.0.2.22",
+                "ssh_port": 2222,
+                "disconnect_threshold_s": 120,
+            }
+        ),
+    )
+
+    assert c._endpoint_ports == {"192.0.2.1": 22, "192.0.2.22": 22}
+
+
 # ── Migration: v1 → v2 ────────────────────────────────────────────────────────
 
 
-def test_migrate_v1_adds_ssh_port():
+def test_migrate_v1_does_not_add_ssh_port():
     hass = _FakeHass()
     entry = _FakeEntry(data={"gateway_host": "192.0.2.1"})
     entry.version = 1
     asyncio.run(async_migrate_entry(hass, entry))
-    assert const_mod.CONF_SSH_PORT in entry.data
-    assert entry.data[const_mod.CONF_SSH_PORT] == const_mod.DEFAULT_SSH_PORT
+    assert const_mod.CONF_SSH_PORT not in entry.data
 
 
 def test_migrate_v1_adds_disconnect_threshold():
@@ -144,14 +173,14 @@ def test_migrate_v1_adds_disconnect_threshold():
     )
 
 
-def test_migrate_v1_preserves_existing_ssh_port():
+def test_migrate_v1_leaves_existing_ssh_port_untouched():
     hass = _FakeHass()
     entry = _FakeEntry(
         data={"gateway_host": "192.0.2.1", const_mod.CONF_SSH_PORT: 2222}
     )
     entry.version = 1
     asyncio.run(async_migrate_entry(hass, entry))
-    assert entry.data[const_mod.CONF_SSH_PORT] == 2222  # setdefault, not overwrite
+    assert entry.data[const_mod.CONF_SSH_PORT] == 2222
 
 
 def test_migrate_v2_is_noop():

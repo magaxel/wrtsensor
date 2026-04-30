@@ -6,14 +6,12 @@
         "data": {
           "gateway_host": "Gateway IP address (optional)",
           "ssh_key_path": "SSH private key path",
-          "ssh_port": "SSH port",
           "ap_hosts": "Access point IPs"
         },
         "data_description": {
-          "gateway_host": "IP address of the OpenWrt router that acts as your gateway. Leave empty if you only have OpenWrt access points behind a non-OpenWrt router. A single combined OpenWrt box (routing + Wi-Fi) counts as a gateway — enter its IP here.",
+          "gateway_host": "IP address of the OpenWrt router that acts as your gateway. Port 22 is used by default; add :2222 for IPv4 or use [2001:db8::1]:2222 for IPv6 with a custom port.",
           "ssh_key_path": "Absolute path to the SSH private key on the HA host used to authenticate as root. Example: /config/ssh/id_ed25519",
-          "ssh_port": "SSH port on all OpenWrt hosts (gateway and APs). Default: 22.",
-          "ap_hosts": "Comma-separated IPs of OpenWrt access points. At least one host (gateway or AP) is required. Example: 192.168.1.22,192.168.1.23"
+          "ap_hosts": "Comma-separated IPs of OpenWrt access points. Port 22 is used by default; add :2222 for IPv4 or use [2001:db8::22]:2222 for IPv6 with a custom port. Example: 192.168.1.22,192.168.1.23:2222"
         }
       },
       "provision_key": {
@@ -30,18 +28,16 @@
       },
       "reconfigure": {
         "title": "Reconfigure wrtsensor",
-        "description": "Change gateway, access points, SSH key path or SSH port. Every host is re-tested; removing a host prunes its per-host sensors on the next reload.",
+        "description": "Change gateway, access points, or SSH key path. Every host is re-tested; removing a host prunes its per-host sensors on the next reload.",
         "data": {
           "gateway_host": "Gateway IP address (optional)",
           "ssh_key_path": "SSH private key path",
-          "ssh_port": "SSH port",
           "ap_hosts": "Access point IPs"
         },
         "data_description": {
-          "gateway_host": "Leave empty for APs-only mode. Any OpenWrt box that routes counts as a gateway.",
+          "gateway_host": "Leave empty for APs-only mode. Any OpenWrt box that routes counts as a gateway. Port 22 is used by default; add :2222 for IPv4 or [2001:db8::1]:2222 for IPv6.",
           "ssh_key_path": "Absolute path to the SSH private key on the HA host. Example: /config/ssh/id_ed25519",
-          "ssh_port": "SSH port on all OpenWrt hosts. Default: 22.",
-          "ap_hosts": "Comma-separated IPs of OpenWrt access points. At least one host (gateway or AP) is required."
+          "ap_hosts": "Comma-separated IPs of OpenWrt access points. Port 22 is used by default; add :2222 for IPv4 or [2001:db8::22]:2222 for IPv6."
         }
       }
     },
@@ -56,6 +52,7 @@
       "setup_failed": "Setup failed: {failures}",
       "provision_failed": "Could not add the SSH key on: {failures}",
       "auth_failed_after_provision": "Key was provisioned but some hosts still reject it: {failures}",
+      "invalid_host": "Invalid host or port: {failures}",
       "at_least_one_host": "Enter at least a gateway or one access point."
     },
     "abort": {
@@ -69,7 +66,6 @@
         "title": "wrtsensor options",
         "data": {
           "ssh_key_path": "SSH private key path",
-          "ssh_port": "SSH port",
           "ap_hosts": "Access point IPs",
           "scan_interval": "Scan interval (seconds)",
           "lan_iface": "LAN bridge interface",
@@ -83,8 +79,7 @@
         },
         "data_description": {
           "ssh_key_path": "Absolute path to the SSH private key on the HA host. Example: /config/ssh/id_ed25519",
-          "ssh_port": "SSH port on all OpenWrt hosts (gateway and APs). Default: 22.",
-          "ap_hosts": "Comma-separated IPs of OpenWrt access points to collect Wi-Fi associations and host stats from. Example: 192.168.1.22,192.168.1.23",
+          "ap_hosts": "Comma-separated IPs of OpenWrt access points to collect Wi-Fi associations and host stats from. Port 22 is used by default; add :2222 for IPv4 or [2001:db8::22]:2222 for IPv6. Example: 192.168.1.22,192.168.1.23:2222",
           "scan_interval": "How often to poll the gateway and APs. Minimum 30 s, maximum 3600 s. Default: 60 s.",
           "lan_iface": "Bridge interface used for the LAN on OpenWrt. Default: br-lan. Change only if your router uses a different name.",
           "wan_iface": "WAN-facing interface on the gateway used to read RX/TX byte counters. Default: eth0.",
@@ -103,6 +98,7 @@
       "cannot_connect": "Cannot connect",
       "no_response": "Host returned no hostname",
       "setup_failed": "Setup failed: {failures}",
+      "invalid_host": "Invalid host or port: {failures}",
       "at_least_one_host": "Enter at least a gateway or one access point."
     }
   }

@@ -14,9 +14,7 @@ from homeassistant.helpers import entity_registry as er
 
 from .const import (
     CONF_DISCONNECT_THRESHOLD,
-    CONF_SSH_PORT,
     DEFAULT_DISCONNECT_THRESHOLD,
-    DEFAULT_SSH_PORT,
     DOMAIN,
     PLATFORMS,
     STATIC_PATH_URL,
@@ -33,7 +31,6 @@ _WS_REGISTERED_KEY = f"{DOMAIN}_ws_registered"
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if entry.version < 2:
         new_data = {**entry.data}
-        new_data.setdefault(CONF_SSH_PORT, DEFAULT_SSH_PORT)
         new_data.setdefault(CONF_DISCONNECT_THRESHOLD, DEFAULT_DISCONNECT_THRESHOLD)
         hass.config_entries.async_update_entry(entry, data=new_data, version=2)
         _LOGGER.info("Migrated wrtsensor config entry to version 2")

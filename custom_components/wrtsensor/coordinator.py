@@ -55,7 +55,6 @@ from .const import (
     CONF_LAN_IFACE,
     CONF_SCAN_INTERVAL,
     CONF_SSH_KEY_PATH,
-    CONF_SSH_PORT,
     CONF_WAN_IFACE,
     CONF_WG_STALE_THRESHOLD,
     DEFAULT_DHCP_LEASES,
@@ -75,6 +74,7 @@ from .const import (
     STATE_DIR_LOCAL,
     STATE_MAX_AGE_DAYS,
 )
+from .hosts import HostEndpoint, parse_host_endpoint
 
 _LOGGER = logging.getLogger(__name__)
 DNS_HISTORY_MAX_AGE_S = 25 * 60 * 60
@@ -746,11 +746,26 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         data = {**entry.data, **entry.options}
-        self._gateway_host: str | None = data.get(CONF_GATEWAY_HOST, "") or None
+        gateway_raw = data.get(CONF_GATEWAY_HOST, "") or ""
+        self._gateway_endpoint: HostEndpoint | None = (
+            parse_host_endpoint(gateway_raw) if gateway_raw else None
+        )
+        self._gateway_host: str | None = (
+            self._gateway_endpoint.host if self._gateway_endpoint else None
+        )
         self._ssh_key = data.get(CONF_SSH_KEY_PATH, DEFAULT_SSH_KEY)
-        self._ssh_port: int = int(data.get(CONF_SSH_PORT, DEFAULT_SSH_PORT))
         raw_aps = data.get(CONF_AP_HOSTS, "")
-        self._ap_hosts: list[str] = [h.strip() for h in raw_aps.split(",") if h.strip()]
+        self._ap_endpoints: list[HostEndpoint] = [
+            parse_host_endpoint(h.strip()) for h in raw_aps.split(",") if h.strip()
+        ]
+        self._ap_hosts: list[str] = [ep.host for ep in self._ap_endpoints]
+        self._endpoint_ports: dict[str, int] = {
+            ep.host: ep.port
+            for ep in (
+                ([self._gateway_endpoint] if self._gateway_endpoint else [])
+                + self._ap_endpoints
+            )
+        }
         self._lan_iface = data.get(CONF_LAN_IFACE, DEFAULT_LAN_IFACE)
         self._wan_iface = data.get(CONF_WAN_IFACE, DEFAULT_WAN_IFACE)
         self._disconnect_threshold_s = int(
@@ -906,7 +921,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             async with asyncssh.connect(
                 host,
-                port=self._ssh_port,
+                port=self._endpoint_ports.get(host, DEFAULT_SSH_PORT),
                 username="root",
                 client_keys=[self._ssh_key],
                 known_hosts=None,
@@ -942,7 +957,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             async with asyncio.timeout(timeout):
                 async with asyncssh.connect(
                     host,
-                    port=self._ssh_port,
+                    port=self._endpoint_ports.get(host, DEFAULT_SSH_PORT),
                     username="root",
                     client_keys=[self._ssh_key],
                     known_hosts=None,
