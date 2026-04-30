@@ -976,11 +976,13 @@ if (!customElements.get(CARD_TYPE)) {
 }
 
 window.customCards = window.customCards || [];
-window.customCards.push({
-  type: CARD_TYPE,
-  name: "Network Events",
-  description: "Filterable network event log from a wrtsensor network_scanner entity",
-});
+if (!window.customCards.some((c) => c.type === CARD_TYPE)) {
+  window.customCards.push({
+    type: CARD_TYPE,
+    name: "Network Events",
+    description: "Filterable network event log from a wrtsensor network_scanner entity",
+  });
+}
 
 console.info(
   `%c NETWORK-EVENTS-CARD %c v${CARD_VERSION} `,

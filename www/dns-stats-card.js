@@ -451,12 +451,14 @@ if (!customElements.get(CARD_TYPE)) {
 }
 
 window.customCards = window.customCards || [];
-window.customCards.push({
-  type: CARD_TYPE,
-  name: "DNS Stats",
-  description: "dnsmasq cache hit rate, latency and totals from network_scanner sensor",
-  preview: false,
-});
+if (!window.customCards.some((c) => c.type === CARD_TYPE)) {
+  window.customCards.push({
+    type: CARD_TYPE,
+    name: "DNS Stats",
+    description: "dnsmasq cache hit rate, latency and totals from network_scanner sensor",
+    preview: false,
+  });
+}
 
 console.info(
   `%c DNS-STATS-CARD %c ${CARD_VERSION} `,

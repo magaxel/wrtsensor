@@ -798,12 +798,15 @@ if (!customElements.get(CARD_TYPE)) {
 }
 
 window.customCards = window.customCards || [];
-window.customCards.push({
-  type: CARD_TYPE,
-  name: "Network Table",
-  description: "Filterable network device table from network_scanner sensor (Lit, mobile-friendly)",
-  preview: false,
-});
+if (!window.customCards.some((c) => c.type === CARD_TYPE)) {
+  window.customCards.push({
+    type: CARD_TYPE,
+    name: "Network Table",
+    description:
+      "Filterable network device table from network_scanner sensor (Lit, mobile-friendly)",
+    preview: false,
+  });
+}
 
 console.info(
   `%c NETWORK-TABLE-CARD %c v${CARD_VERSION} `,

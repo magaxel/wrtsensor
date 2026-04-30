@@ -1253,8 +1253,10 @@ if (!customElements.get("network-topology-card")) {
   customElements.define("network-topology-card", NetworkTopologyCard);
 }
 window.customCards = window.customCards || [];
-window.customCards.push({
-  type: "network-topology-card",
-  name: "Network Topology",
-  description: "Live SVG network map from network_scanner sensor",
-});
+if (!window.customCards.some((c) => c.type === "network-topology-card")) {
+  window.customCards.push({
+    type: "network-topology-card",
+    name: "Network Topology",
+    description: "Live SVG network map from network_scanner sensor",
+  });
+}

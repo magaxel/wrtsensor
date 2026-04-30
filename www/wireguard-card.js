@@ -609,12 +609,14 @@ if (!customElements.get(CARD_TYPE)) {
 }
 
 window.customCards = window.customCards || [];
-window.customCards.push({
-  type: CARD_TYPE,
-  name: "WireGuard",
-  description: "Per-peer WireGuard tunnel status, transfer totals, and live rate from wrtsensor",
-  preview: false,
-});
+if (!window.customCards.some((c) => c.type === CARD_TYPE)) {
+  window.customCards.push({
+    type: CARD_TYPE,
+    name: "WireGuard",
+    description: "Per-peer WireGuard tunnel status, transfer totals, and live rate from wrtsensor",
+    preview: false,
+  });
+}
 
 console.info(
   `%c WIREGUARD-CARD %c ${CARD_VERSION} `,
