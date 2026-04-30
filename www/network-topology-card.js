@@ -234,11 +234,8 @@ class NetworkTopologyCard extends HTMLElement {
     const override = this._config.wireguard_entity;
     const cached = this._wgCache;
     const fresh = cached && cached.entityId === entityId && cached.override === override;
-    const stillResolves = fresh && (!cached.eid || hass.states?.[cached.eid]);
+    const stillResolves = fresh && cached.eid && hass.states?.[cached.eid];
     if (stillResolves) {
-      if (!cached.eid) {
-        return { state: null, entityId: null, configured: false, available: false };
-      }
       const state = hass.states[cached.eid];
       return {
         state,
@@ -248,7 +245,7 @@ class NetworkTopologyCard extends HTMLElement {
       };
     }
     const result = findWireguardSensor(hass, entityId, override);
-    this._wgCache = { entityId, override, eid: result.entityId };
+    this._wgCache = result.entityId ? { entityId, override, eid: result.entityId } : null;
     return result;
   }
 
