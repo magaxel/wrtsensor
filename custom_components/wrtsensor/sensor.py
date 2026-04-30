@@ -46,6 +46,8 @@ async def async_setup_entry(
     def _handle_coordinator_update() -> None:
         data = coordinator.data or {}
         new_entities: list[SensorEntity] = []
+        if not getattr(coordinator, "_enable_host_metrics", True):
+            return
         for host_key in data.get("host_stats", {}):
             if host_key in tracked_hosts:
                 continue

@@ -14,9 +14,7 @@ from homeassistant.helpers import entity_registry as er
 
 from .const import (
     CONF_DISCONNECT_THRESHOLD,
-    CONF_SSH_PORT,
     DEFAULT_DISCONNECT_THRESHOLD,
-    DEFAULT_SSH_PORT,
     DOMAIN,
     PLATFORMS,
     STATIC_PATH_URL,
@@ -33,7 +31,6 @@ _WS_REGISTERED_KEY = f"{DOMAIN}_ws_registered"
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if entry.version < 2:
         new_data = {**entry.data}
-        new_data.setdefault(CONF_SSH_PORT, DEFAULT_SSH_PORT)
         new_data.setdefault(CONF_DISCONNECT_THRESHOLD, DEFAULT_DISCONNECT_THRESHOLD)
         hass.config_entries.async_update_entry(entry, data=new_data, version=2)
         _LOGGER.info("Migrated wrtsensor config entry to version 2")
@@ -71,14 +68,26 @@ def _prune_orphaned_host_entities(
     """
     data = coordinator.data or {}
     host_stats = data.get("host_stats") or {}
+    reg = er.async_get(hass)
+    prefix = f"{entry.entry_id}_host_"
+
+    if not getattr(coordinator, "_enable_host_metrics", True):
+        for reg_entry in list(er.async_entries_for_config_entry(reg, entry.entry_id)):
+            if not reg_entry.unique_id.startswith(prefix):
+                continue
+            _LOGGER.info(
+                "Removing wrtsensor host metric entity %s (option disabled)",
+                reg_entry.entity_id,
+            )
+            reg.async_remove(reg_entry.entity_id)
+        return
+
     if not host_stats:
         # Don't prune blindly if the scan returned no host data (partial or
         # cold start) — better to leave unavailable entities than nuke
         # everything.
         return
     live = set(host_stats.keys())
-    reg = er.async_get(hass)
-    prefix = f"{entry.entry_id}_host_"
     for reg_entry in list(er.async_entries_for_config_entry(reg, entry.entry_id)):
         if not reg_entry.unique_id.startswith(prefix):
             continue
