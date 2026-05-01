@@ -1273,6 +1273,7 @@ _ASU_AVAILABLE_RE = re.compile(
 
 
 def _normalise_asu_version(raw: str) -> str | None:
+    """Like custom_components/wrtsensor/parser._normalise_owut_version."""
     if not raw:
         return None
     m = _ASU_VERSION_RE.search(raw)
@@ -1281,7 +1282,11 @@ def _normalise_asu_version(raw: str) -> str | None:
     parts = [m.group(1), m.group(2)]
     if m.group(3):
         parts.append(m.group(3))
-    return ".".join(parts)
+    base = ".".join(parts)
+    revision = m.group(4)
+    if revision:
+        return f"{base} r{revision}"
+    return base
 
 
 def collect_asu(host: str) -> dict[str, Any]:

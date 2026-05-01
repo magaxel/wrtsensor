@@ -102,6 +102,9 @@ class _DataUpdateCoordinator:
     def async_set_updated_data(self, data):  # pragma: no cover - test stub
         self.data = data
 
+    def async_update_listeners(self):  # pragma: no cover - test stub
+        return None
+
     async def async_shutdown(self):  # pragma: no cover - test stub
         return None
 

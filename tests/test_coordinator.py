@@ -7,7 +7,7 @@ import sys
 from contextlib import ExitStack
 from datetime import timedelta
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -1023,11 +1023,11 @@ def _make_asu_coordinator(
     return c
 
 
-def _ok_info(installed: str = "24.10.1") -> dict:
+def _ok_info(installed: str = "24.10.1 r28597") -> dict:
     return {
         "tool": "owut",
         "installed_version": installed,
-        "installed_version_raw": f"OpenWrt {installed} r28597-aaaa",
+        "installed_version_raw": f"OpenWrt {installed}-aaaa",
         "latest_version": installed,
         "summary": "no changes, upgrade not necessary",
         "error": None,
@@ -1040,20 +1040,23 @@ def test_asu_probe_once_no_op_when_all_fresh():
     for h in c._asu_hosts():
         c._asu_cache[h] = {"info": _ok_info(), "ts": now}
     fake_get = AsyncMock(return_value=_ok_info())
-    set_data = AsyncMock()
+    notify = MagicMock()
     with (
         patch("time.time", return_value=now),
         patch.object(c, "_get_asu_info", fake_get),
-        patch.object(c, "async_set_updated_data", set_data),
+        patch.object(c, "async_update_listeners", notify),
     ):
         did = asyncio.run(c._asu_probe_once())
     assert did is False
     assert fake_get.await_count == 0
-    assert set_data.await_count == 0
+    assert notify.call_count == 0
 
 
 def test_asu_probe_once_picks_first_due_host_and_emits():
     c = _make_asu_coordinator()
+    # Pre-populate self.data so the probe can graft onto it (real flow:
+    # first scan tick runs before _asu_loop wakes after its 5 s delay).
+    c.data = {"devices": []}
     now = 1_000_000.0
     # First host stale, others fresh.
     hosts = c._asu_hosts()
@@ -1061,36 +1064,51 @@ def test_asu_probe_once_picks_first_due_host_and_emits():
     c._asu_cache[hosts[1]] = {"info": _ok_info(), "ts": now}
     c._asu_cache[hosts[2]] = {"info": _ok_info(), "ts": now}
 
-    new_info = _ok_info("24.10.2")
+    new_info = _ok_info("24.10.2 r28739")
     fake_get = AsyncMock(return_value=new_info)
-    captured: list[dict] = []
-    set_data = lambda data: captured.append(data)  # noqa: E731
+    notify = MagicMock()
 
     with (
         patch("time.time", return_value=now),
         patch.object(c, "_get_asu_info", fake_get),
-        patch.object(c, "async_set_updated_data", side_effect=set_data),
+        patch.object(c, "async_update_listeners", notify),
     ):
         did = asyncio.run(c._asu_probe_once())
 
     assert did is True
     fake_get.assert_awaited_once_with(hosts[0])
     assert c._asu_cache[hosts[0]]["info"] == new_info
-    assert captured and "asu" in captured[0]
-    assert captured[0]["asu"][hosts[0]]["latest_version"] == "24.10.2"
+    # Mutated in place — does NOT reset the main coordinator's poll timer
+    # or last_update_success, unlike async_set_updated_data.
+    assert c.data["asu"][hosts[0]]["latest_version"] == new_info["latest_version"]
+    notify.assert_called_once()
+
+
+def test_asu_probe_once_does_not_call_async_set_updated_data():
+    """Regression guard: the loop must not reset the main coordinator's state."""
+    c = _make_asu_coordinator()
+    c.data = {"devices": []}
+    hosts = c._asu_hosts()
+    fake_get = AsyncMock(return_value=_ok_info())
+    set_data = MagicMock()
+    with (
+        patch.object(c, "_get_asu_info", fake_get),
+        patch.object(c, "async_set_updated_data", set_data),
+    ):
+        # Cache is empty → first host is due.
+        asyncio.run(c._asu_probe_once())
+    fake_get.assert_awaited_once_with(hosts[0])
+    set_data.assert_not_called()
 
 
 def test_asu_probe_once_advances_one_host_per_call():
     c = _make_asu_coordinator()
+    c.data = {"devices": []}
     now = 1_000_000.0
     hosts = c._asu_hosts()
     # All due.
     fake_get = AsyncMock(return_value=_ok_info())
-    # async_set_updated_data is a sync method on the real coordinator; use a
-    # plain MagicMock so the mock call returns a regular value, not a coroutine.
-    from unittest.mock import MagicMock
-
-    set_data = MagicMock()
+    notify = MagicMock()
     times = iter([now, now + 1, now + 2, now + 3, now + 4, now + 5])
 
     def _t():
@@ -1099,13 +1117,14 @@ def test_asu_probe_once_advances_one_host_per_call():
     with (
         patch("time.time", side_effect=_t),
         patch.object(c, "_get_asu_info", fake_get),
-        patch.object(c, "async_set_updated_data", set_data),
+        patch.object(c, "async_update_listeners", notify),
     ):
         # Three hosts, three iterations: each picks a different host.
         for _ in range(3):
             asyncio.run(c._asu_probe_once())
     probed = [call.args[0] for call in fake_get.await_args_list]
     assert sorted(probed) == sorted(hosts)
+    assert notify.call_count == 3
 
 
 def test_async_update_data_emits_asu_from_cache_when_no_probe_ran():

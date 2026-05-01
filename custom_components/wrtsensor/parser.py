@@ -446,7 +446,13 @@ _OWUT_AVAILABLE_RE = re.compile(
 
 
 def _normalise_owut_version(raw: str) -> str | None:
-    """Return a short normalised version like '24.10.1' (revision dropped)."""
+    """Return a normalised version like '24.10.1 r28597'.
+
+    The build hash suffix (``-6df6e6c8a4``) is dropped so two builds of the same
+    revision compare equal, but the OpenWrt revision number is **kept** so
+    same-release revision upgrades (24.10.1 r28597 → r28600) flip the entity
+    state instead of silently going unnoticed.
+    """
     if not raw:
         return None
     m = _OWUT_VERSION_RE.search(raw)
@@ -455,7 +461,11 @@ def _normalise_owut_version(raw: str) -> str | None:
     parts = [m.group(1), m.group(2)]
     if m.group(3):
         parts.append(m.group(3))
-    return ".".join(parts)
+    base = ".".join(parts)
+    revision = m.group(4)
+    if revision:
+        return f"{base} r{revision}"
+    return base
 
 
 def _parse_owut_version_tuple(raw: str) -> tuple[int, int, int, int] | None:

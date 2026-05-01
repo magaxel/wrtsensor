@@ -1346,10 +1346,15 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """One iteration of the probe loop.
 
         Picks the first host whose cache is older than ``_asu_interval_s``,
-        probes it, updates ``_asu_cache``, and pushes the fresh ASU block into
-        ``coordinator.data`` via ``async_set_updated_data`` so update entities
-        see it without waiting for the next normal scan tick. Returns True
+        probes it, updates ``_asu_cache``, and notifies entities. Returns True
         when work was done, False when no host was due.
+
+        The fresh ASU block is grafted directly onto ``self.data['asu']`` and
+        ``async_update_listeners()`` is called. Crucially, this does **not**
+        invoke ``async_set_updated_data``: that helper resets the main 60 s
+        polling timer and flips ``last_update_success`` back to True, which
+        would both delay regular network scans and mask gateway-scan failures
+        for every other ``CoordinatorEntity`` in the integration.
         """
         hosts = self._asu_hosts()
         if not hosts:
@@ -1360,11 +1365,13 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if now - entry.get("ts", 0) >= self._asu_interval_s:
                 info = await self._get_asu_info(host)
                 self._asu_cache[host] = {"info": info, "ts": time.time()}
-                new_data = {
-                    **(self.data or {}),
-                    "asu": {h: e["info"] for h, e in self._asu_cache.items()},
-                }
-                self.async_set_updated_data(new_data)
+                asu_block = {h: e["info"] for h, e in self._asu_cache.items()}
+                if isinstance(self.data, dict):
+                    self.data["asu"] = asu_block
+                # If self.data is None (cold start before the first scan),
+                # entities are unavailable anyway; the next scan tick will
+                # populate self.data and pick up the cache via _async_update_data.
+                self.async_update_listeners()
                 return True
         return False
 

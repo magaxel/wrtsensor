@@ -675,8 +675,8 @@ class TestParseASUOutput:
     def test_up_to_date_sets_latest_equal_to_installed(self):
         info = parse_asu_output(_asu_fixture("up_to_date.txt"))
         assert info["tool"] == "owut"
-        assert info["installed_version"] == "24.10.1"
-        assert info["latest_version"] == "24.10.1"
+        assert info["installed_version"] == "24.10.1 r28597"
+        assert info["latest_version"] == "24.10.1 r28597"
         assert info["error"] is None
         assert "no changes" in (info["summary"] or "").lower()
         assert info["installed_version_raw"].startswith("OpenWrt 24.10.1")
@@ -684,16 +684,16 @@ class TestParseASUOutput:
     def test_safe_upgrade_extracts_target_version(self):
         info = parse_asu_output(_asu_fixture("safe_upgrade.txt"))
         assert info["tool"] == "owut"
-        assert info["installed_version"] == "24.10.1"
-        assert info["latest_version"] == "24.10.2"
+        assert info["installed_version"] == "24.10.1 r28597"
+        assert info["latest_version"] == "24.10.2 r28739"
         assert info["error"] is None
         assert "safe to proceed" in (info["summary"] or "").lower()
 
     def test_downgrades_warn_carries_warning_summary(self):
         info = parse_asu_output(_asu_fixture("downgrades_warn.txt"))
         assert info["tool"] == "owut"
-        assert info["installed_version"] == "24.10.2"
-        assert info["latest_version"] == "24.10.1"
+        assert info["installed_version"] == "24.10.2 r28739"
+        assert info["latest_version"] == "24.10.1 r28597"
         assert info["error"] is None
         assert "downgrade" in (info["summary"] or "").lower()
 
@@ -701,8 +701,25 @@ class TestParseASUOutput:
         info = parse_asu_output(_asu_fixture("server_error.txt"))
         assert info["tool"] == "owut"
         # Up-to-date latest so the entity does not flap on a transient ASU 5xx.
-        assert info["latest_version"] == info["installed_version"] == "24.10.1"
+        assert info["latest_version"] == info["installed_version"] == "24.10.1 r28597"
         assert info["error"] and "checks reveal errors" in info["error"].lower()
+
+    def test_revision_only_upgrade_surfaces_as_different_version(self):
+        """Same release, newer rNNN: parser must keep them distinct."""
+        sections = {
+            "ASU_TOOL": ["owut"],
+            "ASU_VERSION": ["OpenWrt 24.10.1 r28597-aaaa"],
+            "ASU_OUTPUT": [
+                "Running: OpenWrt 24.10.1 r28597-aaaa",
+                "ASU build OpenWrt 24.10.1 r28600-bbbb",
+                "It is safe to proceed with an upgrade",
+                "exit=0",
+            ],
+        }
+        info = parse_asu_output(sections)
+        assert info["installed_version"] == "24.10.1 r28597"
+        assert info["latest_version"] == "24.10.1 r28600"
+        assert asu_version_is_newer(info["latest_version"], info["installed_version"])
 
     def test_wan_failure_returns_owut_with_error_and_no_versions(self):
         info = parse_asu_output(_asu_fixture("wan_failure.txt"))

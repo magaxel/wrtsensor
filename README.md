@@ -196,7 +196,7 @@ When enabled, a background task per HA instance probes one host at a time on a s
 
 Each entity exposes:
 
-- `installed_version` and `latest_version` — short OpenWrt version strings (e.g. `24.10.1`). Build hashes are normalised away so the entity does not flap on rebuilds of the same release.
+- `installed_version` and `latest_version` — normalised OpenWrt version strings including revision (e.g. `24.10.1 r28597`). The build hash suffix (`-6df6e6c8a4`) is dropped so two builds of the same revision compare equal, but the revision number is kept so same-release revision upgrades surface as available.
 - `release_url` and the `luci_url` attribute — both point at `http://<host>/cgi-bin/luci/admin/system/attendedsysupgrade/overview` on that device. Click the link in the entity's More Info dialog to perform the actual upgrade through LuCI; LuCI auto-redirects through its login page if you are not authenticated.
 - `release_summary` — the headline status from `owut`, e.g. `It is safe to proceed with an upgrade` or `no changes, upgrade not necessary`.
 - Attributes: `tool` (`owut` / `none` / `unknown`), `error` (set when owut is missing or the ASU server returned errors), `installed_version_raw` (the full `OpenWrt 24.10.1 r28597-...` string).

@@ -109,11 +109,11 @@ class _FakeCoordinator:
         self._enable_asu = enable_asu
 
 
-def _ok_info(installed: str = "24.10.1", latest: str | None = None) -> dict:
+def _ok_info(installed: str = "24.10.1 r28597", latest: str | None = None) -> dict:
     return {
         "tool": "owut",
         "installed_version": installed,
-        "installed_version_raw": f"OpenWrt {installed} r28597-aaaa",
+        "installed_version_raw": f"OpenWrt {installed}-aaaa",
         "latest_version": latest if latest is not None else installed,
         "summary": "no changes, upgrade not necessary",
         "error": None,
@@ -149,8 +149,8 @@ def test_available_for_owut_with_no_error():
     coord = _FakeCoordinator(asu={"192.0.2.22": _ok_info()})
     e = WrtsensorHostUpdate(coord, _FakeEntry(), "192.0.2.22")
     assert e.available is True
-    assert e.installed_version == "24.10.1"
-    assert e.latest_version == "24.10.1"
+    assert e.installed_version == "24.10.1 r28597"
+    assert e.latest_version == "24.10.1 r28597"
 
 
 def test_unavailable_when_tool_missing():
@@ -196,6 +196,9 @@ def test_version_is_newer_uses_normalised_tuple():
     )
     assert e.version_is_newer("24.10.2", "24.10.1") is True
     assert e.version_is_newer("24.10.0", "24.10.1") is False
+    # Same release, newer revision must surface as an upgrade.
+    assert e.version_is_newer("24.10.1 r28600", "24.10.1 r28597") is True
+    assert e.version_is_newer("24.10.1 r28597", "24.10.1 r28600") is False
 
 
 # ── async_setup_entry: eager creation, opt-in gating ──────────────────────────
