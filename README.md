@@ -116,6 +116,9 @@ title: Network Map
 gateway_label: gw        # fallback label shown when gateway device is missing
 column_width: 200        # px between AP columns
 show_offline: false
+show_hostnames: true          # show device hostnames; false leaves only selected address rows
+show_ipv4: true               # show IPv4 address rows and public IPv4 beside the gateway
+show_ipv6: false              # show IPv6 address rows and public IPv6 beside the gateway
 show_wireguard_peers: false      # true = draw WireGuard peers above Internet
 show_offline_wireguard: true     # include offline WireGuard peers dimmed
 wireguard_entity: null           # optional sensor override if auto-detect is wrong
