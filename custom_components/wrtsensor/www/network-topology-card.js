@@ -227,6 +227,7 @@ class NetworkTopologyCard extends HTMLElement {
       show_hostnames: config.show_hostnames ?? true,
       show_ipv4: config.show_ipv4 ?? true,
       show_ipv6: config.show_ipv6 ?? false,
+      sort_wireless_by_signal: config.sort_wireless_by_signal ?? false,
       show_wireguard_peers: config.show_wireguard_peers ?? false,
       show_offline_wireguard: config.show_offline_wireguard ?? true,
       wireguard_entity: config.wireguard_entity ?? null,
@@ -282,6 +283,7 @@ class NetworkTopologyCard extends HTMLElement {
       this._config.show_hostnames ? 1 : 0,
       this._config.show_ipv4 ? 1 : 0,
       this._config.show_ipv6 ? 1 : 0,
+      this._config.sort_wireless_by_signal ? 1 : 0,
     ].join("|");
     if (cacheKey === this._lastUpdated) return;
     this._lastUpdated = cacheKey;
@@ -388,22 +390,33 @@ class NetworkTopologyCard extends HTMLElement {
       COL_WIDTH = this._config.column_width;
     const MAX_COL = 8;
 
-    const sortDevs = (arr) =>
-      [...arr].sort((a, b) => {
-        const na = (a.hostname || "").toLowerCase();
-        const nb = (b.hostname || "").toLowerCase();
-        if (!na && nb) return 1;
-        if (na && !nb) return -1;
-        return na.localeCompare(nb);
-      });
+    const cmpHostname = (a, b) => {
+      const na = (a.hostname || "").toLowerCase();
+      const nb = (b.hostname || "").toLowerCase();
+      if (!na && nb) return 1;
+      if (na && !nb) return -1;
+      return na.localeCompare(nb);
+    };
+    const cmpSignal = (a, b) => {
+      const sa = a.signal,
+        sb = b.signal;
+      if (sa == null && sb == null) return cmpHostname(a, b);
+      if (sa == null) return 1;
+      if (sb == null) return -1;
+      if (sa !== sb) return sb - sa;
+      return cmpHostname(a, b);
+    };
+    const cmpWireless = this._config.sort_wireless_by_signal ? cmpSignal : cmpHostname;
+    const sortWired = (arr) => [...arr].sort(cmpHostname);
+    const sortWireless = (arr) => [...arr].sort(cmpWireless);
 
     const columns = [];
-    const sortedWired = sortDevs(wiredDevices);
+    const sortedWired = sortWired(wiredDevices);
     for (let i = 0; i < sortedWired.length; i += MAX_COL)
       columns.push({ devices: sortedWired.slice(i, i + MAX_COL), ap: null });
-    for (const ap of aps) columns.push({ devices: sortDevs(byAp[ap.hostname]), ap });
+    for (const ap of aps) columns.push({ devices: sortWireless(byAp[ap.hostname]), ap });
     if (unknownApDevices.length > 0)
-      columns.push({ devices: sortDevs(unknownApDevices), ap: null });
+      columns.push({ devices: sortWireless(unknownApDevices), ap: null });
 
     // Dynamic width — each column gets a fixed minimum, no shrinking on mobile
     const W = Math.max(columns.length * COL_WIDTH + COL_PAD * 2, 600);
@@ -1105,6 +1118,7 @@ class NetworkTopologyCard extends HTMLElement {
       show_hostnames: true,
       show_ipv4: true,
       show_ipv6: false,
+      sort_wireless_by_signal: false,
     };
   }
 }
@@ -1191,6 +1205,10 @@ class NetworkTopologyCardEditor extends HTMLElement {
           <ha-checkbox id="show_ipv6"></ha-checkbox>
           <span>Show IPv6 addresses</span>
         </label>
+        <label class="cb-row">
+          <ha-checkbox id="sort_wireless_by_signal"></ha-checkbox>
+          <span>Sort wireless clients by signal (strongest first)</span>
+        </label>
         <div id="wg-section"></div>
       </div>`;
 
@@ -1246,6 +1264,12 @@ class NetworkTopologyCardEditor extends HTMLElement {
     ipv6Cb.checked = c.show_ipv6 ?? false;
     ipv6Cb.addEventListener("change", () => {
       this._fire({ ...this._config, show_ipv6: ipv6Cb.checked });
+    });
+
+    const sortSignalCb = this.shadowRoot.querySelector("#sort_wireless_by_signal");
+    sortSignalCb.checked = c.sort_wireless_by_signal ?? false;
+    sortSignalCb.addEventListener("change", () => {
+      this._fire({ ...this._config, sort_wireless_by_signal: sortSignalCb.checked });
     });
 
     const wgSection = this.shadowRoot.querySelector("#wg-section");

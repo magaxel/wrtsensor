@@ -119,6 +119,7 @@ show_offline: false
 show_hostnames: true          # show device hostnames; false leaves only selected address rows
 show_ipv4: true               # show IPv4 address rows and public IPv4 beside the gateway
 show_ipv6: false              # show IPv6 address rows and public IPv6 beside the gateway
+sort_wireless_by_signal: false   # true = order wireless clients by signal (strongest under the AP) instead of hostname
 show_wireguard_peers: false      # true = draw WireGuard peers above Internet
 show_offline_wireguard: true     # include offline WireGuard peers dimmed
 wireguard_entity: null           # optional sensor override if auto-detect is wrong
