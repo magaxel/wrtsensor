@@ -77,7 +77,7 @@ Prefer not to use HACS? See [docs/manual-install.md](docs/manual-install.md) for
 
 ### Changing gateway or APs
 
-Open the integration in **Settings → Devices & Services**, hit the triple-dot menu → **Reconfigure** to change gateway, APs, or SSH key path in place. Every host is re-probed; if authentication fails, the flow prompts for a password and re-provisions the key, same as initial setup. Removing a host prunes its CPU/RAM/Disk sensors automatically on the next reload. Turning off **Collect host metrics** in Options also removes those per-host metric sensors on reload. The public SSH key stays in `/etc/dropbear/authorized_keys` on the removed device — delete it manually there if you no longer trust the host.
+Open the integration in **Settings → Devices & Services**, hit the triple-dot menu → **Reconfigure** to change gateway, APs, or SSH key path in place. Every host is re-probed; if authentication fails, the flow prompts for a password and re-provisions the key, same as initial setup. Removing a host prunes its CPU/RAM/Disk sensors automatically on the next reload and stops carrying its old Wi-Fi associations into the topology map after the next scan. Turning off **Collect host metrics** in Options also removes those per-host metric sensors on reload. The public SSH key stays in `/etc/dropbear/authorized_keys` on the removed device — delete it manually there if you no longer trust the host.
 
 ## Card configuration
 
@@ -116,6 +116,9 @@ title: Network Map
 gateway_label: gw        # fallback label shown when gateway device is missing
 column_width: 200        # px between AP columns
 show_offline: false
+show_hostnames: true          # show device hostnames; false leaves only selected address rows
+show_ipv4: true               # show IPv4 address rows and public IPv4 beside the gateway
+show_ipv6: false              # show IPv6 address rows and public IPv6 beside the gateway
 show_wireguard_peers: false      # true = draw WireGuard peers above Internet
 show_offline_wireguard: true     # include offline WireGuard peers dimmed
 wireguard_entity: null           # optional sensor override if auto-detect is wrong

@@ -160,8 +160,10 @@ def build_devices(
     arp_hostnames: dict[str, str] | None = None,
     prev_state: dict[str, StateEntry] | None = None,
     rates: dict[str, dict[str, int | None]] | None = None,
+    active_ap_names: set[str] | None = None,
 ) -> list[Device]:
     ndp = dict(ndp or {})
+    active_ap_names = active_ap_names or set()
     if gw_mac and gw_ip:
         leases[gw_mac] = {"ip": gw_ip, "hostname": gw_hostname}
         if gw_ip6:
@@ -215,6 +217,11 @@ def build_devices(
             prev_state
             and mac in prev_state
             and (prev_state[mac].connection == "wifi" or prev_state[mac].ap)
+            and (
+                not active_ap_names
+                or not prev_state[mac].ap
+                or prev_state[mac].ap in active_ap_names
+            )
         ):
             p = prev_state[mac]
             d.connection = "wifi"
@@ -828,6 +835,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._wg_bw_state: dict[str, dict[str, Any]] = {}
         self._wan_event_state: dict[str, str] = {}
         self._prev_state: dict[str, StateEntry] = {}
+        self._ap_name_cache: dict[str, str] = {}
         self._host_models: dict[str, tuple[str, str]] = {}  # ip → (model, board_name)
         self._event_buffer: deque[dict[str, Any]] = deque(maxlen=self.EVENT_BUFFER_SIZE)
 
@@ -1790,6 +1798,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     continue
                 hostname, ip6, ap_arp_lines, ap_ndp_lines = result
                 name_map[host] = hostname or host
+                self._ap_name_cache[host] = name_map[host]
                 if ip6:
                     ap_ip6_map[host] = ip6
                 # Gateway-less mode: union per-AP neigh tables into master maps.
@@ -1842,6 +1851,16 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 ap_hoststats[ip] = hoststat
             if entries or hoststat:
                 alive_ap_ips.append(ip)
+
+        active_ap_names = {"Gateway"} if self._gateway_host else set()
+        for host in self._ap_hosts:
+            active_ap_names.add(host)
+            cached_name = self._ap_name_cache.get(host)
+            if cached_name:
+                active_ap_names.add(cached_name)
+            mapped_name = name_map.get(host)
+            if mapped_name:
+                active_ap_names.add(mapped_name)
 
         # Inject AP IPv6 into NDP
         for ap_host, ap_ip6 in ap_ip6_map.items():
@@ -1919,6 +1938,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             arp_hostnames=arp_hostnames,
             prev_state=self._prev_state,
             rates=device_rates,
+            active_ap_names=active_ap_names,
         )
 
         # Restore identity for devices that rotated their random MAC

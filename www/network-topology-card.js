@@ -55,6 +55,11 @@ const ICON_VPN = `
         fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
   <circle cx="10" cy="10" r="2" fill="currentColor"/>`;
 
+const ICON_GLOBE = `
+  <circle cx="10" cy="10" r="7.5" fill="none" stroke="currentColor" stroke-width="1.5"/>
+  <ellipse cx="10" cy="10" rx="3.2" ry="7.5" fill="none" stroke="currentColor" stroke-width="1.5"/>
+  <path d="M2.8 10h14.4M4.2 6.5h11.6M4.2 13.5h11.6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>`;
+
 // Hostname-based patterns — checked against "hostname vendor" combined hint
 const HOSTNAME_PATTERNS = [
   [/phone|mobile|iphone|android|pixel|galaxy|oneplus|xiaomi|huawei|cmf|sm-|redmi/, ICON_PHONE],
@@ -182,20 +187,21 @@ function _endpointHost(endpoint) {
 const SVG_STYLE = `
   <defs><style>
     .ntc-bg       { fill: var(--card-background-color, #1c1c1c); }
-    .ntc-inet     { fill: var(--primary-color, #009ac7); }
+    .ntc-inet     { fill: var(--blue-color, #1976d2); }
     .ntc-gw       { fill: var(--teal-color, #009688); }
     .ntc-ap       { fill: var(--indigo-color, #3f51b5); }
     .ntc-wire     { fill: var(--blue-grey-color, #607d8b); }
     .ntc-wg-peer  { fill: var(--red-color, #88171a); }
     .ntc-wg-icon  { color: #fff; }
     .ntc-icon     { color: #fff; }
+    .ntc-inet-icon { color: #fff; }
     .ntc-label    { fill: var(--primary-text-color, #e1e1e1); font-family: var(--ha-font-family-body, Roboto, sans-serif); }
     .ntc-sub      { fill: var(--secondary-text-color, #9b9b9b); font-family: var(--ha-font-family-body, Roboto, sans-serif); }
     .ntc-wan      { fill: var(--secondary-text-color, #9b9b9b); font-family: var(--ha-font-family-body, Roboto, sans-serif); }
     .ntc-link      { fill: none; stroke: rgba(var(--rgb-primary-text-color, 225,225,225), 0.18); stroke-width: 1.5; }
     .ntc-link-wifi { fill: none; stroke: rgba(var(--rgb-primary-text-color, 225,225,225), 0.18); stroke-width: 1.5; stroke-dasharray: 5 3; stroke-opacity: 0.65; }
-    .ntc-link-inet { fill: none; stroke: rgba(var(--rgb-primary-text-color, 225,225,225), 0.18); stroke-width: 1.5; stroke-opacity: 0.6; }
-    .ntc-link-wg    { fill: none; stroke: rgba(var(--rgb-primary-text-color, 225,225,225), 0.18); stroke-width: 1.4; stroke-dasharray: 4 3; stroke-opacity: 0.75; }
+    .ntc-link-inet { fill: none; stroke: rgba(var(--rgb-primary-text-color, 225,225,225), 0.38); stroke-width: 1.8; }
+    .ntc-link-wg    { fill: none; stroke: rgba(var(--rgb-primary-text-color, 225,225,225), 0.38); stroke-width: 1.8; stroke-dasharray: 5 3; }
     .ntc-link-wg-off{ stroke: var(--secondary-text-color, #888); stroke-opacity: 0.4; }
     .ntc-warn      { fill: var(--warning-color, #ffa600); font-family: var(--ha-font-family-body, Roboto, sans-serif); }
     .ntc-unknown   { opacity: 0.6; font-style: italic; }
@@ -218,6 +224,9 @@ class NetworkTopologyCard extends HTMLElement {
       gateway_label: config.gateway_label ?? config.gateway_hostname ?? "gw",
       column_width: config.column_width ?? config.col_width ?? 200,
       show_offline: config.show_offline ?? false,
+      show_hostnames: config.show_hostnames ?? true,
+      show_ipv4: config.show_ipv4 ?? true,
+      show_ipv6: config.show_ipv6 ?? false,
       show_wireguard_peers: config.show_wireguard_peers ?? false,
       show_offline_wireguard: config.show_offline_wireguard ?? true,
       wireguard_entity: config.wireguard_entity ?? null,
@@ -270,6 +279,9 @@ class NetworkTopologyCard extends HTMLElement {
       wgState?.last_updated ?? "",
       this._config.show_wireguard_peers ? 1 : 0,
       this._config.show_offline_wireguard ? 1 : 0,
+      this._config.show_hostnames ? 1 : 0,
+      this._config.show_ipv4 ? 1 : 0,
+      this._config.show_ipv6 ? 1 : 0,
     ].join("|");
     if (cacheKey === this._lastUpdated) return;
     this._lastUpdated = cacheKey;
@@ -313,6 +325,9 @@ class NetworkTopologyCard extends HTMLElement {
     const allDevices = attr.devices ?? [];
     const wanIp = attr.wan_ip ?? "";
     const wanIp6 = attr.wan_ip6 ?? "";
+    const showHostnames = this._config.show_hostnames;
+    const showIpv4 = this._config.show_ipv4;
+    const showIpv6 = this._config.show_ipv6;
     const gatewayMac = String(attr.gateway_mac ?? "").toLowerCase();
     const partial = attr.partial ?? false;
     const gatewayLabel = this._config.gateway_label;
@@ -461,13 +476,20 @@ class NetworkTopologyCard extends HTMLElement {
       return parts.join("\n");
     };
 
+    const nodeTextRows = (d, fallback = "") => {
+      const rows = [];
+      if (showHostnames) rows.push(d?.hostname || fallback || d?.mac || "");
+      if (showIpv4 && d?.ip) rows.push(d.ip);
+      if (showIpv6 && d?.ip6) rows.push(d.ip6);
+      return rows.filter(Boolean);
+    };
+
     const svgNode = (
       x,
       y,
       r,
       icon,
-      label,
-      sublabel,
+      textRows,
       nodeClass,
       opacity,
       title,
@@ -477,13 +499,13 @@ class NetworkTopologyCard extends HTMLElement {
       const circleFill = signalColor ? `style="fill:${signalColor}"` : `class="${nodeClass}"`;
       const labelClass = unknown ? "ntc-unknown ntc-label" : "ntc-label";
       const subClass = unknown ? "ntc-unknown ntc-sub" : "ntc-sub";
+      const rows = Array.isArray(textRows) ? textRows.filter(Boolean) : [textRows].filter(Boolean);
       return `
       <g opacity="${opacity}">
         <title>${_esc(title)}</title>
         <circle cx="${x}" cy="${y}" r="${r}" ${circleFill} stroke="var(--card-background-color, #1c1c1c)" stroke-width="2"/>
         <svg x="${x - 10}" y="${y - 10}" width="20" height="20" viewBox="0 0 20 20" class="ntc-icon" pointer-events="none">${icon}</svg>
-        <text x="${x + r + 6}" y="${y + 4}" class="${labelClass}" font-size="11" text-anchor="start">${_esc(_truncate(label, 20))}</text>
-        ${sublabel ? `<text x="${x + r + 6}" y="${y + 16}" class="${subClass}" font-size="9" text-anchor="start">${_esc(_truncate(sublabel, 22))}</text>` : ""}
+        ${rows.map((row, i) => `<text x="${x + r + 6}" y="${y + 4 + i * 12}" class="${i === 0 ? labelClass : subClass}" font-size="${i === 0 ? 11 : 9}" text-anchor="start">${_esc(_truncate(row, i === 0 ? 20 : 30))}</text>`).join("")}
       </g>`;
     };
 
@@ -506,6 +528,11 @@ class NetworkTopologyCard extends HTMLElement {
 
     const paths = [],
       nodes = [];
+    const publicIpRows = [
+      showIpv4 && wanIp ? { value: wanIp, size: 9 } : null,
+      showIpv6 && wanIp6 ? { value: wanIp6, size: 8, opacity: "0.75" } : null,
+    ].filter(Boolean);
+    const publicIpLabel = publicIpRows.length === 1 ? "Public IP" : "Public IPs";
 
     const inetTooltip =
       [wanIp ? `IPv4: ${wanIp}` : "", wanIp6 ? `IPv6: ${wanIp6}` : ""].filter(Boolean).join("\n") ||
@@ -513,15 +540,13 @@ class NetworkTopologyCard extends HTMLElement {
     nodes.push(`
       <g>
         <title>${_esc(inetTooltip)}</title>
-        <ellipse cx="${inetX}" cy="${inetY}" rx="44" ry="22" class="ntc-inet" opacity="0.9"/>
-        <text x="${inetX}" y="${inetY + 5}" text-anchor="middle" font-size="11" fill="#fff"
-              font-family="var(--ha-font-family-body, Roboto, sans-serif)" font-weight="500">Internet</text>
-        ${wanIp ? `<text x="${inetX + 50}" y="${inetY - 2}" text-anchor="start" font-size="9" class="ntc-wan">${_esc(wanIp)}</text>` : ""}
-        ${wanIp6 ? `<text x="${inetX + 50}" y="${inetY + 10}" text-anchor="start" font-size="8" class="ntc-wan" opacity="0.75">${_esc(wanIp6)}</text>` : ""}
+        <circle cx="${inetX}" cy="${inetY}" r="30" class="ntc-inet" opacity="0.95"
+                stroke="var(--card-background-color, #1c1c1c)" stroke-width="2"/>
+        <svg x="${inetX - 13}" y="${inetY - 13}" width="26" height="26" viewBox="0 0 20 20" class="ntc-inet-icon" pointer-events="none">${ICON_GLOBE}</svg>
       </g>`);
 
     if (wgEnabled && wgPeers.length) {
-      const inetTopY = inetY - 22;
+      const inetTopY = inetY - 30;
       for (let i = 0; i < wgPeers.length; i++) {
         const peer = wgPeers[i];
         const row = Math.floor(i / wgPerRow);
@@ -542,17 +567,21 @@ class NetworkTopologyCard extends HTMLElement {
       }
     }
 
-    paths.push(curve(inetX, inetY + 22, gwX, gwY - GW_R, "ntc-link-inet"));
+    paths.push(curve(inetX, inetY + 30, gwX, gwY - GW_R, "ntc-link-inet"));
 
     const gwOp = gateway ? (gateway.online !== false ? "1" : "0.4") : "1";
+    nodes.push(`
+      <g>
+        ${publicIpRows.length ? `<text x="${gwX - GW_R - 10}" y="${gwY + 4}" text-anchor="end" font-size="11" class="ntc-label">${publicIpLabel}</text>` : ""}
+        ${publicIpRows.map((row, i) => `<text x="${gwX - GW_R - 10}" y="${gwY + 16 + i * 12}" text-anchor="end" font-size="${row.size}" class="ntc-wan"${row.opacity ? ` opacity="${row.opacity}"` : ""}>${_esc(row.value)}</text>`).join("")}
+      </g>`);
     nodes.push(
       svgNode(
         gwX,
         gwY,
         GW_R,
         ICON_ROUTER,
-        gateway?.hostname ?? gatewayLabel,
-        gateway?.ip ?? "",
+        nodeTextRows(gateway, gatewayLabel),
         "ntc-gw",
         gwOp,
         gateway ? nodeTitle(gateway) : gatewayLabel,
@@ -575,17 +604,7 @@ class NetworkTopologyCard extends HTMLElement {
         const ap = col.ap;
         const apOp = ap.online !== false ? "1" : "0.4";
         nodes.push(
-          svgNode(
-            cx,
-            apRowY,
-            AP_R,
-            ICON_WIFI,
-            ap.hostname,
-            ap.ip ?? "",
-            "ntc-ap",
-            apOp,
-            nodeTitle(ap),
-          ),
+          svgNode(cx, apRowY, AP_R, ICON_WIFI, nodeTextRows(ap), "ntc-ap", apOp, nodeTitle(ap)),
         );
 
         for (let di = 0; di < col.devices.length; di++) {
@@ -593,25 +612,12 @@ class NetworkTopologyCard extends HTMLElement {
           const dy = devStartY + di * ROW_H;
           const sc = this._signalColor(d.signal);
           paths.push(line(cx, apRowY + AP_R, cx, dy - NODE_R, "ntc-link-wifi"));
-          const devSub = d.ip ?? "";
           const unknown = !d.hostname && !d.vendor;
           if (!this._iconCache[d.mac]) this._iconCache[d.mac] = _deviceIcon(d);
           const icon = this._iconCache[d.mac];
           const devOp = d.online !== false ? "1" : "0.4";
           nodes.push(
-            svgNode(
-              cx,
-              dy,
-              NODE_R,
-              icon,
-              d.hostname || d.mac,
-              devSub,
-              null,
-              devOp,
-              nodeTitle(d),
-              sc,
-              unknown,
-            ),
+            svgNode(cx, dy, NODE_R, icon, nodeTextRows(d), null, devOp, nodeTitle(d), sc, unknown),
           );
         }
       } else {
@@ -625,7 +631,6 @@ class NetworkTopologyCard extends HTMLElement {
           if (!this._iconCache[d.mac]) this._iconCache[d.mac] = _deviceIcon(d);
           const icon = this._iconCache[d.mac];
           const unknown = !d.hostname && !d.vendor;
-          const wiredSub = d.ip ?? "";
           const wireOp = d.online !== false ? "1" : "0.4";
           nodes.push(
             svgNode(
@@ -633,8 +638,7 @@ class NetworkTopologyCard extends HTMLElement {
               dy,
               NODE_R,
               icon,
-              d.hostname || d.mac,
-              wiredSub,
+              nodeTextRows(d),
               "ntc-wire",
               wireOp,
               nodeTitle(d),
@@ -1093,7 +1097,15 @@ class NetworkTopologyCard extends HTMLElement {
     return document.createElement("network-topology-card-editor");
   }
   static getStubConfig() {
-    return { entity: "", title: "Network Map", gateway_label: "gw", column_width: 200 };
+    return {
+      entity: "",
+      title: "Network Map",
+      gateway_label: "gw",
+      column_width: 200,
+      show_hostnames: true,
+      show_ipv4: true,
+      show_ipv6: false,
+    };
   }
 }
 
@@ -1167,6 +1179,18 @@ class NetworkTopologyCardEditor extends HTMLElement {
           <ha-checkbox id="show_offline"></ha-checkbox>
           <span>Show offline devices (dimmed)</span>
         </label>
+        <label class="cb-row">
+          <ha-checkbox id="show_hostnames"></ha-checkbox>
+          <span>Show hostnames</span>
+        </label>
+        <label class="cb-row">
+          <ha-checkbox id="show_ipv4"></ha-checkbox>
+          <span>Show IPv4 addresses</span>
+        </label>
+        <label class="cb-row">
+          <ha-checkbox id="show_ipv6"></ha-checkbox>
+          <span>Show IPv6 addresses</span>
+        </label>
         <div id="wg-section"></div>
       </div>`;
 
@@ -1204,6 +1228,24 @@ class NetworkTopologyCardEditor extends HTMLElement {
     offlineCb.checked = c.show_offline ?? false;
     offlineCb.addEventListener("change", () => {
       this._fire({ ...this._config, show_offline: offlineCb.checked });
+    });
+
+    const hostnamesCb = this.shadowRoot.querySelector("#show_hostnames");
+    hostnamesCb.checked = c.show_hostnames ?? true;
+    hostnamesCb.addEventListener("change", () => {
+      this._fire({ ...this._config, show_hostnames: hostnamesCb.checked });
+    });
+
+    const ipv4Cb = this.shadowRoot.querySelector("#show_ipv4");
+    ipv4Cb.checked = c.show_ipv4 ?? true;
+    ipv4Cb.addEventListener("change", () => {
+      this._fire({ ...this._config, show_ipv4: ipv4Cb.checked });
+    });
+
+    const ipv6Cb = this.shadowRoot.querySelector("#show_ipv6");
+    ipv6Cb.checked = c.show_ipv6 ?? false;
+    ipv6Cb.addEventListener("change", () => {
+      this._fire({ ...this._config, show_ipv6: ipv6Cb.checked });
     });
 
     const wgSection = this.shadowRoot.querySelector("#wg-section");
