@@ -12,8 +12,12 @@ from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 
 from .const import (
+    ASU_INTERVAL_MAX_S,
+    ASU_INTERVAL_MIN_S,
     CONF_AP_HOSTS,
+    CONF_ASU_INTERVAL_S,
     CONF_DISCONNECT_THRESHOLD,
+    CONF_ENABLE_ASU,
     CONF_ENABLE_DNS_STATS,
     CONF_ENABLE_HOST_METRICS,
     CONF_ENABLE_WIREGUARD,
@@ -24,7 +28,9 @@ from .const import (
     CONF_SSH_KEY_PATH,
     CONF_WAN_IFACE,
     CONF_WG_STALE_THRESHOLD,
+    DEFAULT_ASU_INTERVAL_S,
     DEFAULT_DISCONNECT_THRESHOLD,
+    DEFAULT_ENABLE_ASU,
     DEFAULT_ENABLE_DNS_STATS,
     DEFAULT_ENABLE_HOST_METRICS,
     DEFAULT_ENABLE_WIREGUARD,
@@ -504,6 +510,17 @@ class WrtsensorOptionsFlow(OptionsFlow):
                         CONF_WG_STALE_THRESHOLD, DEFAULT_WG_STALE_THRESHOLD
                     ),
                 ): vol.All(vol.Coerce(int), vol.Range(min=30, max=3600)),
+                vol.Optional(
+                    CONF_ENABLE_ASU,
+                    default=current.get(CONF_ENABLE_ASU, DEFAULT_ENABLE_ASU),
+                ): bool,
+                vol.Optional(
+                    CONF_ASU_INTERVAL_S,
+                    default=current.get(CONF_ASU_INTERVAL_S, DEFAULT_ASU_INTERVAL_S),
+                ): vol.All(
+                    vol.Coerce(int),
+                    vol.Range(min=ASU_INTERVAL_MIN_S, max=ASU_INTERVAL_MAX_S),
+                ),
             }
         )
         return self.async_show_form(

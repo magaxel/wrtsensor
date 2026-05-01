@@ -7,6 +7,7 @@ and delta-state handling differ (asyncssh + in-memory state instead of files).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections import deque
 import ipaddress
 import json
@@ -30,6 +31,8 @@ from .parser import (
     _is_random_mac,
     _valid_ipv4,
     parse_arp,
+    parse_asu_output,
+    parse_asu_sections,
     parse_board_model,
     parse_conntrack,
     parse_dns_stats,
@@ -41,13 +44,17 @@ from .parser import (
     parse_wifi_output,
 )
 from .const import (
+    ASU_PROBE_GAP_S,
+    ASU_PROBE_TIMEOUT_S,
     BW_MAX_AGE_S,
     BW_MAX_RATE_BPS,
     BW_MIN_ELAPSED_S,
     COLLECTOR_REMOTE_PATH,
     COLLECTOR_SCRIPT_NAME,
     CONF_AP_HOSTS,
+    CONF_ASU_INTERVAL_S,
     CONF_DISCONNECT_THRESHOLD,
+    CONF_ENABLE_ASU,
     CONF_ENABLE_DNS_STATS,
     CONF_ENABLE_HOST_METRICS,
     CONF_ENABLE_WIREGUARD,
@@ -57,8 +64,10 @@ from .const import (
     CONF_SSH_KEY_PATH,
     CONF_WAN_IFACE,
     CONF_WG_STALE_THRESHOLD,
+    DEFAULT_ASU_INTERVAL_S,
     DEFAULT_DHCP_LEASES,
     DEFAULT_DISCONNECT_THRESHOLD,
+    DEFAULT_ENABLE_ASU,
     DEFAULT_ENABLE_DNS_STATS,
     DEFAULT_ENABLE_HOST_METRICS,
     DEFAULT_ENABLE_WIREGUARD,
@@ -745,6 +754,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     EVENT_BUFFER_SIZE = 500
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        self._entry = entry
         data = {**entry.data, **entry.options}
         gateway_raw = data.get(CONF_GATEWAY_HOST, "") or ""
         self._gateway_endpoint: HostEndpoint | None = (
@@ -783,6 +793,13 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._wg_stale_threshold_s = int(
             data.get(CONF_WG_STALE_THRESHOLD, DEFAULT_WG_STALE_THRESHOLD)
         )
+        self._enable_asu = bool(data.get(CONF_ENABLE_ASU, DEFAULT_ENABLE_ASU))
+        self._asu_interval_s = int(
+            data.get(CONF_ASU_INTERVAL_S, DEFAULT_ASU_INTERVAL_S)
+        )
+        self._asu_cache: dict[str, dict[str, Any]] = {}  # host → {info, ts}
+        self._asu_task: asyncio.Task | None = None
+        self._asu_missing_tool_logged: set[str] = set()
 
         # State dir: /dev/shm on HA, /tmp/netscan locally
         state_dir = (
@@ -837,6 +854,20 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self._needs_oui_download:
             self.hass.async_create_task(self._download_oui_db())
         await self._deploy_collector()
+        if self._enable_asu:
+            self._asu_task = self._entry.async_create_background_task(
+                self.hass, self._asu_loop(), name="wrtsensor_asu_loop"
+            )
+
+    async def async_shutdown(self) -> None:
+        if self._asu_task and not self._asu_task.done():
+            self._asu_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._asu_task
+        self._asu_task = None
+        self._asu_cache.clear()
+        self._asu_missing_tool_logged.clear()
+        await super().async_shutdown()
 
     def _load_caches(self) -> None:
         self._vendor_cache = load_kv_cache(self._vendor_cache_path)
@@ -1263,6 +1294,106 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "interfaces": interfaces,
         }
 
+    # ── Attended Sysupgrade ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _build_asu_command() -> str:
+        """Detect owut and capture `owut --quiet check` output for parser.parse_asu_output."""
+        return (
+            "if command -v owut >/dev/null 2>&1; then "
+            "echo '---ASU_TOOL---'; echo owut; "
+            "echo '---ASU_VERSION---'; "
+            '. /etc/os-release 2>/dev/null; echo "$PRETTY_NAME"; '
+            "echo '---ASU_OUTPUT---'; "
+            'owut --quiet check 2>&1; echo "exit=$?"; '
+            "else "
+            "echo '---ASU_TOOL---'; echo none; "
+            "fi"
+        )
+
+    async def _get_asu_info(self, host: str) -> dict[str, Any]:
+        """Probe a host for ASU status. Always returns a populated dict."""
+        try:
+            out = await self._ssh_run(
+                host, self._build_asu_command(), timeout=ASU_PROBE_TIMEOUT_S
+            )
+        except (asyncssh.Error, OSError, asyncio.TimeoutError) as exc:
+            return {
+                "tool": "unknown",
+                "installed_version": None,
+                "installed_version_raw": None,
+                "latest_version": None,
+                "summary": None,
+                "error": f"SSH probe failed: {exc}",
+            }
+        sections = parse_asu_sections(out or "")
+        info = parse_asu_output(sections)
+        if info.get("tool") == "none" and host not in self._asu_missing_tool_logged:
+            _LOGGER.info(
+                "owut not installed on %s; install with `opkg update && opkg install owut` "
+                "to enable Attended Sysupgrade detection",
+                host,
+            )
+            self._asu_missing_tool_logged.add(host)
+        return info
+
+    def _asu_hosts(self) -> list[str]:
+        return ([self._gateway_host] if self._gateway_host else []) + list(
+            self._ap_hosts
+        )
+
+    async def _asu_probe_once(self) -> bool:
+        """One iteration of the probe loop.
+
+        Picks the first host whose cache is older than ``_asu_interval_s``,
+        probes it, updates ``_asu_cache``, and pushes the fresh ASU block into
+        ``coordinator.data`` via ``async_set_updated_data`` so update entities
+        see it without waiting for the next normal scan tick. Returns True
+        when work was done, False when no host was due.
+        """
+        hosts = self._asu_hosts()
+        if not hosts:
+            return False
+        now = time.time()
+        for host in hosts:
+            entry = self._asu_cache.get(host) or {}
+            if now - entry.get("ts", 0) >= self._asu_interval_s:
+                info = await self._get_asu_info(host)
+                self._asu_cache[host] = {"info": info, "ts": time.time()}
+                new_data = {
+                    **(self.data or {}),
+                    "asu": {h: e["info"] for h, e in self._asu_cache.items()},
+                }
+                self.async_set_updated_data(new_data)
+                return True
+        return False
+
+    def _asu_sleep_until_due(self) -> float:
+        hosts = self._asu_hosts()
+        if not hosts:
+            return self._asu_interval_s
+        now = time.time()
+        oldest = min(self._asu_cache.get(h, {}).get("ts", 0) for h in hosts)
+        return max(60, (oldest + self._asu_interval_s) - now)
+
+    async def _asu_loop(self) -> None:
+        """Background ASU probe loop.
+
+        Catches per-host failures inside ``_get_asu_info`` so the loop itself
+        only handles ``CancelledError`` (propagated naturally from awaits).
+        Uses ``_asu_probe_once`` so tests can drive a single iteration without
+        patching ``asyncio.sleep``.
+        """
+        if not self._asu_hosts():
+            return
+        await asyncio.sleep(5)  # let the first scan tick complete
+        while True:
+            did = await self._asu_probe_once()
+            if did:
+                await asyncio.sleep(ASU_PROBE_GAP_S)
+            else:
+                await asyncio.sleep(self._asu_sleep_until_due())
+
     async def _ping_stale(self, ips: list[str]) -> list[str]:
         safe = [ip for ip in ips if _valid_ipv4(ip)]
         if not safe:
@@ -1579,6 +1710,10 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     payload["dns_stats"] = None
                 if self._enable_wireguard:
                     payload["wireguard"] = None
+                if self._enable_asu:
+                    payload["asu"] = {
+                        host: entry["info"] for host, entry in self._asu_cache.items()
+                    }
                 return payload
             raise UpdateFailed("Gateway unreachable")
 
@@ -1911,4 +2046,8 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             result["dns_stats"] = dns_stats
         if self._enable_wireguard:
             result["wireguard"] = wireguard
+        if self._enable_asu:
+            result["asu"] = {
+                host: entry["info"] for host, entry in self._asu_cache.items()
+            }
         return result

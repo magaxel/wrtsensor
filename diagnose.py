@@ -1249,6 +1249,135 @@ def collect_wireguard(host: str, stale_threshold_s: int = 180) -> dict[str, Any]
     return {"interfaces": interfaces}
 
 
+# ── Attended Sysupgrade (owut) ────────────────────────────────────────────────
+
+_ASU_COMMAND = (
+    "if command -v owut >/dev/null 2>&1; then "
+    "echo '---ASU_TOOL---'; echo owut; "
+    "echo '---ASU_VERSION---'; "
+    '. /etc/os-release 2>/dev/null; echo "$PRETTY_NAME"; '
+    "echo '---ASU_OUTPUT---'; "
+    'owut --quiet check 2>&1; echo "exit=$?"; '
+    "else "
+    "echo '---ASU_TOOL---'; echo none; "
+    "fi"
+)
+_ASU_VERSION_RE = re.compile(
+    r"(?:OpenWrt\s+)?(\d+)\.(\d+)(?:\.(\d+))?(?:[\s\-_]+r(\d+))?"
+)
+_ASU_AVAILABLE_RE = re.compile(
+    r"(?:available|asu build|target|upgrade to)\s*[:=]?\s*"
+    r"(?:openwrt\s+)?(\d+\.\d+(?:\.\d+)?(?:[\s\-_]+r\d+)?)",
+    re.IGNORECASE,
+)
+
+
+def _normalise_asu_version(raw: str) -> str | None:
+    if not raw:
+        return None
+    m = _ASU_VERSION_RE.search(raw)
+    if not m:
+        return None
+    parts = [m.group(1), m.group(2)]
+    if m.group(3):
+        parts.append(m.group(3))
+    return ".".join(parts)
+
+
+def collect_asu(host: str) -> dict[str, Any]:
+    """Probe `host` for OpenWrt Attended Sysupgrade status. Always returns a dict."""
+    blank = {
+        "tool": "unknown",
+        "installed_version": None,
+        "installed_version_raw": None,
+        "latest_version": None,
+        "summary": None,
+        "error": None,
+    }
+    try:
+        out = ssh_run(host, _ASU_COMMAND, timeout=45)
+    except Exception as exc:  # noqa: BLE001
+        return {**blank, "error": f"SSH probe failed: {exc}"}
+
+    sections: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in (out or "").splitlines():
+        m = re.match(r"^---(ASU_[A-Z_]+)---$", line)
+        if m:
+            current = m.group(1)
+            sections[current] = []
+        elif current is not None:
+            sections[current].append(line)
+
+    tool_lines = sections.get("ASU_TOOL", [])
+    tool = (tool_lines[0].strip() if tool_lines else "").lower() or "unknown"
+    if tool == "none":
+        return {**blank, "tool": "none", "error": "owut not installed"}
+    if tool != "owut":
+        return {**blank, "tool": "unknown", "error": f"unknown ASU tool: {tool!r}"}
+
+    version_lines = sections.get("ASU_VERSION", [])
+    installed_raw = next((ln.strip() for ln in version_lines if ln.strip()), None)
+    installed_norm = _normalise_asu_version(installed_raw or "")
+
+    body = [ln for ln in sections.get("ASU_OUTPUT", []) if not ln.startswith("exit=")]
+    text_lower = "\n".join(body).lower()
+    summary = next((ln.strip() for ln in reversed(body) if ln.strip()), None)
+
+    if "no changes, upgrade not necessary" in text_lower:
+        return {
+            "tool": "owut",
+            "installed_version": installed_norm,
+            "installed_version_raw": installed_raw,
+            "latest_version": installed_norm,
+            "summary": summary,
+            "error": None,
+        }
+    if "checks reveal errors, do not upgrade" in text_lower:
+        err = next(
+            (ln.strip() for ln in reversed(body) if ln.strip()),
+            "ASU server reported errors",
+        )
+        return {
+            "tool": "owut",
+            "installed_version": installed_norm,
+            "installed_version_raw": installed_raw,
+            "latest_version": installed_norm,
+            "summary": summary,
+            "error": err,
+        }
+    if (
+        "it is safe to proceed with an upgrade" in text_lower
+        or "there are downgrades, upgrade carefully" in text_lower
+    ):
+        target_norm: str | None = None
+        for line in body:
+            m = _ASU_AVAILABLE_RE.search(line)
+            if m:
+                target_norm = _normalise_asu_version(m.group(1))
+                if target_norm:
+                    break
+        if not target_norm:
+            return {
+                **blank,
+                "tool": "owut",
+                "error": "owut output unrecognised: target version not found",
+            }
+        return {
+            "tool": "owut",
+            "installed_version": installed_norm,
+            "installed_version_raw": installed_raw,
+            "latest_version": target_norm,
+            "summary": summary,
+            "error": None,
+        }
+    return {
+        **blank,
+        "tool": "owut",
+        "error": summary or "owut returned unrecognised output",
+    }
+
+
 def compute_wg_rates(interfaces: list[dict[str, Any]]) -> None:
     """Annotate each peer with rx_Bps/tx_Bps using a persistent baseline file.
 
@@ -1978,18 +2107,23 @@ def main() -> None:
 
     raw_args = sys.argv[1:]
     enable_wireguard = bool(int(os.environ.get("WRTSENSOR_ENABLE_WIREGUARD", "0")))
+    enable_asu = bool(int(os.environ.get("WRTSENSOR_ENABLE_ASU", "0")))
     args: list[str] = []
     for a in raw_args:
         if a in ("--wireguard", "--wg"):
             enable_wireguard = True
         elif a == "--no-wireguard":
             enable_wireguard = False
+        elif a in ("--asu", "--update-check"):
+            enable_asu = True
+        elif a == "--no-asu":
+            enable_asu = False
         else:
             args.append(a)
 
     if not args:
         emit_error(
-            f"usage: {sys.argv[0]} [--wireguard] <gw_user@gw_ip> [ap_user@ap_ip] ..."
+            f"usage: {sys.argv[0]} [--wireguard] [--asu] <gw_user@gw_ip> [ap_user@ap_ip] ..."
         )
 
     gw_host = args[0]
@@ -2262,6 +2396,28 @@ def main() -> None:
                     "interfaces": wg_interfaces,
                 }
 
+    # Attended Sysupgrade (owut) — opt-in, mirrors the HACS integration.
+    asu: dict[str, dict[str, Any]] | None = None
+    if enable_asu:
+        asu = {}
+        asu_hosts = [gw_host, *ap_hosts]
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=max(1, len(asu_hosts))
+        ) as pool:
+            asu_futures = {pool.submit(collect_asu, h): h for h in asu_hosts}
+            for fut, h in asu_futures.items():
+                try:
+                    asu[h.split("@")[-1]] = fut.result(timeout=60)
+                except Exception as exc:  # noqa: BLE001
+                    asu[h.split("@")[-1]] = {
+                        "tool": "unknown",
+                        "installed_version": None,
+                        "installed_version_raw": None,
+                        "latest_version": None,
+                        "summary": None,
+                        "error": f"probe failed: {exc}",
+                    }
+
     # Output JSON for HA sensor
     output = {
         "device_count": sum(1 for d in devices if d.online),
@@ -2274,6 +2430,7 @@ def main() -> None:
         "host_stats": host_stats,
         "dns_stats": dns_stats,
         **({"wireguard": wireguard} if enable_wireguard else {}),
+        **({"asu": asu} if enable_asu else {}),
         "devices": [
             {
                 "mac": d.mac,

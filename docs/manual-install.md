@@ -102,6 +102,33 @@ type: custom:wireguard-card
 entity: sensor.wrtsensor_network_scanner
 ```
 
+## (Optional) Attended Sysupgrade detection
+
+Adds an `asu` block to the JSON with one entry per host: `tool`, `installed_version`, `latest_version`, `summary`, `error`. The HACS path turns this into one `update` entity per host; on the manual path you template it into whatever card you prefer.
+
+Requires `owut` on each OpenWrt 24.10+ host: `opkg update && opkg install owut`.
+
+1. Pass `--asu` to `diagnose.py` (or set `WRTSENSOR_ENABLE_ASU=1` in the environment). Each probe round-trips to `https://sysupgrade.openwrt.org` and takes 5–20 s per host; consider a longer `command_timeout` and a slower `scan_interval` if you enable this on the manual path.
+2. Add `asu` to the `json_attributes` allowlist in `command_line.yaml`.
+
+```yaml
+# command_line.yaml — add the flag and the allowlist entry
+command: >-
+  python3 /config/wrtsensor/diagnose.py
+  --asu
+  root@192.0.2.1
+  root@192.0.2.10
+json_attributes:
+  - devices
+  # ...existing entries...
+  - dns_stats
+  - asu            # add this line
+  - scan_duration
+  - partial
+```
+
+The LuCI Attended Sysupgrade page on each host is reachable at `http://<host>/cgi-bin/luci/admin/system/attendedsysupgrade/overview` — link to it from a Lovelace card to perform the actual upgrade.
+
 Security: `diagnose.py` and the HACS integration share the same secret-free command set — `wg show <iface> {public-key,listen-port,peers,endpoints,allowed-ips,latest-handshakes,transfer,persistent-keepalive}` plus an awk-filtered `uci -q show network` that only forwards `description`, `public_key`, `allowed_ips`, `endpoint_host`, `endpoint_port`. WireGuard private and preshared keys are never read. Per-peer rates (`rx_Bps` / `tx_Bps`) persist between runs in `.netscan_wg_bw_state.json` next to the existing bandwidth state.
 
 ## `command_line.yaml`

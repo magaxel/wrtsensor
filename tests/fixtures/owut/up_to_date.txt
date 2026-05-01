@@ -1,0 +1,9 @@
+---ASU_TOOL---
+owut
+---ASU_VERSION---
+OpenWrt 24.10.1 r28597-6df6e6c8a4
+---ASU_OUTPUT---
+Checking sysupgrade.openwrt.org for updates
+Running: OpenWrt 24.10.1 r28597-6df6e6c8a4
+There are no changes, upgrade not necessary
+exit=0

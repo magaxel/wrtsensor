@@ -53,6 +53,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _prune_orphaned_host_entities(hass, entry, coordinator)
     _remove_legacy_event_log_entity(hass, entry)
     _prune_wireguard_entities(hass, entry, coordinator)
+    _prune_asu_entities(hass, entry, coordinator)
 
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True
@@ -130,9 +131,14 @@ def _parse_host_metric_unique_id(
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    coordinator: WrtsensorCoordinator | None = hass.data.get(DOMAIN, {}).get(
+        entry.entry_id
+    )
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
-        hass.data[DOMAIN].pop(entry.entry_id)
+        if coordinator is not None:
+            await coordinator.async_shutdown()
+        hass.data[DOMAIN].pop(entry.entry_id, None)
     return unloaded
 
 
@@ -205,6 +211,29 @@ def _prune_wireguard_entities(
             "Pruning orphaned wrtsensor WG peer entity %s", reg_entry.entity_id
         )
         reg.async_remove(reg_entry.entity_id)
+
+
+def _prune_asu_entities(
+    hass: HomeAssistant, entry: ConfigEntry, coordinator: WrtsensorCoordinator
+) -> None:
+    """Remove update entities when the ASU option is disabled.
+
+    Matches by unique-id pattern (`<entry_id>_host_<name>_firmware`) so future
+    update.* entities introduced by other features are not accidentally swept.
+    """
+    if coordinator._enable_asu:
+        return
+    reg = er.async_get(hass)
+    prefix = f"{entry.entry_id}_host_"
+    suffix = "_firmware"
+    for reg_entry in list(er.async_entries_for_config_entry(reg, entry.entry_id)):
+        uid = reg_entry.unique_id
+        if uid.startswith(prefix) and uid.endswith(suffix):
+            _LOGGER.info(
+                "Removing wrtsensor update entity %s (option disabled)",
+                reg_entry.entity_id,
+            )
+            reg.async_remove(reg_entry.entity_id)
 
 
 def _remove_legacy_event_log_entity(hass: HomeAssistant, entry: ConfigEntry) -> None:

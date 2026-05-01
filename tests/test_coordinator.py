@@ -1009,3 +1009,167 @@ def test_wg_compute_rates_drops_baseline_for_disappeared_peer():
     assert "abc" in c._wg_bw_state
     c._compute_wg_rates([{"host": "h", "name": "wg0", "peers": []}])
     assert "abc" not in c._wg_bw_state
+
+
+# ── Attended Sysupgrade background loop ───────────────────────────────────────
+
+
+def _make_asu_coordinator(
+    *, ap_hosts: str = "192.0.2.10,192.0.2.11"
+) -> WrtsensorCoordinator:
+    c = _make_coordinator(ap_hosts=ap_hosts)
+    c._enable_asu = True
+    c._asu_interval_s = 21600
+    return c
+
+
+def _ok_info(installed: str = "24.10.1") -> dict:
+    return {
+        "tool": "owut",
+        "installed_version": installed,
+        "installed_version_raw": f"OpenWrt {installed} r28597-aaaa",
+        "latest_version": installed,
+        "summary": "no changes, upgrade not necessary",
+        "error": None,
+    }
+
+
+def test_asu_probe_once_no_op_when_all_fresh():
+    c = _make_asu_coordinator()
+    now = 1000.0
+    for h in c._asu_hosts():
+        c._asu_cache[h] = {"info": _ok_info(), "ts": now}
+    fake_get = AsyncMock(return_value=_ok_info())
+    set_data = AsyncMock()
+    with (
+        patch("time.time", return_value=now),
+        patch.object(c, "_get_asu_info", fake_get),
+        patch.object(c, "async_set_updated_data", set_data),
+    ):
+        did = asyncio.run(c._asu_probe_once())
+    assert did is False
+    assert fake_get.await_count == 0
+    assert set_data.await_count == 0
+
+
+def test_asu_probe_once_picks_first_due_host_and_emits():
+    c = _make_asu_coordinator()
+    now = 1_000_000.0
+    # First host stale, others fresh.
+    hosts = c._asu_hosts()
+    c._asu_cache[hosts[0]] = {"info": _ok_info(), "ts": now - 99_999}
+    c._asu_cache[hosts[1]] = {"info": _ok_info(), "ts": now}
+    c._asu_cache[hosts[2]] = {"info": _ok_info(), "ts": now}
+
+    new_info = _ok_info("24.10.2")
+    fake_get = AsyncMock(return_value=new_info)
+    captured: list[dict] = []
+    set_data = lambda data: captured.append(data)  # noqa: E731
+
+    with (
+        patch("time.time", return_value=now),
+        patch.object(c, "_get_asu_info", fake_get),
+        patch.object(c, "async_set_updated_data", side_effect=set_data),
+    ):
+        did = asyncio.run(c._asu_probe_once())
+
+    assert did is True
+    fake_get.assert_awaited_once_with(hosts[0])
+    assert c._asu_cache[hosts[0]]["info"] == new_info
+    assert captured and "asu" in captured[0]
+    assert captured[0]["asu"][hosts[0]]["latest_version"] == "24.10.2"
+
+
+def test_asu_probe_once_advances_one_host_per_call():
+    c = _make_asu_coordinator()
+    now = 1_000_000.0
+    hosts = c._asu_hosts()
+    # All due.
+    fake_get = AsyncMock(return_value=_ok_info())
+    # async_set_updated_data is a sync method on the real coordinator; use a
+    # plain MagicMock so the mock call returns a regular value, not a coroutine.
+    from unittest.mock import MagicMock
+
+    set_data = MagicMock()
+    times = iter([now, now + 1, now + 2, now + 3, now + 4, now + 5])
+
+    def _t():
+        return next(times)
+
+    with (
+        patch("time.time", side_effect=_t),
+        patch.object(c, "_get_asu_info", fake_get),
+        patch.object(c, "async_set_updated_data", set_data),
+    ):
+        # Three hosts, three iterations: each picks a different host.
+        for _ in range(3):
+            asyncio.run(c._asu_probe_once())
+    probed = [call.args[0] for call in fake_get.await_args_list]
+    assert sorted(probed) == sorted(hosts)
+
+
+def test_async_update_data_emits_asu_from_cache_when_no_probe_ran():
+    """Hot path must always re-emit data['asu'] from cache when enabled."""
+    c = _make_asu_coordinator()
+    c._asu_cache["192.0.2.10"] = {"info": _ok_info(), "ts": 1.0}
+    c._prev_state = {
+        "11:22:33:44:55:66": StateEntry(mac="11:22:33:44:55:66", online=True),
+    }
+    with patch.object(c, "_collect_gateway", new=AsyncMock(return_value={})):
+        result = asyncio.run(c._async_update_data())
+    assert "asu" in result
+    assert result["asu"] == {"192.0.2.10": _ok_info()}
+
+
+def test_async_update_data_omits_asu_when_disabled():
+    c = _make_coordinator()
+    assert c._enable_asu is False
+    c._prev_state = {
+        "11:22:33:44:55:66": StateEntry(mac="11:22:33:44:55:66", online=True),
+    }
+    with patch.object(c, "_collect_gateway", new=AsyncMock(return_value={})):
+        result = asyncio.run(c._async_update_data())
+    assert "asu" not in result
+
+
+def test_async_shutdown_cancels_task_idempotently():
+    c = _make_asu_coordinator()
+
+    async def _run():
+        async def _never():
+            await asyncio.sleep(60)
+
+        c._asu_task = asyncio.create_task(_never())
+        # Yield once so the task is actually scheduled before shutdown cancels it.
+        await asyncio.sleep(0)
+        await c.async_shutdown()
+        # Second call is a no-op: task already None.
+        await c.async_shutdown()
+
+    asyncio.run(_run())
+    assert c._asu_task is None
+    assert c._asu_cache == {}
+    assert c._asu_missing_tool_logged == set()
+
+
+def test_get_asu_info_logs_owut_missing_once_per_host():
+    c = _make_asu_coordinator()
+    fake_run = AsyncMock(return_value="---ASU_TOOL---\nnone\n")
+    with patch.object(c, "_ssh_run", fake_run):
+        info1 = asyncio.run(c._get_asu_info("192.0.2.10"))
+        info2 = asyncio.run(c._get_asu_info("192.0.2.10"))
+    assert info1["tool"] == "none"
+    assert info2["tool"] == "none"
+    assert "192.0.2.10" in c._asu_missing_tool_logged
+    # Probe should run twice; logging dedup is internal to the set.
+    assert fake_run.await_count == 2
+
+
+def test_get_asu_info_swallows_ssh_errors():
+    c = _make_asu_coordinator()
+    fake_run = AsyncMock(side_effect=OSError("connection refused"))
+    with patch.object(c, "_ssh_run", fake_run):
+        info = asyncio.run(c._get_asu_info("192.0.2.10"))
+    assert info["tool"] == "unknown"
+    assert "connection refused" in (info["error"] or "")
+    assert info["installed_version"] is None

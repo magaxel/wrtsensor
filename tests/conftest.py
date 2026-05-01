@@ -94,10 +94,16 @@ _uc = sys.modules["homeassistant.helpers.update_coordinator"]
 
 class _DataUpdateCoordinator:
     def __init__(self, *a, **kw):
-        pass
+        self.data = None
 
     def __class_getitem__(cls, item):
         return cls
+
+    def async_set_updated_data(self, data):  # pragma: no cover - test stub
+        self.data = data
+
+    async def async_shutdown(self):  # pragma: no cover - test stub
+        return None
 
 
 class _UpdateFailed(Exception):

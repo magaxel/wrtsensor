@@ -1,0 +1,8 @@
+---ASU_TOOL---
+owut
+---ASU_VERSION---
+OpenWrt 24.10.1 r28597-6df6e6c8a4
+---ASU_OUTPUT---
+Checking sysupgrade.openwrt.org for updates
+ERROR: could not resolve sysupgrade.openwrt.org (DNS failure)
+exit=1

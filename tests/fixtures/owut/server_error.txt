@@ -1,0 +1,10 @@
+---ASU_TOOL---
+owut
+---ASU_VERSION---
+OpenWrt 24.10.1 r28597-6df6e6c8a4
+---ASU_OUTPUT---
+Checking sysupgrade.openwrt.org for updates
+Running: OpenWrt 24.10.1 r28597-6df6e6c8a4
+ERROR: ASU server returned 502 Bad Gateway
+Checks reveal errors, do not upgrade
+exit=1

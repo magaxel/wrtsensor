@@ -15,6 +15,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import WrtsensorCoordinator
+from .host_device import host_device_info
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -279,16 +280,7 @@ class _WrtsensorHostBase(_WrtsensorBase):
 
     @property
     def device_info(self) -> DeviceInfo:
-        host_data = (
-            (self.coordinator.data or {}).get("host_stats", {}).get(self._hostname, {})
-        )
-        model = host_data.get("model") or "OpenWrt"
-        return DeviceInfo(
-            identifiers={(DOMAIN, f"{self._entry.entry_id}_{self._hostname}")},
-            name=self._hostname,
-            manufacturer="OpenWrt",
-            model=model,
-        )
+        return host_device_info(self._entry, self.coordinator, self._hostname)
 
 
 class WrtsensorHostCPUSensor(_WrtsensorHostBase):

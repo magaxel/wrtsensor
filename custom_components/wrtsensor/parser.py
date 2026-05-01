@@ -425,6 +425,172 @@ def parse_wg_uci(lines: list[str]) -> dict[str, dict[str, str]]:
     return by_pubkey
 
 
+# ── Attended Sysupgrade (owut) ────────────────────────────────────────────────
+
+_OWUT_VERSION_RE = re.compile(
+    r"(?:OpenWrt\s+)?(\d+)\.(\d+)(?:\.(\d+))?(?:[\s\-_]+r(\d+))?"
+)
+# owut --quiet check final-line markers (lower-cased before match)
+_OWUT_UP_TO_DATE = "no changes, upgrade not necessary"
+_OWUT_SAFE = "it is safe to proceed with an upgrade"
+_OWUT_DOWNGRADE = "there are downgrades, upgrade carefully"
+_OWUT_ERRORS = "checks reveal errors, do not upgrade"
+# Lines from `owut check` that surface a candidate target version.
+# Real samples: "ASU build OpenWrt 24.10.2 r28739-..."
+#               "Available: 24.10.2"
+_OWUT_AVAILABLE_RE = re.compile(
+    r"(?:available|asu build|target|upgrade to)\s*[:=]?\s*"
+    r"(?:openwrt\s+)?(\d+\.\d+(?:\.\d+)?(?:[\s\-_]+r\d+)?)",
+    re.IGNORECASE,
+)
+
+
+def _normalise_owut_version(raw: str) -> str | None:
+    """Return a short normalised version like '24.10.1' (revision dropped)."""
+    if not raw:
+        return None
+    m = _OWUT_VERSION_RE.search(raw)
+    if not m:
+        return None
+    parts = [m.group(1), m.group(2)]
+    if m.group(3):
+        parts.append(m.group(3))
+    return ".".join(parts)
+
+
+def _parse_owut_version_tuple(raw: str) -> tuple[int, int, int, int] | None:
+    """Return (major, minor, patch, revision) or None if unparsable."""
+    if not raw:
+        return None
+    m = _OWUT_VERSION_RE.search(raw)
+    if not m:
+        return None
+    major = int(m.group(1))
+    minor = int(m.group(2))
+    patch = int(m.group(3) or 0)
+    revision = int(m.group(4) or 0)
+    return (major, minor, patch, revision)
+
+
+def asu_version_is_newer(latest: str, installed: str) -> bool:
+    """Tuple-aware comparison so OpenWrt build hashes don't trigger forever-update."""
+    lt = _parse_owut_version_tuple(latest or "")
+    it = _parse_owut_version_tuple(installed or "")
+    if lt is None or it is None:
+        # Fall back to string equality semantics: any difference is "newer".
+        return (latest or "") != (installed or "")
+    return lt > it
+
+
+def parse_asu_sections(out: str) -> dict[str, list[str]]:
+    """Split the SSH stdout from _build_asu_command into ``---ASU_*---`` sections."""
+    sections: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in out.splitlines():
+        m = re.match(r"^---(ASU_[A-Z_]+)---$", line)
+        if m:
+            current = m.group(1)
+            sections[current] = []
+        elif current is not None:
+            sections[current].append(line)
+    return sections
+
+
+def _asu_blank(tool: str = "owut", error: str | None = None) -> dict[str, Any]:
+    return {
+        "tool": tool,
+        "installed_version": None,
+        "installed_version_raw": None,
+        "latest_version": None,
+        "summary": None,
+        "error": error,
+    }
+
+
+def parse_asu_output(sections: dict[str, list[str]]) -> dict[str, Any]:
+    """Parse `owut --quiet check` output captured by _build_asu_command.
+
+    Returns a dict with the canonical shape used by the update entity:
+    ``tool``, ``installed_version`` (normalised), ``installed_version_raw``,
+    ``latest_version`` (normalised, equal to installed when up-to-date),
+    ``summary``, and ``error``.
+
+    All error paths populate ``error`` and leave at most one of the version
+    fields populated so the entity can decide availability deterministically.
+    """
+    tool_lines = sections.get("ASU_TOOL", [])
+    tool = (tool_lines[0].strip() if tool_lines else "").lower() or "unknown"
+    if tool == "none":
+        return _asu_blank(tool="none", error="owut not installed")
+    if tool != "owut":
+        return _asu_blank(tool="unknown", error=f"unknown ASU tool: {tool!r}")
+
+    version_lines = sections.get("ASU_VERSION", [])
+    installed_raw = next((ln.strip() for ln in version_lines if ln.strip()), None)
+    installed_norm = _normalise_owut_version(installed_raw or "")
+
+    output_lines = sections.get("ASU_OUTPUT", [])
+    body = [ln for ln in output_lines if not ln.startswith("exit=")]
+    text_lower = "\n".join(body).lower()
+
+    summary = next((ln.strip() for ln in reversed(body) if ln.strip()), None)
+
+    if _OWUT_UP_TO_DATE in text_lower:
+        return {
+            "tool": "owut",
+            "installed_version": installed_norm,
+            "installed_version_raw": installed_raw,
+            "latest_version": installed_norm,
+            "summary": summary,
+            "error": None,
+        }
+
+    if _OWUT_ERRORS in text_lower:
+        # ASU service / DNS / WAN failure — keep entity "up-to-date" rather
+        # than blink on transient failures, but expose the diagnostic.
+        err_line = next(
+            (ln.strip() for ln in reversed(body) if ln.strip()),
+            "ASU server reported errors",
+        )
+        return {
+            "tool": "owut",
+            "installed_version": installed_norm,
+            "installed_version_raw": installed_raw,
+            "latest_version": installed_norm,
+            "summary": summary,
+            "error": err_line,
+        }
+
+    if _OWUT_SAFE in text_lower or _OWUT_DOWNGRADE in text_lower:
+        target_norm: str | None = None
+        for line in body:
+            m = _OWUT_AVAILABLE_RE.search(line)
+            if m:
+                target_norm = _normalise_owut_version(m.group(1))
+                if target_norm:
+                    break
+        if not target_norm:
+            return _asu_blank(
+                tool="owut",
+                error="owut output unrecognised: target version not found",
+            )
+        return {
+            "tool": "owut",
+            "installed_version": installed_norm,
+            "installed_version_raw": installed_raw,
+            "latest_version": target_norm,
+            "summary": summary,
+            "error": None,
+        }
+
+    # Unknown shape — likely owut returned an error before the markers we
+    # know about. Carry the captured output as the error so users can debug.
+    return _asu_blank(
+        tool="owut",
+        error=summary or "owut returned unrecognised output",
+    )
+
+
 def parse_conntrack(lines: list[str]) -> dict[str, dict[str, int]]:
     result: dict[str, dict[str, int]] = {}
     for line in lines:

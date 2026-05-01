@@ -5,7 +5,7 @@ from datetime import timedelta
 DOMAIN = "wrtsensor"
 VERSION = "1.0.0"
 
-PLATFORMS = ["sensor", "binary_sensor", "device_tracker"]
+PLATFORMS = ["sensor", "binary_sensor", "device_tracker", "update"]
 
 SCAN_INTERVAL = timedelta(seconds=60)
 SSH_TIMEOUT = 20
@@ -51,6 +51,14 @@ CONF_ENABLE_WIREGUARD = "enable_wireguard"
 DEFAULT_ENABLE_WIREGUARD = False
 CONF_WG_STALE_THRESHOLD = "wg_stale_threshold_s"
 DEFAULT_WG_STALE_THRESHOLD = 180
+CONF_ENABLE_ASU = "enable_asu"
+DEFAULT_ENABLE_ASU = False
+CONF_ASU_INTERVAL_S = "asu_interval_s"
+DEFAULT_ASU_INTERVAL_S = 21600  # 6 hours
+ASU_INTERVAL_MIN_S = 3600
+ASU_INTERVAL_MAX_S = 86400
+ASU_PROBE_TIMEOUT_S = 45
+ASU_PROBE_GAP_S = 15
 
 # Static path served by HA http component
 STATIC_PATH_URL = "/wrtsensor_static"
