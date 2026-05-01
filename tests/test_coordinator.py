@@ -1034,6 +1034,13 @@ def _ok_info(installed: str = "24.10.1 r28597") -> dict:
     }
 
 
+def test_asu_command_uses_owut_check_and_openwrt_release():
+    command = WrtsensorCoordinator._build_asu_command()
+    assert "owut check" in command
+    assert "owut --quiet check" not in command
+    assert "OPENWRT_RELEASE" in command
+
+
 def test_asu_probe_once_no_op_when_all_fresh():
     c = _make_asu_coordinator()
     now = 1000.0

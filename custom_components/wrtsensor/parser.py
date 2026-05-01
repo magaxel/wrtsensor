@@ -430,7 +430,7 @@ def parse_wg_uci(lines: list[str]) -> dict[str, dict[str, str]]:
 _OWUT_VERSION_RE = re.compile(
     r"(?:OpenWrt\s+)?(\d+)\.(\d+)(?:\.(\d+))?(?:[\s\-_]+r(\d+))?"
 )
-# owut --quiet check final-line markers (lower-cased before match)
+# owut check final-line markers (lower-cased before match)
 _OWUT_UP_TO_DATE = "no changes, upgrade not necessary"
 _OWUT_SAFE = "it is safe to proceed with an upgrade"
 _OWUT_DOWNGRADE = "there are downgrades, upgrade carefully"
@@ -439,7 +439,7 @@ _OWUT_ERRORS = "checks reveal errors, do not upgrade"
 # Real samples: "ASU build OpenWrt 24.10.2 r28739-..."
 #               "Available: 24.10.2"
 _OWUT_AVAILABLE_RE = re.compile(
-    r"(?:available|asu build|target|upgrade to)\s*[:=]?\s*"
+    r"(?:available|asu build|target|upgrade to|version-to)\s*[:=]?\s*"
     r"(?:openwrt\s+)?(\d+\.\d+(?:\.\d+)?(?:[\s\-_]+r\d+)?)",
     re.IGNORECASE,
 )
@@ -518,7 +518,7 @@ def _asu_blank(tool: str = "owut", error: str | None = None) -> dict[str, Any]:
 
 
 def parse_asu_output(sections: dict[str, list[str]]) -> dict[str, Any]:
-    """Parse `owut --quiet check` output captured by _build_asu_command.
+    """Parse `owut check` output captured by _build_asu_command.
 
     Returns a dict with the canonical shape used by the update entity:
     ``tool``, ``installed_version`` (normalised), ``installed_version_raw``,

@@ -721,6 +721,15 @@ class TestParseASUOutput:
         assert info["latest_version"] == "24.10.1 r28600"
         assert asu_version_is_newer(info["latest_version"], info["installed_version"])
 
+    def test_current_owut_check_output_with_version_to(self):
+        info = parse_asu_output(_asu_fixture("current_25_12_up_to_date.txt"))
+        assert info["installed_version"] == "25.12.2 r32802"
+        assert info["latest_version"] == "25.12.2 r32802"
+        assert info["error"] is None
+        assert not asu_version_is_newer(
+            info["latest_version"], info["installed_version"]
+        )
+
     def test_wan_failure_returns_owut_with_error_and_no_versions(self):
         info = parse_asu_output(_asu_fixture("wan_failure.txt"))
         assert info["tool"] == "owut"

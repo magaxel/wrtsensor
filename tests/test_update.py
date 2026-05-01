@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+from enum import IntFlag
 import sys
 import types
 from pathlib import Path
@@ -32,8 +33,13 @@ class _UpdateDeviceClass:
     FIRMWARE = "firmware"
 
 
+class _UpdateEntityFeature(IntFlag):
+    INSTALL = 1
+
+
 _update_pkg.UpdateEntity = _UpdateEntity  # type: ignore[attr-defined]
 _update_pkg.UpdateDeviceClass = _UpdateDeviceClass  # type: ignore[attr-defined]
+_update_pkg.UpdateEntityFeature = _UpdateEntityFeature  # type: ignore[attr-defined]
 sys.modules["homeassistant.components"].update = _update_pkg  # type: ignore[attr-defined]
 
 # entity / entity_platform stubs (only what update.py imports)

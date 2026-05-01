@@ -35,7 +35,7 @@ Per scan (every 60 s) the integration produces a single JSON object with:
 - **WAN** — IPv4, IPv6, live RX/TX rate, cumulative byte totals.
 - **DNS cache** — dnsmasq cache hit/miss counts for 24h, 8h, 1h, and last-scan windows, per-window upstream query counts, per-upstream latency, and weighted average upstream latency.
 - **WireGuard** *(optional, off by default)* — per-peer endpoint, allowed IPs, last-handshake age, transfer counters, live throughput, and online state. Auto-detected on the gateway and each AP every scan via secret-free `wg show` subcommands; private and preshared keys are never read into HA.
-- **Firmware updates** *(optional, off by default)* — one HA `update` entity per OpenWrt host, backed by the device's `owut` tool (24.10+). Each entity reports the installed and latest available OpenWrt version; clicking the entity exposes a link to that host's LuCI Attended Sysupgrade page where you can apply the update. Probes `https://sysupgrade.openwrt.org` from each device every 6 h by default.
+- **Firmware updates** *(optional, off by default)* — one HA `update` entity per OpenWrt host, backed by the device's `owut` tool. Each entity reports the installed and latest available OpenWrt version; clicking the entity exposes a link to that host's LuCI Attended Sysupgrade page where you can apply the update. Probes `https://sysupgrade.openwrt.org` from each device every 6 h by default.
 - **Event log** — HACS integration keeps the most recent 500 events in memory only (cleared on HA restart/reload). The manual `command_line` install keeps its separate JSONL event file.
 
 All of this comes from a single 20 s SSH call to the gateway plus parallel SSH calls to each AP — no redundant shell sensors.
@@ -186,13 +186,17 @@ Security: wrtsensor never reads WireGuard private or preshared keys. Collection 
 
 One HA `update` entity per OpenWrt host (gateway + each AP), surfaced through HA's standard **Settings → Updates** dashboard and the built-in update tile — no extra Lovelace card needed. Off by default; turn on **Check for OpenWrt firmware updates** under **Settings → Devices & Services → wrtsensor → Configure**.
 
-Each host needs the `owut` tool from OpenWrt 24.10+:
+Each host needs the `owut` tool. It is optional on OpenWrt 24.10 and included by default on OpenWrt 25.12 images for devices with larger flash storage, but smaller devices may still need it installed manually:
 
 ```sh
+# OpenWrt 24.10
 opkg update && opkg install owut
+
+# OpenWrt 25.12 / main
+apk -U add owut
 ```
 
-When enabled, a background task per HA instance probes one host at a time on a slow rotation (default every 6 h, configurable from 1 h to 24 h via the **Firmware check interval** option). The probe runs `owut --quiet check` on the device, which round-trips to `https://sysupgrade.openwrt.org` and takes 5–20 s — it does not block the 60 s scan tick.
+When enabled, a background task per HA instance probes one host at a time on a slow rotation (default every 6 h, configurable from 1 h to 24 h via the **Firmware check interval** option). The probe runs `owut check` on the device, which round-trips to `https://sysupgrade.openwrt.org` and takes 5–20 s — it does not block the 60 s scan tick.
 
 Each entity exposes:
 

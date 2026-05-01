@@ -106,7 +106,7 @@ entity: sensor.wrtsensor_network_scanner
 
 Adds an `asu` block to the JSON with one entry per host: `tool`, `installed_version`, `latest_version`, `summary`, `error`. The HACS path turns this into one `update` entity per host; on the manual path you template it into whatever card you prefer.
 
-Requires `owut` on each OpenWrt 24.10+ host: `opkg update && opkg install owut`.
+Requires `owut` on each host. On OpenWrt 24.10 install it with `opkg update && opkg install owut`; on OpenWrt 25.12/main use `apk -U add owut` if it is not already included in the device image.
 
 1. Pass `--asu` to `diagnose.py` (or set `WRTSENSOR_ENABLE_ASU=1` in the environment). Each probe round-trips to `https://sysupgrade.openwrt.org` and takes 5–20 s per host; consider a longer `command_timeout` and a slower `scan_interval` if you enable this on the manual path.
 2. Add `asu` to the `json_attributes` allowlist in `command_line.yaml`.

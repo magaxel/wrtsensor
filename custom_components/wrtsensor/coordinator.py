@@ -1298,14 +1298,14 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @staticmethod
     def _build_asu_command() -> str:
-        """Detect owut and capture `owut --quiet check` output for parser.parse_asu_output."""
+        """Detect owut and capture `owut check` output for parser.parse_asu_output."""
         return (
             "if command -v owut >/dev/null 2>&1; then "
             "echo '---ASU_TOOL---'; echo owut; "
             "echo '---ASU_VERSION---'; "
-            '. /etc/os-release 2>/dev/null; echo "$PRETTY_NAME"; '
+            '. /etc/os-release 2>/dev/null; echo "${OPENWRT_RELEASE:-$PRETTY_NAME}"; '
             "echo '---ASU_OUTPUT---'; "
-            'owut --quiet check 2>&1; echo "exit=$?"; '
+            'owut check 2>&1; echo "exit=$?"; '
             "else "
             "echo '---ASU_TOOL---'; echo none; "
             "fi"
@@ -1330,8 +1330,9 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         info = parse_asu_output(sections)
         if info.get("tool") == "none" and host not in self._asu_missing_tool_logged:
             _LOGGER.info(
-                "owut not installed on %s; install with `opkg update && opkg install owut` "
-                "to enable Attended Sysupgrade detection",
+                "owut not installed on %s; install owut to enable Attended "
+                "Sysupgrade detection (OpenWrt 24.10: `opkg update && opkg "
+                "install owut`; OpenWrt 25.12/main: `apk -U add owut`)",
                 host,
             )
             self._asu_missing_tool_logged.add(host)

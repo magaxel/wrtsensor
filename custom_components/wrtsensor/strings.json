@@ -91,7 +91,7 @@
           "enable_host_metrics": "Collect CPU, RAM, and root storage usage for every configured OpenWrt host, then expose per-host sensors. Disable to skip those commands and remove the CPU/RAM/Disk entities on reload. Default: on.",
           "enable_wireguard": "Auto-detect WireGuard on the gateway and APs each scan, then expose per-peer device_trackers and a card with handshake age, transfer totals, and live rate. Hosts without `wg` installed are skipped silently. Private and preshared keys are never read into HA — only public keys, descriptions, endpoints, and counters. Default: off.",
           "wg_stale_threshold_s": "Peers whose last handshake is older than this go to not_home and grey out in the card. WireGuard handshakes every ~2 minutes when active. Default: 180.",
-          "enable_asu": "Add an Update entity per OpenWrt host that polls the OpenWrt Attended Sysupgrade service every few hours via the device's `owut` tool (24.10+; install with `opkg update && opkg install owut`). Each entity exposes a LuCI link to that host's Attended Sysupgrade page — click it to perform the actual upgrade. Default: off.",
+          "enable_asu": "Add an Update entity per OpenWrt host that polls the OpenWrt Attended Sysupgrade service every few hours via the device's `owut` tool. OpenWrt 25.12 images include owut by default on devices with larger flash storage; otherwise install it with `opkg update && opkg install owut` on 24.10 or `apk -U add owut` on 25.12/main. Each entity exposes a LuCI link to that host's Attended Sysupgrade page — click it to perform the actual upgrade. Default: off.",
           "asu_interval_s": "How often each host probes sysupgrade.openwrt.org. Min 1 h, max 24 h. Default: 21600 (6 h)."
         }
       }

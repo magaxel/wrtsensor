@@ -5,7 +5,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from homeassistant.components.update import UpdateDeviceClass, UpdateEntity
+from homeassistant.components.update import (
+    UpdateDeviceClass,
+    UpdateEntity,
+    UpdateEntityFeature,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
@@ -37,10 +41,10 @@ async def async_setup_entry(
 
 
 class WrtsensorHostUpdate(CoordinatorEntity[WrtsensorCoordinator], UpdateEntity):
-    """Per-host OpenWrt firmware update entity backed by `owut --quiet check`."""
+    """Per-host OpenWrt firmware update entity backed by `owut check`."""
 
     _attr_device_class = UpdateDeviceClass.FIRMWARE
-    _attr_supported_features = 0
+    _attr_supported_features = UpdateEntityFeature(0)
     _attr_has_entity_name = True
     _attr_translation_key = "firmware"
     _attr_name = "Firmware"

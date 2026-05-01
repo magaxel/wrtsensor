@@ -1255,9 +1255,9 @@ _ASU_COMMAND = (
     "if command -v owut >/dev/null 2>&1; then "
     "echo '---ASU_TOOL---'; echo owut; "
     "echo '---ASU_VERSION---'; "
-    '. /etc/os-release 2>/dev/null; echo "$PRETTY_NAME"; '
+    '. /etc/os-release 2>/dev/null; echo "${OPENWRT_RELEASE:-$PRETTY_NAME}"; '
     "echo '---ASU_OUTPUT---'; "
-    'owut --quiet check 2>&1; echo "exit=$?"; '
+    'owut check 2>&1; echo "exit=$?"; '
     "else "
     "echo '---ASU_TOOL---'; echo none; "
     "fi"
@@ -1266,7 +1266,7 @@ _ASU_VERSION_RE = re.compile(
     r"(?:OpenWrt\s+)?(\d+)\.(\d+)(?:\.(\d+))?(?:[\s\-_]+r(\d+))?"
 )
 _ASU_AVAILABLE_RE = re.compile(
-    r"(?:available|asu build|target|upgrade to)\s*[:=]?\s*"
+    r"(?:available|asu build|target|upgrade to|version-to)\s*[:=]?\s*"
     r"(?:openwrt\s+)?(\d+\.\d+(?:\.\d+)?(?:[\s\-_]+r\d+)?)",
     re.IGNORECASE,
 )
