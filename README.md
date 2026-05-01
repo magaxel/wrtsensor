@@ -45,7 +45,7 @@ All of this comes from a single 20 s SSH call to the gateway plus parallel SSH c
 - **Home Assistant** — Python 3.11+ (built in on HA OS).
 - **HACS** — install [HACS](https://hacs.xyz/) first; it's how wrtsensor is distributed.
 - **OpenWrt** — tested on 25.12.2. Older releases may work but are untested. Stock packages are enough: `busybox`, `ip`, `iwinfo`, `dnsmasq`, `logread`.
-- **Network** — SSH from HA host to every OpenWrt box (gateway + APs). Port 22 is used by default; add the port inline for custom ports, e.g. `172.16.42.254:2222` or `[2001:db8::1]:2222`.
+- **Network** — SSH from HA host to every OpenWrt box (gateway + APs). Port 22 is used by default; add the port inline for custom ports, e.g. `192.0.2.1:2222` or `[2001:db8::1]:2222`.
 
 ## Installation
 
@@ -123,7 +123,7 @@ wireguard_entity: null           # optional sensor override if auto-detect is wr
 
 WireGuard peers are auto-detected from a sibling `sensor.*_wireguard` entity on the same wrtsensor device. If auto-detect cannot choose a sensor, set `wireguard_entity` explicitly. The editor shows the WireGuard controls when a sensor is discoverable or an override is configured; if the sensor reports `available: false`, peers appear after the next successful WireGuard scan.
 
-Breaking change in v2.x: `gateway_hostname` was renamed to `gateway_label`, `col_width` was renamed to `column_width`, and `show_bandwidth` was removed (per-device throughput is still visible in the node tooltip). The separate SSH port option was also removed; use inline host ports instead, e.g. `172.16.42.254:2222` or `[2001:db8::1]:2222`.
+Breaking change in v2.x: `gateway_hostname` was renamed to `gateway_label`, `col_width` was renamed to `column_width`, and `show_bandwidth` was removed (per-device throughput is still visible in the node tooltip). The separate SSH port option was also removed; use inline host ports instead, e.g. `192.0.2.1:2222` or `[2001:db8::1]:2222`.
 
 ### `network-events-card`
 
@@ -320,7 +320,7 @@ logbook:
 
 **Integration shows "Failed to connect"** — SSH key path is wrong or unreadable by HA, or the key isn't in OpenWrt's `authorized_keys`. The config flow offers a password-provisioning step; otherwise set the key up manually (see [manual install — SSH key](docs/manual-install.md#1-ssh-key--ha--openwrt)).
 
-**All APs in log as "unreachable"** — APs must be reachable from HA over SSH with the same key as the gateway. Port 22 is used by default; for custom ports, enter the AP as `172.16.42.22:2222` or `[2001:db8::22]:2222`. Check with `ssh -i /config/ssh/id_ed25519 -p <port> root@<ap-ip> uptime` on the HA host.
+**All APs in log as "unreachable"** — APs must be reachable from HA over SSH with the same key as the gateway. Port 22 is used by default; for custom ports, enter the AP as `192.0.2.10:2222` or `[2001:db8::10]:2222`. Check with `ssh -i /config/ssh/id_ed25519 -p <port> root@<ap-ip> uptime` on the HA host.
 
 **Card is missing from the picker or shows "Custom element doesn't exist"** — the card's JavaScript resource is not loaded by Lovelace. For HACS installs, wrtsensor serves card files under `/wrtsensor_static/`, but each card URL still needs to be present in **Settings → Dashboards → Resources**. If WireGuard is enabled, add `/wrtsensor_static/wireguard-card.js?v=1.1.0` as a JavaScript Module. Bump the `?v=` query to bust the companion app's JS cache after updates.
 
