@@ -661,6 +661,7 @@ class TestParseWgUci:
 # ── Attended Sysupgrade (owut) ────────────────────────────────────────────────
 
 OWUT_FIXTURES = FIXTURES / "owut"
+USG_25_12_FIXTURES = FIXTURES / "openwrt" / "25.12.2" / "usg"
 
 parse_asu_sections = parser.parse_asu_sections
 parse_asu_output = parser.parse_asu_output
@@ -722,7 +723,9 @@ class TestParseASUOutput:
         assert asu_version_is_newer(info["latest_version"], info["installed_version"])
 
     def test_current_owut_check_output_with_version_to(self):
-        info = parse_asu_output(_asu_fixture("current_25_12_up_to_date.txt"))
+        info = parse_asu_output(
+            parse_asu_sections((USG_25_12_FIXTURES / "owut-check.txt").read_text())
+        )
         assert info["installed_version"] == "25.12.2 r32802"
         assert info["latest_version"] == "25.12.2 r32802"
         assert info["error"] is None
