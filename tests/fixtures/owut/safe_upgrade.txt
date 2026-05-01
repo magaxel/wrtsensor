@@ -1,0 +1,11 @@
+---ASU_TOOL---
+owut
+---ASU_VERSION---
+OpenWrt 24.10.1 r28597-6df6e6c8a4
+---ASU_OUTPUT---
+Checking sysupgrade.openwrt.org for updates
+Running: OpenWrt 24.10.1 r28597-6df6e6c8a4
+ASU build OpenWrt 24.10.2 r28739-1a2b3c4d5e
+2 package updates queued for ASU build
+It is safe to proceed with an upgrade
+exit=0

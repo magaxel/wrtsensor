@@ -334,6 +334,7 @@ def test_setup_entry_does_not_touch_lovelace_storage():
         def __init__(self, hass, entry):
             self.data = {"host_stats": {}}
             self._enable_wireguard = False
+            self._enable_asu = False
 
         async def async_setup(self):
             return None

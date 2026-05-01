@@ -656,3 +656,132 @@ class TestParseWgUci:
 
     def test_preshared_key_string_never_appears_in_output(self):
         assert "WG_PSK_FAKE_SHOULD_NEVER_LEAK_THROUGH" not in json.dumps(self.parsed)
+
+
+# ── Attended Sysupgrade (owut) ────────────────────────────────────────────────
+
+OWUT_FIXTURES = FIXTURES / "owut"
+
+parse_asu_sections = parser.parse_asu_sections
+parse_asu_output = parser.parse_asu_output
+asu_version_is_newer = parser.asu_version_is_newer
+
+
+def _asu_fixture(name: str) -> dict[str, list[str]]:
+    return parse_asu_sections((OWUT_FIXTURES / name).read_text())
+
+
+class TestParseASUOutput:
+    def test_up_to_date_sets_latest_equal_to_installed(self):
+        info = parse_asu_output(_asu_fixture("up_to_date.txt"))
+        assert info["tool"] == "owut"
+        assert info["installed_version"] == "24.10.1 r28597"
+        assert info["latest_version"] == "24.10.1 r28597"
+        assert info["error"] is None
+        assert "no changes" in (info["summary"] or "").lower()
+        assert info["installed_version_raw"].startswith("OpenWrt 24.10.1")
+
+    def test_safe_upgrade_extracts_target_version(self):
+        info = parse_asu_output(_asu_fixture("safe_upgrade.txt"))
+        assert info["tool"] == "owut"
+        assert info["installed_version"] == "24.10.1 r28597"
+        assert info["latest_version"] == "24.10.2 r28739"
+        assert info["error"] is None
+        assert "safe to proceed" in (info["summary"] or "").lower()
+
+    def test_downgrades_warn_carries_warning_summary(self):
+        info = parse_asu_output(_asu_fixture("downgrades_warn.txt"))
+        assert info["tool"] == "owut"
+        assert info["installed_version"] == "24.10.2 r28739"
+        assert info["latest_version"] == "24.10.1 r28597"
+        assert info["error"] is None
+        assert "downgrade" in (info["summary"] or "").lower()
+
+    def test_server_error_keeps_latest_equal_to_installed_and_records_error(self):
+        info = parse_asu_output(_asu_fixture("server_error.txt"))
+        assert info["tool"] == "owut"
+        # Up-to-date latest so the entity does not flap on a transient ASU 5xx.
+        assert info["latest_version"] == info["installed_version"] == "24.10.1 r28597"
+        assert info["error"] and "checks reveal errors" in info["error"].lower()
+
+    def test_revision_only_upgrade_surfaces_as_different_version(self):
+        """Same release, newer rNNN: parser must keep them distinct."""
+        sections = {
+            "ASU_TOOL": ["owut"],
+            "ASU_VERSION": ["OpenWrt 24.10.1 r28597-aaaa"],
+            "ASU_OUTPUT": [
+                "Running: OpenWrt 24.10.1 r28597-aaaa",
+                "ASU build OpenWrt 24.10.1 r28600-bbbb",
+                "It is safe to proceed with an upgrade",
+                "exit=0",
+            ],
+        }
+        info = parse_asu_output(sections)
+        assert info["installed_version"] == "24.10.1 r28597"
+        assert info["latest_version"] == "24.10.1 r28600"
+        assert asu_version_is_newer(info["latest_version"], info["installed_version"])
+
+    def test_current_owut_check_output_with_version_to(self):
+        info = parse_asu_output(_asu_fixture("current_25_12_up_to_date.txt"))
+        assert info["installed_version"] == "25.12.2 r32802"
+        assert info["latest_version"] == "25.12.2 r32802"
+        assert info["error"] is None
+        assert not asu_version_is_newer(
+            info["latest_version"], info["installed_version"]
+        )
+
+    def test_wan_failure_returns_owut_with_error_and_no_versions(self):
+        info = parse_asu_output(_asu_fixture("wan_failure.txt"))
+        assert info["tool"] == "owut"
+        # No marker matched — parser surfaces the captured output as the error.
+        assert info["error"]
+        assert "could not resolve" in info["error"].lower()
+        # latest_version unset so HA can't compare and the entity stays unavailable.
+        assert info["latest_version"] is None
+
+    def test_tool_missing_marks_unavailable(self):
+        info = parse_asu_output(_asu_fixture("tool_missing.txt"))
+        assert info["tool"] == "none"
+        assert info["error"] == "owut not installed"
+        assert info["installed_version"] is None
+        assert info["latest_version"] is None
+
+    def test_safe_upgrade_with_unparsable_target_returns_parser_error(self):
+        sections = {
+            "ASU_TOOL": ["owut"],
+            "ASU_VERSION": ["OpenWrt 24.10.1 r28597-aaaa"],
+            "ASU_OUTPUT": [
+                "Checking sysupgrade.openwrt.org for updates",
+                "Some other line",
+                "It is safe to proceed with an upgrade",
+                "exit=0",
+            ],
+        }
+        info = parse_asu_output(sections)
+        assert info["tool"] == "owut"
+        assert info["installed_version"] is None
+        assert info["latest_version"] is None
+        assert "target version not found" in (info["error"] or "")
+
+
+class TestASUVersionIsNewer:
+    @pytest.mark.parametrize(
+        "latest,installed,expected",
+        [
+            ("24.10.1", "24.10.1", False),
+            ("24.10.2", "24.10.1", True),
+            ("24.11.0", "24.10.5", True),
+            ("25.0.0", "24.10.5", True),
+            ("23.05.5", "24.10.1", False),
+            # Build-hash-only differences must not flap an up-to-date device.
+            ("OpenWrt 24.10.1 r28597-aaaa", "OpenWrt 24.10.1 r28597-bbbb", False),
+            ("OpenWrt 24.10.1 r28600-bbbb", "OpenWrt 24.10.1 r28597-aaaa", True),
+        ],
+    )
+    def test_truth_table(self, latest, installed, expected):
+        assert asu_version_is_newer(latest, installed) is expected
+
+    def test_unparsable_falls_back_to_string_inequality(self):
+        # Both unparsable → treated as different strings means "newer".
+        assert asu_version_is_newer("garbage-A", "garbage-B") is True
+        assert asu_version_is_newer("garbage", "garbage") is False

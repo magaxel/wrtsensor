@@ -32,6 +32,8 @@
       - dns_stats
       - scan_duration
       - partial
+      - wireguard
+      - asu
 
 - sensor:
     unique_id: wrtsensor_event_log
