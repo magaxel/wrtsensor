@@ -16,6 +16,7 @@ const_mod = sys.modules["custom_components.wrtsensor.const"]
 
 WrtsensorCoordinator = coord_mod.WrtsensorCoordinator
 StateEntry = coord_mod.StateEntry
+build_devices = coord_mod.build_devices
 UpdateFailed = sys.modules["homeassistant.helpers.update_coordinator"].UpdateFailed
 
 _ROOT = Path(__file__).parent.parent
@@ -197,6 +198,77 @@ def test_migrate_returns_true():
     entry.version = 1
     result = asyncio.run(async_migrate_entry(hass, entry))
     assert result is True
+
+
+# ── Device build state carry-over ─────────────────────────────────────────────
+
+
+def test_build_devices_drops_previous_wifi_ap_when_ap_no_longer_active():
+    devices = build_devices(
+        leases={
+            "11:22:33:44:55:66": {
+                "ip": "192.0.2.50",
+                "hostname": "phone",
+            }
+        },
+        arp_states={"11:22:33:44:55:66": "REACHABLE"},
+        stale=set(),
+        wifi=[],
+        vendors={},
+        gw_mac="",
+        gw_ip="",
+        gw_hostname="",
+        alive_ap_ips=[],
+        prev_state={
+            "11:22:33:44:55:66": StateEntry(
+                mac="11:22:33:44:55:66",
+                ip="192.0.2.50",
+                hostname="phone",
+                connection="wifi",
+                ap="Removed AP",
+                band="5GHz",
+            )
+        },
+        active_ap_names={"Living Room AP"},
+    )
+
+    assert devices[0].connection == "wired"
+    assert devices[0].ap == ""
+    assert devices[0].band == ""
+
+
+def test_build_devices_keeps_previous_wifi_ap_when_ap_still_active():
+    devices = build_devices(
+        leases={
+            "11:22:33:44:55:66": {
+                "ip": "192.0.2.50",
+                "hostname": "phone",
+            }
+        },
+        arp_states={"11:22:33:44:55:66": "REACHABLE"},
+        stale=set(),
+        wifi=[],
+        vendors={},
+        gw_mac="",
+        gw_ip="",
+        gw_hostname="",
+        alive_ap_ips=[],
+        prev_state={
+            "11:22:33:44:55:66": StateEntry(
+                mac="11:22:33:44:55:66",
+                ip="192.0.2.50",
+                hostname="phone",
+                connection="wifi",
+                ap="Living Room AP",
+                band="5GHz",
+            )
+        },
+        active_ap_names={"Living Room AP"},
+    )
+
+    assert devices[0].connection == "wifi"
+    assert devices[0].ap == "Living Room AP"
+    assert devices[0].band == "5GHz"
 
 
 # ── Gateway unreachable ───────────────────────────────────────────────────────

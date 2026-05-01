@@ -77,7 +77,7 @@ Prefer not to use HACS? See [docs/manual-install.md](docs/manual-install.md) for
 
 ### Changing gateway or APs
 
-Open the integration in **Settings → Devices & Services**, hit the triple-dot menu → **Reconfigure** to change gateway, APs, or SSH key path in place. Every host is re-probed; if authentication fails, the flow prompts for a password and re-provisions the key, same as initial setup. Removing a host prunes its CPU/RAM/Disk sensors automatically on the next reload. Turning off **Collect host metrics** in Options also removes those per-host metric sensors on reload. The public SSH key stays in `/etc/dropbear/authorized_keys` on the removed device — delete it manually there if you no longer trust the host.
+Open the integration in **Settings → Devices & Services**, hit the triple-dot menu → **Reconfigure** to change gateway, APs, or SSH key path in place. Every host is re-probed; if authentication fails, the flow prompts for a password and re-provisions the key, same as initial setup. Removing a host prunes its CPU/RAM/Disk sensors automatically on the next reload and stops carrying its old Wi-Fi associations into the topology map after the next scan. Turning off **Collect host metrics** in Options also removes those per-host metric sensors on reload. The public SSH key stays in `/etc/dropbear/authorized_keys` on the removed device — delete it manually there if you no longer trust the host.
 
 ## Card configuration
 
