@@ -295,6 +295,8 @@ Device tracker entities are named after the device hostname (e.g. `device_tracke
 
 ### Upgrading from earlier versions — dashboard migration
 
+Version 2.0.0 changes the **Firmware check interval** option from seconds to hours. Existing `asu_interval_s` option values are ignored; use **Configure** to save the desired 1-24 hour interval.
+
 The compat `sensor.<entry>_network_scanner` no longer carries the full god-blob of every feature. After upgrading, its attributes are limited to network-host data (`devices`, `wan_ip`, `wan_ip6`, `gateway_mac`, `partial`, `scan_duration`). Per-feature data lives on the dedicated sensors:
 
 - `dns_stats` is now on `sensor.<entry>_dns_cache_hit_pct` (consumed by `dns-stats-card`).
