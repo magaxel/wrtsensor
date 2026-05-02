@@ -248,7 +248,7 @@ def _prune_network_host_entities(
     presence binary sensors. Skipped when the option is on so that legitimate
     devices are not nuked.
     """
-    if coordinator._enable_network_hosts:
+    if getattr(coordinator, "_enable_network_hosts", True):
         return
     reg = er.async_get(hass)
     scanner_uid = f"{entry.entry_id}_network_scanner"
@@ -271,7 +271,7 @@ def _prune_network_host_entities(
 def _prune_wan_bandwidth_entities(
     hass: HomeAssistant, entry: ConfigEntry, coordinator: WrtsensorCoordinator
 ) -> None:
-    if coordinator._enable_wan_bandwidth:
+    if getattr(coordinator, "_enable_wan_bandwidth", True):
         return
     reg = er.async_get(hass)
     targets = {f"{entry.entry_id}_wan_download", f"{entry.entry_id}_wan_upload"}
@@ -287,7 +287,7 @@ def _prune_wan_bandwidth_entities(
 def _prune_dns_entities(
     hass: HomeAssistant, entry: ConfigEntry, coordinator: WrtsensorCoordinator
 ) -> None:
-    if coordinator._enable_dns_stats:
+    if getattr(coordinator, "_enable_dns_stats", True):
         return
     reg = er.async_get(hass)
     targets = {f"{entry.entry_id}_dns_hit_pct", f"{entry.entry_id}_dns_latency"}

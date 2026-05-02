@@ -1818,10 +1818,12 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 mac: self._dns_cache.get(arp_ips[mac], "") for mac in arp_only_macs
             }
 
-        # Collect WiFi from gateway + all APs in parallel
+        collect_host_bundle = self._enable_network_hosts or self._enable_host_metrics
+
+        # Collect AP identity/neigh data only for features that need host/device context.
         name_map: dict[str, str] = {}
         ap_ip6_map: dict[str, str] = {}
-        if self._ap_hosts:
+        if collect_host_bundle and self._ap_hosts:
             ap_info_results = await asyncio.gather(
                 *[self._get_ap_info(h) for h in self._ap_hosts], return_exceptions=True
             )
@@ -1836,7 +1838,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     ap_ip6_map[host] = ip6
                 # Gateway-less mode: union per-AP neigh tables into master maps.
                 # Prefer REACHABLE over STALE when same MAC seen on multiple APs.
-                if gateway_absent:
+                if self._enable_network_hosts and gateway_absent:
                     ap_states, ap_stale, ap_arp_ips = parse_arp(ap_arp_lines)
                     for mac, state in ap_states.items():
                         if mac not in arp_states or (
@@ -1851,49 +1853,55 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     for mac, ip6_addr in parse_ndp(ap_ndp_lines).items():
                         ndp.setdefault(mac, ip6_addr)
 
-        wifi_tasks: list = []
-        if self._gateway_host:
-            wifi_tasks.append(self._collect_wifi(self._gateway_host, "Gateway"))
-        for host in self._ap_hosts:
-            wifi_tasks.append(self._collect_wifi(host, name_map.get(host, host)))
-        wifi_results = await asyncio.gather(*wifi_tasks, return_exceptions=True)
-
         all_wifi: list[dict] = []
         alive_ap_ips: list[str] = []
         ap_hoststats: dict[str, list[str]] = {}
 
-        idx = 0
-        if self._gateway_host:
-            gw_wifi_result = wifi_results[idx]
-            idx += 1
-            if not isinstance(gw_wifi_result, Exception):
-                entries, hoststat = gw_wifi_result
-                all_wifi.extend(entries)
+        if collect_host_bundle:
+            # Collect WiFi stations and/or host metrics from gateway + all APs.
+            wifi_tasks: list = []
+            if self._gateway_host:
+                wifi_tasks.append(self._collect_wifi(self._gateway_host, "Gateway"))
+            for host in self._ap_hosts:
+                wifi_tasks.append(self._collect_wifi(host, name_map.get(host, host)))
+            wifi_results = await asyncio.gather(*wifi_tasks, return_exceptions=True)
+
+            idx = 0
+            if self._gateway_host:
+                gw_wifi_result = wifi_results[idx]
+                idx += 1
+                if not isinstance(gw_wifi_result, Exception):
+                    entries, hoststat = gw_wifi_result
+                    if self._enable_network_hosts:
+                        all_wifi.extend(entries)
+                    if hoststat:
+                        ap_hoststats[self._gateway_host] = hoststat
+
+            for host in self._ap_hosts:
+                result = wifi_results[idx]
+                idx += 1
+                if isinstance(result, Exception):
+                    continue
+                entries, hoststat = result
+                if self._enable_network_hosts:
+                    all_wifi.extend(entries)
+                ip = host
                 if hoststat:
-                    ap_hoststats[self._gateway_host] = hoststat
+                    ap_hoststats[ip] = hoststat
+                if self._enable_network_hosts and (entries or hoststat):
+                    alive_ap_ips.append(ip)
 
-        for host in self._ap_hosts:
-            result = wifi_results[idx]
-            idx += 1
-            if isinstance(result, Exception):
-                continue
-            entries, hoststat = result
-            all_wifi.extend(entries)
-            ip = host
-            if hoststat:
-                ap_hoststats[ip] = hoststat
-            if entries or hoststat:
-                alive_ap_ips.append(ip)
-
-        active_ap_names = {"Gateway"} if self._gateway_host else set()
-        for host in self._ap_hosts:
-            active_ap_names.add(host)
-            cached_name = self._ap_name_cache.get(host)
-            if cached_name:
-                active_ap_names.add(cached_name)
-            mapped_name = name_map.get(host)
-            if mapped_name:
-                active_ap_names.add(mapped_name)
+        active_ap_names = set()
+        if self._enable_network_hosts:
+            active_ap_names = {"Gateway"} if self._gateway_host else set()
+            for host in self._ap_hosts:
+                active_ap_names.add(host)
+                cached_name = self._ap_name_cache.get(host)
+                if cached_name:
+                    active_ap_names.add(cached_name)
+                mapped_name = name_map.get(host)
+                if mapped_name:
+                    active_ap_names.add(mapped_name)
 
         # WAN bandwidth (independent of network_hosts; gated by enable_wan_bandwidth)
         rx_rate: float | None = None

@@ -34,14 +34,16 @@ async def async_setup_entry(
     tracked_hosts: set[str] = set()
 
     entities: list[SensorEntity] = []
-    if coordinator._enable_network_hosts:
+    if getattr(coordinator, "_enable_network_hosts", True):
         entities.append(WrtsensorNetworkScannerSensor(coordinator, entry))
-    if coordinator._gateway_host and coordinator._enable_wan_bandwidth:
+    if coordinator._gateway_host and getattr(
+        coordinator, "_enable_wan_bandwidth", True
+    ):
         entities += [
             WrtsensorWANDownloadSensor(coordinator, entry),
             WrtsensorWANUploadSensor(coordinator, entry),
         ]
-    if coordinator._gateway_host and coordinator._enable_dns_stats:
+    if coordinator._gateway_host and getattr(coordinator, "_enable_dns_stats", True):
         entities += [
             WrtsensorDNSHitPctSensor(coordinator, entry),
             WrtsensorDNSLatencySensor(coordinator, entry),

@@ -82,6 +82,9 @@ class _FakeCoordinator:
     def __init__(self, data: dict | None) -> None:
         self.data = data
         self._gateway_host = None
+        self._enable_network_hosts = True
+        self._enable_wan_bandwidth = True
+        self._enable_dns_stats = True
         self._enable_host_metrics = True
         self._enable_wireguard = False
         self._wg_stale_threshold_s = 180
@@ -128,10 +131,6 @@ _ALL_COMPAT_KEYS = (
     "wan_ip",
     "wan_ip6",
     "gateway_mac",
-    "wan_rx_rate",
-    "wan_tx_rate",
-    "host_stats",
-    "dns_stats",
     "scan_duration",
     "partial",
 )

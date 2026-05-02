@@ -852,6 +852,82 @@ def test_collect_wifi_passes_no_host_metrics_flag_when_disabled():
     )
 
 
+def test_dns_only_update_skips_ap_info_and_wifi_collection():
+    c = _make_coordinator(
+        ap_hosts="192.0.2.22",
+        options={
+            const_mod.CONF_ENABLE_NETWORK_HOSTS: False,
+            const_mod.CONF_ENABLE_WAN_BANDWIDTH: False,
+            const_mod.CONF_ENABLE_DNS_STATS: True,
+            const_mod.CONF_ENABLE_HOST_METRICS: False,
+            const_mod.CONF_ENABLE_WIREGUARD: False,
+        },
+    )
+    collect_wifi = AsyncMock(return_value=([], []))
+    get_ap_info = AsyncMock(return_value=("AP1", "", [], []))
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch.object(c, "_collect_gateway", new=AsyncMock(return_value=_MINIMAL_GW))
+        )
+        stack.enter_context(patch.object(c, "_collect_wifi", new=collect_wifi))
+        stack.enter_context(patch.object(c, "_get_ap_info", new=get_ap_info))
+        result = asyncio.run(c._async_update_data())
+
+    collect_wifi.assert_not_called()
+    get_ap_info.assert_not_called()
+    assert set(result) == {"scan_duration", "partial", "dns_stats"}
+    assert result["dns_stats"] is None
+
+
+def test_host_metrics_with_network_hosts_disabled_runs_collector_without_devices():
+    c = _make_coordinator(
+        ap_hosts="192.0.2.22",
+        options={
+            const_mod.CONF_ENABLE_NETWORK_HOSTS: False,
+            const_mod.CONF_ENABLE_WAN_BANDWIDTH: False,
+            const_mod.CONF_ENABLE_DNS_STATS: False,
+            const_mod.CONF_ENABLE_HOST_METRICS: True,
+            const_mod.CONF_ENABLE_WIREGUARD: False,
+        },
+    )
+    gw_data = {
+        **_MINIMAL_GW,
+        "hoststat": [
+            "cpu  10 0 10 80",
+            "1000 500",
+            "25",
+        ],
+    }
+    wifi_entries = [
+        {
+            "mac": "AA:BB:CC:DD:EE:01",
+            "sta_ul_bytes": 1,
+            "sta_dl_bytes": 2,
+        }
+    ]
+    collect_wifi = AsyncMock(
+        side_effect=[
+            (wifi_entries, ["cpu  10 0 10 80", "1000 500", "25"]),
+            (wifi_entries, ["cpu  10 0 10 80", "1000 500", "25"]),
+        ]
+    )
+    get_ap_info = AsyncMock(return_value=("AP1", "2001:db8::22", [], []))
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch.object(c, "_collect_gateway", new=AsyncMock(return_value=gw_data))
+        )
+        stack.enter_context(patch.object(c, "_collect_wifi", new=collect_wifi))
+        stack.enter_context(patch.object(c, "_get_ap_info", new=get_ap_info))
+        result = asyncio.run(c._async_update_data())
+
+    assert collect_wifi.await_count == 2
+    get_ap_info.assert_awaited_once()
+    assert "host_stats" in result
+    assert "devices" not in result
+    assert "device_count" not in result
+    assert "wan_ip" not in result
+
+
 # ── WireGuard ────────────────────────────────────────────────────────────────
 
 
