@@ -80,7 +80,8 @@ def _parse_config_endpoints(
 
 async def _test_ssh(host: str, ssh_key_path: str, ssh_port: int = 22) -> str | None:
     """Return None on success or an error key string."""
-    if not Path(ssh_key_path).exists():
+    key_exists = await asyncio.to_thread(lambda: Path(ssh_key_path).exists())
+    if not key_exists:
         return "ssh_key_not_found"
     try:
         async with asyncio.timeout(10):
@@ -111,7 +112,7 @@ async def _provision_ssh_key(
     Returns None on success or an error key string.
     """
     try:
-        priv_key = asyncssh.read_private_key(key_path)
+        priv_key = await asyncio.to_thread(asyncssh.read_private_key, key_path)
         pub_key_str = priv_key.export_public_key("openssh").decode().strip()
     except Exception:  # noqa: BLE001
         return "pub_key_unreadable"
