@@ -158,7 +158,9 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 def _remove_runtime_state_files() -> None:
     """Remove state files created by the HACS integration."""
     # netscan_events.json is intentionally omitted: HACS stores recent events in
-    # memory only; that file belongs to the standalone command_line path.
+    # memory only; that file belongs to the standalone command_line path. OUI
+    # artifacts are also retained: they contain no user data and are slow to
+    # re-download when the integration is re-added.
     for state_dir in (Path(STATE_DIR_HA), Path(STATE_DIR_LOCAL)):
         for basename in STATE_FILE_BASENAMES:
             path = state_dir / basename

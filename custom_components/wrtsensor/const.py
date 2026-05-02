@@ -25,6 +25,7 @@ STATE_FILE_PREV_STATE = ".netscan_prev_state.json"
 STATE_FILE_MAC_VENDORS = ".netscan_mac_vendors"
 STATE_FILE_DNS_CACHE = ".netscan_dns_cache"
 STATE_FILE_DNS_HISTORY = ".netscan_dns_history.jsonl"
+# Runtime state cleanup allowlist. Adding a basename here deletes it on removal.
 STATE_FILE_BASENAMES = (
     STATE_FILE_PREV_STATE,
     STATE_FILE_MAC_VENDORS,

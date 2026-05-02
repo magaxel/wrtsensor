@@ -201,7 +201,12 @@ def test_remove_entry_logs_unlink_failure_and_continues(
     assert not (ha_dir / ".netscan_dns_history.jsonl").exists()
     for basename in _init_mod.STATE_FILE_BASENAMES:
         assert not (local_dir / basename).exists()
+    assert (ha_dir / "oui.db").exists()
+    assert (ha_dir / "oui.txt").exists()
+    assert (local_dir / "oui.db").exists()
+    assert (local_dir / "oui.txt").exists()
     assert "Failed to remove wrtsensor state file" in caplog.text
+    assert str(failed) in caplog.text
 
 
 def test_prune_removes_stale_and_legacy_host_entities():
