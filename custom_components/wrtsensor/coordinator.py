@@ -85,6 +85,10 @@ from .const import (
     DOMAIN,
     STATE_DIR_HA,
     STATE_DIR_LOCAL,
+    STATE_FILE_DNS_CACHE,
+    STATE_FILE_DNS_HISTORY,
+    STATE_FILE_MAC_VENDORS,
+    STATE_FILE_PREV_STATE,
     STATE_MAX_AGE_DAYS,
 )
 from .hosts import HostEndpoint, parse_host_endpoint
@@ -882,10 +886,10 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _set_state_dir(self, state_dir: Path) -> None:
         """Reassign state_dir and the path attrs derived from it. Pure attr work."""
         self._state_dir = state_dir
-        self._prev_state_path = state_dir / ".netscan_prev_state.json"
-        self._vendor_cache_path = state_dir / ".netscan_mac_vendors"
-        self._dns_cache_path = state_dir / ".netscan_dns_cache"
-        self._dns_history_path = state_dir / ".netscan_dns_history.jsonl"
+        self._prev_state_path = state_dir / STATE_FILE_PREV_STATE
+        self._vendor_cache_path = state_dir / STATE_FILE_MAC_VENDORS
+        self._dns_cache_path = state_dir / STATE_FILE_DNS_CACHE
+        self._dns_history_path = state_dir / STATE_FILE_DNS_HISTORY
 
     def _load_caches(self) -> None:
         if not self._state_dir.exists():
