@@ -54,6 +54,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _remove_legacy_event_log_entity(hass, entry)
     _prune_wireguard_entities(hass, entry, coordinator)
     _prune_asu_entities(hass, entry, coordinator)
+    _prune_network_host_entities(hass, entry, coordinator)
+    _prune_wan_bandwidth_entities(hass, entry, coordinator)
+    _prune_dns_entities(hass, entry, coordinator)
 
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True
@@ -231,6 +234,67 @@ def _prune_asu_entities(
         if uid.startswith(prefix) and uid.endswith(suffix):
             _LOGGER.info(
                 "Removing wrtsensor update entity %s (option disabled)",
+                reg_entry.entity_id,
+            )
+            reg.async_remove(reg_entry.entity_id)
+
+
+def _prune_network_host_entities(
+    hass: HomeAssistant, entry: ConfigEntry, coordinator: WrtsensorCoordinator
+) -> None:
+    """Remove network-host entities when the option is disabled.
+
+    Covers the network scanner sensor, all per-MAC device_trackers, and all
+    presence binary sensors. Skipped when the option is on so that legitimate
+    devices are not nuked.
+    """
+    if coordinator._enable_network_hosts:
+        return
+    reg = er.async_get(hass)
+    scanner_uid = f"{entry.entry_id}_network_scanner"
+    tracker_prefix = f"{entry.entry_id}_tracker_"
+    presence_prefix = f"{entry.entry_id}_presence_"
+    for reg_entry in list(er.async_entries_for_config_entry(reg, entry.entry_id)):
+        uid = reg_entry.unique_id
+        if (
+            uid == scanner_uid
+            or uid.startswith(tracker_prefix)
+            or uid.startswith(presence_prefix)
+        ):
+            _LOGGER.info(
+                "Removing wrtsensor network-host entity %s (option disabled)",
+                reg_entry.entity_id,
+            )
+            reg.async_remove(reg_entry.entity_id)
+
+
+def _prune_wan_bandwidth_entities(
+    hass: HomeAssistant, entry: ConfigEntry, coordinator: WrtsensorCoordinator
+) -> None:
+    if coordinator._enable_wan_bandwidth:
+        return
+    reg = er.async_get(hass)
+    targets = {f"{entry.entry_id}_wan_download", f"{entry.entry_id}_wan_upload"}
+    for reg_entry in list(er.async_entries_for_config_entry(reg, entry.entry_id)):
+        if reg_entry.unique_id in targets:
+            _LOGGER.info(
+                "Removing wrtsensor WAN bandwidth entity %s (option disabled)",
+                reg_entry.entity_id,
+            )
+            reg.async_remove(reg_entry.entity_id)
+
+
+def _prune_dns_entities(
+    hass: HomeAssistant, entry: ConfigEntry, coordinator: WrtsensorCoordinator
+) -> None:
+    if coordinator._enable_dns_stats:
+        return
+    reg = er.async_get(hass)
+    targets = {f"{entry.entry_id}_dns_hit_pct", f"{entry.entry_id}_dns_latency"}
+    for reg_entry in list(er.async_entries_for_config_entry(reg, entry.entry_id)):
+        if reg_entry.unique_id in targets:
+            _LOGGER.info(
+                "Removing wrtsensor DNS entity %s (option disabled)",
                 reg_entry.entity_id,
             )
             reg.async_remove(reg_entry.entity_id)

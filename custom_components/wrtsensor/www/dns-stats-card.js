@@ -345,9 +345,14 @@ class DnsStatsCard extends LitElement {
     return document.createElement(EDITOR_TYPE);
   }
 
-  static getStubConfig() {
+  static getStubConfig(hass) {
+    let entity = "sensor.wrtsensor_dns_cache_hit_pct";
+    if (hass?.states) {
+      const match = Object.keys(hass.states).find((id) => id.endsWith("_dns_cache_hit_pct"));
+      if (match) entity = match;
+    }
     return {
-      entity: "",
+      entity,
       title: "DNS Cache",
       period: DEFAULT_PERIOD,
       show_ipv6: false,

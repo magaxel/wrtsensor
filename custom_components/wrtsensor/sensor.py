@@ -33,14 +33,16 @@ async def async_setup_entry(
     coordinator: WrtsensorCoordinator = hass.data[DOMAIN][entry.entry_id]
     tracked_hosts: set[str] = set()
 
-    entities: list[SensorEntity] = [
-        WrtsensorNetworkScannerSensor(coordinator, entry),
-    ]
-    # Gateway-only sensors: WAN bandwidth + DNS stats require the router.
-    if coordinator._gateway_host:
+    entities: list[SensorEntity] = []
+    if coordinator._enable_network_hosts:
+        entities.append(WrtsensorNetworkScannerSensor(coordinator, entry))
+    if coordinator._gateway_host and coordinator._enable_wan_bandwidth:
         entities += [
             WrtsensorWANDownloadSensor(coordinator, entry),
             WrtsensorWANUploadSensor(coordinator, entry),
+        ]
+    if coordinator._gateway_host and coordinator._enable_dns_stats:
+        entities += [
             WrtsensorDNSHitPctSensor(coordinator, entry),
             WrtsensorDNSLatencySensor(coordinator, entry),
         ]
@@ -122,10 +124,6 @@ class WrtsensorNetworkScannerSensor(_WrtsensorBase):
         "wan_ip",
         "wan_ip6",
         "gateway_mac",
-        "wan_rx_rate",
-        "wan_tx_rate",
-        "host_stats",
-        "dns_stats",
         "scan_duration",
         "partial",
     )
@@ -204,6 +202,11 @@ class WrtsensorDNSHitPctSensor(_WrtsensorBase):
             if val is not None:
                 return val
         return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        data = self.coordinator.data or {}
+        return {"dns_stats": data.get("dns_stats")}
 
 
 class WrtsensorDNSLatencySensor(_WrtsensorBase):

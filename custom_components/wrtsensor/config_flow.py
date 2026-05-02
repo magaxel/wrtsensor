@@ -20,6 +20,8 @@ from .const import (
     CONF_ENABLE_ASU,
     CONF_ENABLE_DNS_STATS,
     CONF_ENABLE_HOST_METRICS,
+    CONF_ENABLE_NETWORK_HOSTS,
+    CONF_ENABLE_WAN_BANDWIDTH,
     CONF_ENABLE_WIREGUARD,
     CONF_GATEWAY_HOST,
     CONF_LAN_IFACE,
@@ -33,6 +35,8 @@ from .const import (
     DEFAULT_ENABLE_ASU,
     DEFAULT_ENABLE_DNS_STATS,
     DEFAULT_ENABLE_HOST_METRICS,
+    DEFAULT_ENABLE_NETWORK_HOSTS,
+    DEFAULT_ENABLE_WAN_BANDWIDTH,
     DEFAULT_ENABLE_WIREGUARD,
     DEFAULT_LAN_IFACE,
     DEFAULT_SCAN_INTERVAL,
@@ -486,6 +490,18 @@ class WrtsensorOptionsFlow(OptionsFlow):
                     CONF_PRESENCE_MACS,
                     default=current.get(CONF_PRESENCE_MACS, ""),
                 ): str,
+                vol.Optional(
+                    CONF_ENABLE_NETWORK_HOSTS,
+                    default=current.get(
+                        CONF_ENABLE_NETWORK_HOSTS, DEFAULT_ENABLE_NETWORK_HOSTS
+                    ),
+                ): bool,
+                vol.Optional(
+                    CONF_ENABLE_WAN_BANDWIDTH,
+                    default=current.get(
+                        CONF_ENABLE_WAN_BANDWIDTH, DEFAULT_ENABLE_WAN_BANDWIDTH
+                    ),
+                ): bool,
                 vol.Optional(
                     CONF_ENABLE_DNS_STATS,
                     default=current.get(

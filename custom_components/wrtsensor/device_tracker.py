@@ -33,11 +33,12 @@ async def async_setup_entry(
     def _handle_coordinator_update() -> None:
         data = coordinator.data or {}
         new_entities: list[ScannerEntity] = []
-        for device in data.get("devices", []):
-            mac = device.get("mac", "").lower()
-            if mac and mac not in tracked:
-                tracked.add(mac)
-                new_entities.append(WrtsensorDeviceTracker(coordinator, entry, mac))
+        if coordinator._enable_network_hosts:
+            for device in data.get("devices", []):
+                mac = device.get("mac", "").lower()
+                if mac and mac not in tracked:
+                    tracked.add(mac)
+                    new_entities.append(WrtsensorDeviceTracker(coordinator, entry, mac))
         wg = data.get("wireguard") or {}
         for iface in wg.get("interfaces", []):
             for peer in iface.get("peers", []):
