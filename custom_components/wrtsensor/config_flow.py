@@ -17,10 +17,10 @@ from homeassistant.helpers.selector import (
 )
 
 from .const import (
-    ASU_INTERVAL_MAX_S,
-    ASU_INTERVAL_MIN_S,
+    ASU_INTERVAL_MAX_H,
+    ASU_INTERVAL_MIN_H,
     CONF_AP_HOSTS,
-    CONF_ASU_INTERVAL_S,
+    CONF_ASU_INTERVAL_H,
     CONF_DISCONNECT_THRESHOLD,
     CONF_ENABLE_ASU,
     CONF_ENABLE_DNS_STATS,
@@ -34,7 +34,7 @@ from .const import (
     CONF_SSH_KEY_PATH,
     CONF_WAN_IFACE,
     CONF_WG_STALE_THRESHOLD,
-    DEFAULT_ASU_INTERVAL_S,
+    DEFAULT_ASU_INTERVAL_H,
     DEFAULT_DISCONNECT_THRESHOLD,
     DEFAULT_ENABLE_ASU,
     DEFAULT_ENABLE_DNS_STATS,
@@ -533,11 +533,11 @@ class WrtsensorOptionsFlow(OptionsFlow):
                     default=current.get(CONF_ENABLE_ASU, DEFAULT_ENABLE_ASU),
                 ): bool,
                 vol.Optional(
-                    CONF_ASU_INTERVAL_S,
-                    default=current.get(CONF_ASU_INTERVAL_S, DEFAULT_ASU_INTERVAL_S),
+                    CONF_ASU_INTERVAL_H,
+                    default=current.get(CONF_ASU_INTERVAL_H, DEFAULT_ASU_INTERVAL_H),
                 ): vol.All(
                     vol.Coerce(int),
-                    vol.Range(min=ASU_INTERVAL_MIN_S, max=ASU_INTERVAL_MAX_S),
+                    vol.Range(min=ASU_INTERVAL_MIN_H, max=ASU_INTERVAL_MAX_H),
                 ),
             }
         )

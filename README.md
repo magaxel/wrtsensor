@@ -301,7 +301,9 @@ Device tracker entities are named after the device hostname (e.g. `device_tracke
 
 ### Upgrading from earlier versions — dashboard migration
 
-Version 1.0.2 removes the custom **Scan interval** option to follow Home Assistant integration quality guidance. wrtsensor now always polls every 60 seconds. Existing stored scan interval values are ignored and disappear the next time you save Options.
+Version 2.0.0 changes the **Firmware check interval** option from seconds to hours. Existing `asu_interval_s` option values are ignored; use **Configure** to save the desired 1-24 hour interval.
+
+Version 2.0.1 removes the custom **Scan interval** option to follow Home Assistant integration quality guidance. wrtsensor now always polls every 60 seconds. Existing stored scan interval values are ignored and disappear the next time you save Options.
 
 The compat `sensor.<entry>_network_scanner` no longer carries the full god-blob of every feature. After upgrading, its attributes are limited to network-host data (`devices`, `wan_ip`, `wan_ip6`, `gateway_mac`, `partial`, `scan_duration`). Per-feature data lives on the dedicated sensors:
 
