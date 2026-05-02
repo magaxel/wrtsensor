@@ -182,6 +182,7 @@ class WrtsensorWANUploadSensor(_WrtsensorBase):
 
 class WrtsensorDNSHitPctSensor(_WrtsensorBase):
     _attr_name = "DNS Cache Hit %"
+    _attr_suggested_object_id = "wrtsensor_dns_cache_hit_pct"
     _attr_native_unit_of_measurement = "%"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:dns"

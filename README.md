@@ -70,7 +70,7 @@ All enabled blocks come from a single 20 s SSH call to the gateway plus parallel
    - `/wrtsensor_static/network-table-card.js?v=1.0.0` — JavaScript Module
    - `/wrtsensor_static/network-topology-card.js?v=1.1.1` — JavaScript Module
    - `/wrtsensor_static/network-events-card.js?v=1.0.0` — JavaScript Module
-   - `/wrtsensor_static/dns-stats-card.js?v=1.0.0` — JavaScript Module
+   - `/wrtsensor_static/dns-stats-card.js?v=3.0.1` — JavaScript Module
    - `/wrtsensor_static/wireguard-card.js?v=1.1.0` — JavaScript Module *(only needed if you enable the WireGuard option)*
 
 > If key authentication isn't set up yet, the config flow will ask for a password once and provision the public key into `/etc/dropbear/authorized_keys` on each OpenWrt box for you. The password is never stored.
