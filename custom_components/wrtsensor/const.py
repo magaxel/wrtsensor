@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 DOMAIN = "wrtsensor"
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 
 PLATFORMS = ["sensor", "binary_sensor", "device_tracker", "update"]
 
@@ -17,7 +17,6 @@ DEFAULT_SSH_PORT = 22
 DEFAULT_LAN_IFACE = "br-lan"
 DEFAULT_WAN_IFACE = "eth0"
 DEFAULT_DHCP_LEASES = "/tmp/dhcp.leases"
-DEFAULT_SCAN_INTERVAL = 60
 
 STATE_DIR_HA = "/dev/shm"
 STATE_DIR_LOCAL = "/tmp/netscan"
@@ -52,7 +51,6 @@ CONF_SSH_PORT = "ssh_port"
 CONF_AP_HOSTS = "ap_hosts"
 CONF_LAN_IFACE = "lan_iface"
 CONF_WAN_IFACE = "wan_iface"
-CONF_SCAN_INTERVAL = "scan_interval"
 CONF_PRESENCE_MACS = "presence_macs"
 CONF_ENABLE_NETWORK_HOSTS = "enable_network_hosts"
 DEFAULT_ENABLE_NETWORK_HOSTS = True

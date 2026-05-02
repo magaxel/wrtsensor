@@ -95,6 +95,7 @@ _uc = sys.modules["homeassistant.helpers.update_coordinator"]
 class _DataUpdateCoordinator:
     def __init__(self, *a, **kw):
         self.data = None
+        self.update_interval = kw.get("update_interval")
 
     def __class_getitem__(cls, item):
         return cls

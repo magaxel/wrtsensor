@@ -67,7 +67,6 @@
         "data": {
           "ssh_key_path": "SSH private key path",
           "ap_hosts": "Access point IPs",
-          "scan_interval": "Scan interval (seconds)",
           "lan_iface": "LAN bridge interface",
           "wan_iface": "WAN interface",
           "disconnect_threshold_s": "Disconnect threshold (seconds)",
@@ -84,7 +83,6 @@
         "data_description": {
           "ssh_key_path": "Absolute path to the SSH private key on the HA host. Example: /config/ssh/id_ed25519",
           "ap_hosts": "Comma-separated IPs of OpenWrt access points to collect Wi-Fi associations and host stats from. Port 22 is used by default; add :2222 for IPv4 or [2001:db8::22]:2222 for IPv6. Example: 192.168.1.22,192.168.1.23:2222",
-          "scan_interval": "How often to poll the gateway and APs. Minimum 30 s, maximum 3600 s. Default: 60 s.",
           "lan_iface": "Bridge interface used for the LAN on OpenWrt. Default: br-lan. Change only if your router uses a different name.",
           "wan_iface": "WAN-facing interface on the gateway used to read RX/TX byte counters. Default: eth0.",
           "disconnect_threshold_s": "How long a device must be absent before a disconnect event is recorded. Default: 120 s (2 missed scans at 60 s interval).",

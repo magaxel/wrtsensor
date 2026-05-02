@@ -4,6 +4,7 @@ import asyncio
 import importlib.util
 import json
 import sys
+import types
 from contextlib import ExitStack
 from datetime import timedelta
 from pathlib import Path
@@ -57,6 +58,7 @@ class _FakeConfigEntries:
 class _FakeHass:
     def __init__(self):
         self.config_entries = _FakeConfigEntries()
+        self.config = types.SimpleNamespace(path=lambda *p: str(Path("/config", *p)))
 
     async def async_add_executor_job(self, fn, *args):
         return None
@@ -149,6 +151,44 @@ def test_coordinator_ignores_legacy_ssh_port():
     )
 
     assert c._endpoint_ports == {"192.0.2.1": 22, "192.0.2.22": 22}
+
+
+def test_coordinator_ignores_stale_scan_interval_option():
+    c = WrtsensorCoordinator(
+        _FakeHass(),
+        _FakeEntry(
+            options={
+                "scan_interval": 300,
+                const_mod.CONF_DISCONNECT_THRESHOLD: 180,
+            }
+        ),
+    )
+
+    assert c.update_interval == const_mod.SCAN_INTERVAL
+    assert c._disconnect_threshold_miss == 3
+
+
+def test_oui_cache_paths_use_persistent_config_dir(tmp_path):
+    hass = _FakeHass()
+    hass.config = types.SimpleNamespace(path=lambda *p: str(tmp_path.joinpath(*p)))
+    c = WrtsensorCoordinator(hass, _FakeEntry())
+
+    assert c._oui_cache_dir == tmp_path / ".storage" / "wrtsensor"
+    assert c._oui_db_path == c._oui_cache_dir / "oui.db"
+    assert c._oui_txt_path == c._oui_cache_dir / "oui.txt"
+    assert "custom_components" not in str(c._oui_db_path)
+
+
+def test_load_caches_creates_oui_cache_dir(tmp_path):
+    hass = _FakeHass()
+    hass.config = types.SimpleNamespace(path=lambda *p: str(tmp_path.joinpath(*p)))
+    c = WrtsensorCoordinator(hass, _FakeEntry())
+    c._set_state_dir(tmp_path / "state")
+
+    c._load_caches()
+
+    assert c._oui_cache_dir.is_dir()
+    assert c._needs_oui_download is True
 
 
 # ── Migration: v1 → v2 ────────────────────────────────────────────────────────

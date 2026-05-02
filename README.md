@@ -85,7 +85,7 @@ Open the integration in **Settings → Devices & Services**, hit the triple-dot 
 
 Deleting the wrtsensor config entry from **Settings → Devices & Services** unloads the entities and, when it is the last wrtsensor entry, removes the HACS integration's local runtime cache files from `/dev/shm` and `/tmp/netscan`. This is lifecycle cleanup toward Home Assistant's higher quality-scale expectations; it is not required for Bronze.
 
-The downloaded OUI vendor database is kept so re-adding the integration does not need a fresh multi-megabyte download. The temporary `/tmp/wrtsensor_collector.sh` helper on each OpenWrt host is also left alone and normally disappears on the next router reboot. Home Assistant recorder/history rows age out through HA's normal purge behavior.
+The downloaded OUI vendor database is retained in the Home Assistant config directory so re-adding the integration does not need a fresh multi-megabyte download. The temporary `/tmp/wrtsensor_collector.sh` helper on each OpenWrt host is also left alone and normally disappears on the next router reboot. Home Assistant recorder/history rows age out through HA's normal purge behavior.
 
 ## Card configuration
 
@@ -300,6 +300,8 @@ Each toggle in Options owns a set of entities — turn the toggle off and the en
 Device tracker entities are named after the device hostname (e.g. `device_tracker.my_phone`) and are disabled by default. HA's scanner entity base class does this to avoid flooding the registry when dozens of devices are discovered. To use a tracker for Person presence, go to **Settings → Entities**, enable "Show disabled entities", find the device, and enable it. The entity can then be added to a Person.
 
 ### Upgrading from earlier versions — dashboard migration
+
+Version 1.0.2 removes the custom **Scan interval** option to follow Home Assistant integration quality guidance. wrtsensor now always polls every 60 seconds. Existing stored scan interval values are ignored and disappear the next time you save Options.
 
 The compat `sensor.<entry>_network_scanner` no longer carries the full god-blob of every feature. After upgrading, its attributes are limited to network-host data (`devices`, `wan_ip`, `wan_ip6`, `gateway_mac`, `partial`, `scan_duration`). Per-feature data lives on the dedicated sensors:
 
