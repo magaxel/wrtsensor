@@ -52,7 +52,7 @@ from .const import (
     COLLECTOR_REMOTE_PATH,
     COLLECTOR_SCRIPT_NAME,
     CONF_AP_HOSTS,
-    CONF_ASU_INTERVAL_S,
+    CONF_ASU_INTERVAL_H,
     CONF_DISCONNECT_THRESHOLD,
     CONF_ENABLE_ASU,
     CONF_ENABLE_DNS_STATS,
@@ -66,7 +66,7 @@ from .const import (
     CONF_SSH_KEY_PATH,
     CONF_WAN_IFACE,
     CONF_WG_STALE_THRESHOLD,
-    DEFAULT_ASU_INTERVAL_S,
+    DEFAULT_ASU_INTERVAL_H,
     DEFAULT_DHCP_LEASES,
     DEFAULT_DISCONNECT_THRESHOLD,
     DEFAULT_ENABLE_ASU,
@@ -812,8 +812,8 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self._enable_asu = bool(data.get(CONF_ENABLE_ASU, DEFAULT_ENABLE_ASU))
         self._asu_interval_s = int(
-            data.get(CONF_ASU_INTERVAL_S, DEFAULT_ASU_INTERVAL_S)
-        )
+            data.get(CONF_ASU_INTERVAL_H, DEFAULT_ASU_INTERVAL_H)
+        ) * 3600
         self._asu_cache: dict[str, dict[str, Any]] = {}  # host → {info, ts}
         self._asu_task: asyncio.Task | None = None
         self._asu_missing_tool_logged: set[str] = set()
