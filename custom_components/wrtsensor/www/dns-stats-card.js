@@ -5,7 +5,7 @@ import {
   nothing,
 } from "https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js";
 
-const CARD_VERSION = "3.0.0";
+const CARD_VERSION = "3.0.1";
 const CARD_TYPE = "dns-stats-card";
 const EDITOR_TYPE = `${CARD_TYPE}-editor`;
 const DEFAULT_PERIOD = "last_24h";
@@ -34,6 +34,30 @@ const fmtMs = (n) => (num(n) == null ? "—" : `${Math.round(num(n))} ms`);
 const fmtRateUnit = (n) => (num(n) == null ? "—" : `${fmtRate(n)}/s`);
 
 const normalizePeriod = (period) => (VALID_PERIODS.has(period) ? period : DEFAULT_PERIOD);
+
+const hasDnsStats = (state) => state?.attributes?.dns_stats;
+
+const findDnsStatsState = (hass, entity) => {
+  const configured = hass.states[entity];
+  if (hasDnsStats(configured)) return { entity, state: configured };
+
+  const candidates = Object.entries(hass.states).filter(
+    ([id, state]) =>
+      id.startsWith("sensor.") &&
+      hasDnsStats(state) &&
+      !["unavailable", "unknown"].includes(state.state),
+  );
+  const preferred =
+    candidates.find(([id]) => id.endsWith("_dns_cache_hit_pct")) ??
+    candidates.find(([id]) => id.endsWith("_dns_hit_pct")) ??
+    candidates.find(([id]) => id.includes("dns_cache_hit"));
+
+  if (preferred) {
+    const [fallbackEntity, fallbackState] = preferred;
+    return { entity: fallbackEntity, state: fallbackState };
+  }
+  return { entity, state: configured };
+};
 
 const pickPeriod = (dns, period, entity) => {
   if (period === "lifetime" && entity && !warnedLifetimeEntities.has(entity)) {
@@ -209,15 +233,14 @@ class DnsStatsCard extends LitElement {
     if (!changed.has("hass")) return false;
     const old = changed.get("hass");
     if (!old) return true;
-    const e = this._config.entity;
-    return old.states?.[e] !== this.hass.states?.[e];
+    return true;
   }
 
   render() {
     if (!this._config) return nothing;
     if (!this.hass) return html`<ha-card><div class="skeleton"></div></ha-card>`;
 
-    const state = this.hass.states[this._config.entity];
+    const { entity, state } = findDnsStatsState(this.hass, this._config.entity);
     if (!state) {
       return html`
         <ha-card>
@@ -243,12 +266,14 @@ class DnsStatsCard extends LitElement {
           <div class="unavailable">
             DNS stats unavailable. Enable "Collect DNS stats" in the wrtsensor
             integration options and make sure an OpenWrt gateway is configured.
+            If this card still points at the network scanner entity, select the
+            DNS Cache Hit % sensor instead.
           </div>
         </ha-card>
       `;
     }
 
-    const period = pickPeriod(d, this._config.period, this._config.entity);
+    const period = pickPeriod(d, this._config.period, entity);
     const stats = period.data;
     if (!stats) {
       return html`
@@ -345,9 +370,16 @@ class DnsStatsCard extends LitElement {
     return document.createElement(EDITOR_TYPE);
   }
 
-  static getStubConfig() {
+  static getStubConfig(hass) {
+    let entity = "sensor.wrtsensor_dns_cache_hit_pct";
+    if (hass?.states) {
+      const match = Object.entries(hass.states).find(
+        ([id, state]) => id.startsWith("sensor.") && hasDnsStats(state),
+      )?.[0];
+      if (match) entity = match;
+    }
     return {
-      entity: "",
+      entity,
       title: "DNS Cache",
       period: DEFAULT_PERIOD,
       show_ipv6: false,

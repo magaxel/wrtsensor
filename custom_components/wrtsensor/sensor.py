@@ -33,14 +33,18 @@ async def async_setup_entry(
     coordinator: WrtsensorCoordinator = hass.data[DOMAIN][entry.entry_id]
     tracked_hosts: set[str] = set()
 
-    entities: list[SensorEntity] = [
-        WrtsensorNetworkScannerSensor(coordinator, entry),
-    ]
-    # Gateway-only sensors: WAN bandwidth + DNS stats require the router.
-    if coordinator._gateway_host:
+    entities: list[SensorEntity] = []
+    if getattr(coordinator, "_enable_network_hosts", True):
+        entities.append(WrtsensorNetworkScannerSensor(coordinator, entry))
+    if coordinator._gateway_host and getattr(
+        coordinator, "_enable_wan_bandwidth", True
+    ):
         entities += [
             WrtsensorWANDownloadSensor(coordinator, entry),
             WrtsensorWANUploadSensor(coordinator, entry),
+        ]
+    if coordinator._gateway_host and getattr(coordinator, "_enable_dns_stats", True):
+        entities += [
             WrtsensorDNSHitPctSensor(coordinator, entry),
             WrtsensorDNSLatencySensor(coordinator, entry),
         ]
@@ -122,10 +126,6 @@ class WrtsensorNetworkScannerSensor(_WrtsensorBase):
         "wan_ip",
         "wan_ip6",
         "gateway_mac",
-        "wan_rx_rate",
-        "wan_tx_rate",
-        "host_stats",
-        "dns_stats",
         "scan_duration",
         "partial",
     )
@@ -182,6 +182,7 @@ class WrtsensorWANUploadSensor(_WrtsensorBase):
 
 class WrtsensorDNSHitPctSensor(_WrtsensorBase):
     _attr_name = "DNS Cache Hit %"
+    _attr_suggested_object_id = "wrtsensor_dns_cache_hit_pct"
     _attr_native_unit_of_measurement = "%"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:dns"
@@ -204,6 +205,11 @@ class WrtsensorDNSHitPctSensor(_WrtsensorBase):
             if val is not None:
                 return val
         return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        data = self.coordinator.data or {}
+        return {"dns_stats": data.get("dns_stats")}
 
 
 class WrtsensorDNSLatencySensor(_WrtsensorBase):

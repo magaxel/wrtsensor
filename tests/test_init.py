@@ -333,6 +333,9 @@ def test_setup_entry_does_not_touch_lovelace_storage():
     class _FakeCoordinator:
         def __init__(self, hass, entry):
             self.data = {"host_stats": {}}
+            self._enable_network_hosts = True
+            self._enable_wan_bandwidth = True
+            self._enable_dns_stats = True
             self._enable_wireguard = False
             self._enable_asu = False
 

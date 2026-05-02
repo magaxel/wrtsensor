@@ -27,6 +27,9 @@ async def async_setup_entry(
 ) -> None:
     coordinator: WrtsensorCoordinator = hass.data[DOMAIN][entry.entry_id]
 
+    if not coordinator._enable_network_hosts:
+        return
+
     raw = entry.options.get(CONF_PRESENCE_MACS, "")
     macs = [m.strip().lower() for m in raw.split(",") if m.strip()]
 

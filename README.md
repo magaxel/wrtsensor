@@ -27,18 +27,20 @@ At least one host (gateway or AP) must be configured.
 
 ## What it collects
 
-Per scan (every 60 s) the integration produces a single JSON object with:
+Per scan (every 60 s) the integration produces a single JSON object. Every collection block can be toggled independently in **Settings → Devices & Services → wrtsensor → Configure** — disable a feature and its SSH-side commands and HA entities both disappear:
 
-- **Devices** — MAC, IPv4, IPv6, hostname, vendor (OUI lookup), connection type, online status.
-- **Wi-Fi metrics** — for associated clients: AP, band, signal, noise, SNR, TX/RX PHY rates, expected throughput, per-station byte counters.
+- **Network hosts** *(optional, on by default)* — MAC, IPv4, IPv6, hostname, vendor (OUI lookup), connection type, online status, plus all per-client device_trackers and presence binary sensors. Required by `network-topology-card`, `network-table-card`, and `network-events-card`. Disabling skips ARP/NDP/Wi-Fi station/conntrack collection on every host.
+- **Wi-Fi metrics** — for associated clients: AP, band, signal, noise, SNR, TX/RX PHY rates, expected throughput, per-station byte counters. Tied to Network hosts.
 - **Host stats** *(optional, on by default)* — CPU%, RAM%, root disk%, hardware model, and board name for the gateway and each AP. The hardware model (from `ubus call system board`) is shown in the HA device registry for each host's sensor cluster. Disable **Collect host metrics** in Options to skip CPU/RAM/storage collection and remove those sensors.
-- **WAN** — IPv4, IPv6, live RX/TX rate, cumulative byte totals.
-- **DNS cache** — dnsmasq cache hit/miss counts for 24h, 8h, 1h, and last-scan windows, per-window upstream query counts, per-upstream latency, and weighted average upstream latency.
+- **WAN bandwidth** *(optional, on by default)* — gateway WAN interface RX/TX rate and cumulative byte totals. Disable **Collect WAN bandwidth** to skip the byte-counter reads and remove the WAN download/upload sensors.
+- **DNS cache** *(optional, on by default)* — dnsmasq cache hit/miss counts for 24h, 8h, 1h, and last-scan windows, per-window upstream query counts, per-upstream latency, and weighted average upstream latency. Required by `dns-stats-card`.
 - **WireGuard** *(optional, off by default)* — per-peer endpoint, allowed IPs, last-handshake age, transfer counters, live throughput, and online state. Auto-detected on the gateway and each AP every scan via secret-free `wg show` subcommands; private and preshared keys are never read into HA.
 - **Firmware updates** *(optional, off by default)* — one HA `update` entity per OpenWrt host, backed by the device's `owut` tool. Each entity reports the installed and latest available OpenWrt version; clicking the entity exposes a link to that host's LuCI Attended Sysupgrade page where you can apply the update. Probes `https://sysupgrade.openwrt.org` from each device every 6 h by default.
-- **Event log** — HACS integration keeps the most recent 500 events in memory only (cleared on HA restart/reload). The manual `command_line` install keeps its separate JSONL event file.
+- **Event log** — HACS integration keeps the most recent 500 events in memory only (cleared on HA restart/reload). Tied to Network hosts (the events feed lives on the network scanner sensor). The manual `command_line` install keeps its separate JSONL event file.
 
-All of this comes from a single 20 s SSH call to the gateway plus parallel SSH calls to each AP — no redundant shell sensors.
+Initial setup creates the full default entity set; users wanting a "DNS-only" or "WireGuard-only" install configure that via **Settings → Devices & Services → wrtsensor → Configure** after first run.
+
+All enabled blocks come from a single 20 s SSH call to the gateway plus parallel SSH calls to each AP — no redundant shell sensors.
 
 ## Requirements
 
@@ -68,7 +70,7 @@ All of this comes from a single 20 s SSH call to the gateway plus parallel SSH c
    - `/wrtsensor_static/network-table-card.js?v=1.0.0` — JavaScript Module
    - `/wrtsensor_static/network-topology-card.js?v=1.1.1` — JavaScript Module
    - `/wrtsensor_static/network-events-card.js?v=1.0.0` — JavaScript Module
-   - `/wrtsensor_static/dns-stats-card.js?v=1.0.0` — JavaScript Module
+   - `/wrtsensor_static/dns-stats-card.js?v=3.0.1` — JavaScript Module
    - `/wrtsensor_static/wireguard-card.js?v=1.1.0` — JavaScript Module *(only needed if you enable the WireGuard option)*
 
 > If key authentication isn't set up yet, the config flow will ask for a password once and provision the public key into `/etc/dropbear/authorized_keys` on each OpenWrt box for you. The password is never stored.
@@ -271,20 +273,36 @@ Breaking change: host CPU/RAM/Disk entities were reset to avoid duplicated host 
 
 ## Entities
 
-| Entity ID | What it is |
-|-----------|-----------|
-| `sensor.<entry>_network_scanner` | Main sensor for one config entry — device count as state, full JSON blob as attributes. |
-| `sensor.<entry>_wan_download` | WAN RX rate in Mbit/s |
-| `sensor.<entry>_wan_upload` | WAN TX rate in Mbit/s |
-| `sensor.<entry>_dns_cache_hit` | DNS cache hit % — `unknown` when **Collect DNS stats** option is off |
-| `sensor.<entry>_dns_latency` | Weighted upstream DNS latency in ms — `unknown` when **Collect DNS stats** option is off |
-| `sensor.wrtsensor_<host>_cpu` | CPU % per host, e.g. `sensor.wrtsensor_192_0_2_1_cpu` — requires **Collect host metrics** |
-| `sensor.wrtsensor_<host>_ram` | RAM % per host — requires **Collect host metrics** |
-| `sensor.wrtsensor_<host>_disk` | Disk % per host — requires **Collect host metrics** |
-| `binary_sensor.<entry>_presence_<mac>` | Online/offline per configured MAC (set in Options) |
-| `device_tracker.<hostname>` | home/not_home tracker per discovered device — **disabled by default** |
+Each toggle in Options owns a set of entities — turn the toggle off and the entities are removed from the registry on reload.
+
+| Entity ID | Owning option | What it is |
+|-----------|---------------|-----------|
+| `sensor.<entry>_network_scanner` | Track LAN/Wi-Fi clients | Device count as state; `devices`, `wan_ip`, `wan_ip6`, `gateway_mac`, `partial`, `scan_duration` as attributes. Powers the topology, table, and events cards. |
+| `device_tracker.<hostname>` | Track LAN/Wi-Fi clients | home/not_home per discovered device — **disabled by default** |
+| `binary_sensor.<entry>_presence_<mac>` | Track LAN/Wi-Fi clients | Online/offline per configured MAC (set in Options) |
+| `sensor.<entry>_wan_download` | Collect WAN bandwidth | WAN RX rate in Mbit/s |
+| `sensor.<entry>_wan_upload` | Collect WAN bandwidth | WAN TX rate in Mbit/s |
+| `sensor.<entry>_dns_cache_hit_pct` | Collect DNS stats | DNS cache hit %; `dns_stats` blob in attributes — powers `dns-stats-card`. |
+| `sensor.<entry>_dns_latency` | Collect DNS stats | Weighted upstream DNS latency in ms |
+| `sensor.wrtsensor_<host>_cpu` | Collect host metrics | CPU % per host, e.g. `sensor.wrtsensor_192_0_2_1_cpu` |
+| `sensor.wrtsensor_<host>_ram` | Collect host metrics | RAM % per host |
+| `sensor.wrtsensor_<host>_disk` | Collect host metrics | Disk % per host |
+| `sensor.<entry>_wireguard` | Show WireGuard connections | Live peer count; `wireguard` blob in attributes — powers `wireguard-card`. |
+| `device_tracker.<entry>_wgpeer_<id>` | Show WireGuard connections | home/not_home per WG peer |
+| `update.<entry>_<host>_firmware` | Check for OpenWrt firmware updates | Per-host firmware update entity backed by `owut check` |
 
 Device tracker entities are named after the device hostname (e.g. `device_tracker.my_phone`) and are disabled by default. HA's scanner entity base class does this to avoid flooding the registry when dozens of devices are discovered. To use a tracker for Person presence, go to **Settings → Entities**, enable "Show disabled entities", find the device, and enable it. The entity can then be added to a Person.
+
+### Upgrading from earlier versions — dashboard migration
+
+The compat `sensor.<entry>_network_scanner` no longer carries the full god-blob of every feature. After upgrading, its attributes are limited to network-host data (`devices`, `wan_ip`, `wan_ip6`, `gateway_mac`, `partial`, `scan_duration`). Per-feature data lives on the dedicated sensors:
+
+- `dns_stats` is now on `sensor.<entry>_dns_cache_hit_pct` (consumed by `dns-stats-card`).
+- `host_stats` is on the per-host CPU/RAM/Disk sensors.
+- `wireguard` is on `sensor.<entry>_wireguard` (consumed by `wireguard-card`).
+- `wan_rx_rate` / `wan_tx_rate` are on the WAN download/upload sensors.
+
+If you have an existing `dns-stats-card` configured with `entity: sensor.<entry>_network_scanner`, edit the card and change the `entity:` field to `sensor.<entry>_dns_cache_hit_pct` — or remove and re-add the card to pick up the new default. Until you do, the card displays "DNS stats unavailable…" since the attribute it expects is no longer on the network scanner sensor. Same applies to any custom dashboards or templates reading `host_stats` / `wireguard` / `wan_rx_rate` / `wan_tx_rate` from the network scanner — those keys are gone; data is on the dedicated entities.
 
 ## Network assumptions
 

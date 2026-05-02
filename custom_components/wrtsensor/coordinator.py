@@ -57,6 +57,8 @@ from .const import (
     CONF_ENABLE_ASU,
     CONF_ENABLE_DNS_STATS,
     CONF_ENABLE_HOST_METRICS,
+    CONF_ENABLE_NETWORK_HOSTS,
+    CONF_ENABLE_WAN_BANDWIDTH,
     CONF_ENABLE_WIREGUARD,
     CONF_GATEWAY_HOST,
     CONF_LAN_IFACE,
@@ -70,6 +72,8 @@ from .const import (
     DEFAULT_ENABLE_ASU,
     DEFAULT_ENABLE_DNS_STATS,
     DEFAULT_ENABLE_HOST_METRICS,
+    DEFAULT_ENABLE_NETWORK_HOSTS,
+    DEFAULT_ENABLE_WAN_BANDWIDTH,
     DEFAULT_ENABLE_WIREGUARD,
     DEFAULT_LAN_IFACE,
     DEFAULT_SCAN_INTERVAL,
@@ -788,6 +792,12 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._disconnect_threshold_s = int(
             data.get(CONF_DISCONNECT_THRESHOLD, DEFAULT_DISCONNECT_THRESHOLD)
         )
+        self._enable_network_hosts = bool(
+            data.get(CONF_ENABLE_NETWORK_HOSTS, DEFAULT_ENABLE_NETWORK_HOSTS)
+        )
+        self._enable_wan_bandwidth = bool(
+            data.get(CONF_ENABLE_WAN_BANDWIDTH, DEFAULT_ENABLE_WAN_BANDWIDTH)
+        )
         self._enable_dns_stats = bool(
             data.get(CONF_ENABLE_DNS_STATS, DEFAULT_ENABLE_DNS_STATS)
         )
@@ -1026,12 +1036,17 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         wi = self._wan_iface
         dhcp = DEFAULT_DHCP_LEASES
         cmd = (
-            f"echo '---LEASES---'; cat {dhcp} 2>/dev/null; "
-            f"echo '---ARP---'; ip -4 neigh show dev {li} 2>/dev/null; "
-            "echo '---NDP---'; "
-            f"{{ ping6 -c2 -W1 -I {li} ff02::1 2>/dev/null || ping -6 -c2 -W1 -I {li} ff02::1 2>/dev/null; }} >/dev/null; "
-            f"ip -6 neigh show dev {li} 2>/dev/null | grep -v '^fe80'; "
-            "echo '---GW---'; "
+            "echo '---PROBE---'; "
+            + (
+                f"echo '---LEASES---'; cat {dhcp} 2>/dev/null; "
+                f"echo '---ARP---'; ip -4 neigh show dev {li} 2>/dev/null; "
+                "echo '---NDP---'; "
+                f"{{ ping6 -c2 -W1 -I {li} ff02::1 2>/dev/null || ping -6 -c2 -W1 -I {li} ff02::1 2>/dev/null; }} >/dev/null; "
+                f"ip -6 neigh show dev {li} 2>/dev/null | grep -v '^fe80'; "
+                if self._enable_network_hosts
+                else ""
+            )
+            + "echo '---GW---'; "
             f"ip addr show {li} 2>/dev/null | grep 'link/ether' | awk '{{print $2}}'; "
             f"ip addr show {li} 2>/dev/null | grep ' inet ' | awk '{{split($2,a,\"/\"); print a[1]}}'; "
             "cat /proc/sys/kernel/hostname; "
@@ -1039,9 +1054,13 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "echo '---WAN---'; "
             f"ip addr show {wi} 2>/dev/null | grep ' inet ' | awk '{{split($2,a,\"/\"); print a[1]}}'; "
             f"ip -6 route 2>/dev/null | awk '/default/ {{for(i=1;i<=NF;i++) if($i==\"dev\") {{print $(i+1); exit}}}}' | xargs -I{{}} ip addr show {{}} 2>/dev/null | grep ' inet6 ' | grep -v ' fe80' | awk '{{split($2,a,\"/\"); print a[1]}}' | head -1; "
-            "echo '---BW---'; "
-            f"cat /sys/class/net/{wi}/statistics/rx_bytes 2>/dev/null; "
-            f"cat /sys/class/net/{wi}/statistics/tx_bytes 2>/dev/null; "
+            + (
+                "echo '---BW---'; "
+                f"cat /sys/class/net/{wi}/statistics/rx_bytes 2>/dev/null; "
+                f"cat /sys/class/net/{wi}/statistics/tx_bytes 2>/dev/null; "
+                if self._enable_wan_bandwidth
+                else ""
+            )
             + (
                 "echo '---HOSTSTAT---'; "
                 "grep '^cpu ' /proc/stat 2>/dev/null; "
@@ -1057,11 +1076,15 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if self._enable_dns_stats
                 else ""
             )
-            + "echo '---CONNTRACK---'; cat /proc/net/nf_conntrack 2>/dev/null; "
-            "echo '---BOARD---'; ubus call system board 2>/dev/null"
+            + (
+                "echo '---CONNTRACK---'; cat /proc/net/nf_conntrack 2>/dev/null; "
+                if self._enable_network_hosts
+                else ""
+            )
+            + "echo '---BOARD---'; ubus call system board 2>/dev/null"
         )
         out = await self._ssh_run(self._gateway_host, cmd, timeout=25)
-        if not out or "---LEASES---" not in out:
+        if not out or "---PROBE---" not in out:
             return {}
         sections: dict[str, list[str]] = {}
         current = None
@@ -1101,10 +1124,14 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         li = self._lan_iface
         cmd = (
             "echo '---HOST---'; cat /proc/sys/kernel/hostname; "
-            f"echo '---IP6---'; ip addr show {li} 2>/dev/null | grep ' inet6 ' | grep -v ' fe80' | awk '{{split($2,a,\"/\"); print a[1]}}'; "
-            f"echo '---ARP---'; ip -4 neigh show dev {li} 2>/dev/null; "
-            "echo '---NDP---'; "
-            f"ip -6 neigh show dev {li} 2>/dev/null | grep -v '^fe80'"
+            f"echo '---IP6---'; ip addr show {li} 2>/dev/null | grep ' inet6 ' | grep -v ' fe80' | awk '{{split($2,a,\"/\"); print a[1]}}'"
+            + (
+                f"; echo '---ARP---'; ip -4 neigh show dev {li} 2>/dev/null; "
+                "echo '---NDP---'; "
+                f"ip -6 neigh show dev {li} 2>/dev/null | grep -v '^fe80'"
+                if self._enable_network_hosts
+                else ""
+            )
         )
         out = await self._ssh_run(host, cmd, timeout=10)
         sections: dict[str, list[str]] = {}
@@ -1691,35 +1718,37 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         gateway_absent = self._gateway_host is None
         if not gw_data and not gateway_absent:
             # Gateway configured but unreachable — serve cached device list
-            if self._prev_state:
-                cached_devices = [
-                    Device(
-                        mac=e.mac,
-                        ip=e.ip,
-                        ip6=e.ip6,
-                        hostname=e.hostname,
-                        vendor=e.vendor,
-                        connection=e.connection,
-                        ap=e.ap,
-                        band=e.band,
-                        channel=e.channel,
-                        essid=e.essid,
-                        signal=e.signal,
-                        online=e.online,
-                    )
-                    for e in self._prev_state.values()
-                ]
+            if self._prev_state or not self._enable_network_hosts:
                 payload: dict[str, Any] = {
-                    "device_count": sum(1 for d in cached_devices if d.online),
                     "scan_duration": round(time.time() - scan_start, 2),
-                    "wan_ip": "",
-                    "wan_ip6": "",
-                    "gateway_mac": "",
-                    "wan_rx_rate": None,
-                    "wan_tx_rate": None,
-                    "devices": [asdict(d) for d in cached_devices],
                     "partial": True,
                 }
+                if self._enable_network_hosts:
+                    cached_devices = [
+                        Device(
+                            mac=e.mac,
+                            ip=e.ip,
+                            ip6=e.ip6,
+                            hostname=e.hostname,
+                            vendor=e.vendor,
+                            connection=e.connection,
+                            ap=e.ap,
+                            band=e.band,
+                            channel=e.channel,
+                            essid=e.essid,
+                            signal=e.signal,
+                            online=e.online,
+                        )
+                        for e in self._prev_state.values()
+                    ]
+                    payload["device_count"] = sum(1 for d in cached_devices if d.online)
+                    payload["wan_ip"] = ""
+                    payload["wan_ip6"] = ""
+                    payload["gateway_mac"] = ""
+                    payload["devices"] = [asdict(d) for d in cached_devices]
+                if self._enable_wan_bandwidth:
+                    payload["wan_rx_rate"] = None
+                    payload["wan_tx_rate"] = None
                 if self._enable_host_metrics:
                     payload["host_stats"] = {}
                 if self._enable_dns_stats:
@@ -1733,62 +1762,68 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return payload
             raise UpdateFailed("Gateway unreachable")
 
+        leases: dict = {}
+        arp_states: dict = {}
+        stale: set = set()
+        arp_ips: dict = {}
+        ndp: dict = {}
         if gw_data:
-            leases = parse_leases(gw_data["leases"])
-            arp_states, stale, arp_ips = parse_arp(gw_data["arp"])
-            ndp = parse_ndp(gw_data["ndp"])
+            if self._enable_network_hosts:
+                leases = parse_leases(gw_data.get("leases", []))
+                arp_states, stale, arp_ips = parse_arp(gw_data.get("arp", []))
+                ndp = parse_ndp(gw_data.get("ndp", []))
             gw_board_json = gw_data.get("gw_board", "")
             if gw_board_json and self._gateway_host:
                 gw_model, gw_board_name = parse_board_model("BOARD|" + gw_board_json)
                 if gw_model:
                     self._host_models[self._gateway_host] = (gw_model, gw_board_name)
-        else:
-            leases = {}
-            arp_states = {}
-            stale = set()
-            arp_ips = {}
-            ndp = {}
 
-        # Ping stale devices
-        stale_ips = []
-        for mac in stale:
-            ip = leases.get(mac, {}).get("ip") or arp_ips.get(mac, "")
-            if ip and (
-                self._prev_state.get(mac) is None
-                or self._prev_state[mac].miss < DISCONNECT_MISS_THRESHOLD
-            ):
-                stale_ips.append(ip)
-        if stale_ips and gw_data:
-            refreshed = await self._ping_stale(stale_ips)
-            if refreshed:
-                arp_states, stale, arp_ips = parse_arp(refreshed)
+        arp_hostnames: dict[str, str] = {}
+        if self._enable_network_hosts:
+            # Ping stale devices
+            stale_ips = []
+            for mac in stale:
+                ip = leases.get(mac, {}).get("ip") or arp_ips.get(mac, "")
+                if ip and (
+                    self._prev_state.get(mac) is None
+                    or self._prev_state[mac].miss < DISCONNECT_MISS_THRESHOLD
+                ):
+                    stale_ips.append(ip)
+            if stale_ips and gw_data:
+                refreshed = await self._ping_stale(stale_ips)
+                if refreshed:
+                    arp_states, stale, arp_ips = parse_arp(refreshed)
 
-        # Resolve missing hostnames
-        lease_macs = set(leases.keys())
-        arp_only_macs = {mac for mac in arp_ips if mac not in lease_macs}
-        missing_ips = [
-            info["ip"]
-            for info in leases.values()
-            if not info["hostname"] and info["ip"]
-        ] + [
-            arp_ips[mac] for mac in arp_only_macs if arp_ips[mac] not in self._dns_cache
-        ]
-        if missing_ips and gw_data:
-            resolved = await self._resolve_hostnames(missing_ips)
-            for mac, info in leases.items():
-                if not info["hostname"] and info["ip"] in resolved:
-                    info["hostname"] = resolved[info["ip"]]
-            await self.hass.async_add_executor_job(
-                save_kv_cache, self._dns_cache_path, self._dns_cache
-            )
-        arp_hostnames = {
-            mac: self._dns_cache.get(arp_ips[mac], "") for mac in arp_only_macs
-        }
+            # Resolve missing hostnames
+            lease_macs = set(leases.keys())
+            arp_only_macs = {mac for mac in arp_ips if mac not in lease_macs}
+            missing_ips = [
+                info["ip"]
+                for info in leases.values()
+                if not info["hostname"] and info["ip"]
+            ] + [
+                arp_ips[mac]
+                for mac in arp_only_macs
+                if arp_ips[mac] not in self._dns_cache
+            ]
+            if missing_ips and gw_data:
+                resolved = await self._resolve_hostnames(missing_ips)
+                for mac, info in leases.items():
+                    if not info["hostname"] and info["ip"] in resolved:
+                        info["hostname"] = resolved[info["ip"]]
+                await self.hass.async_add_executor_job(
+                    save_kv_cache, self._dns_cache_path, self._dns_cache
+                )
+            arp_hostnames = {
+                mac: self._dns_cache.get(arp_ips[mac], "") for mac in arp_only_macs
+            }
 
-        # Collect WiFi from gateway + all APs in parallel
+        collect_host_bundle = self._enable_network_hosts or self._enable_host_metrics
+
+        # Collect AP identity/neigh data only for features that need host/device context.
         name_map: dict[str, str] = {}
         ap_ip6_map: dict[str, str] = {}
-        if self._ap_hosts:
+        if collect_host_bundle and self._ap_hosts:
             ap_info_results = await asyncio.gather(
                 *[self._get_ap_info(h) for h in self._ap_hosts], return_exceptions=True
             )
@@ -1803,7 +1838,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     ap_ip6_map[host] = ip6
                 # Gateway-less mode: union per-AP neigh tables into master maps.
                 # Prefer REACHABLE over STALE when same MAC seen on multiple APs.
-                if gateway_absent:
+                if self._enable_network_hosts and gateway_absent:
                     ap_states, ap_stale, ap_arp_ips = parse_arp(ap_arp_lines)
                     for mac, state in ap_states.items():
                         if mac not in arp_states or (
@@ -1818,195 +1853,213 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     for mac, ip6_addr in parse_ndp(ap_ndp_lines).items():
                         ndp.setdefault(mac, ip6_addr)
 
-        wifi_tasks: list = []
-        if self._gateway_host:
-            wifi_tasks.append(self._collect_wifi(self._gateway_host, "Gateway"))
-        for host in self._ap_hosts:
-            wifi_tasks.append(self._collect_wifi(host, name_map.get(host, host)))
-        wifi_results = await asyncio.gather(*wifi_tasks, return_exceptions=True)
-
         all_wifi: list[dict] = []
         alive_ap_ips: list[str] = []
         ap_hoststats: dict[str, list[str]] = {}
 
-        idx = 0
-        if self._gateway_host:
-            gw_wifi_result = wifi_results[idx]
-            idx += 1
-            if not isinstance(gw_wifi_result, Exception):
-                entries, hoststat = gw_wifi_result
-                all_wifi.extend(entries)
+        if collect_host_bundle:
+            # Collect WiFi stations and/or host metrics from gateway + all APs.
+            wifi_tasks: list = []
+            if self._gateway_host:
+                wifi_tasks.append(self._collect_wifi(self._gateway_host, "Gateway"))
+            for host in self._ap_hosts:
+                wifi_tasks.append(self._collect_wifi(host, name_map.get(host, host)))
+            wifi_results = await asyncio.gather(*wifi_tasks, return_exceptions=True)
+
+            idx = 0
+            if self._gateway_host:
+                gw_wifi_result = wifi_results[idx]
+                idx += 1
+                if not isinstance(gw_wifi_result, Exception):
+                    entries, hoststat = gw_wifi_result
+                    if self._enable_network_hosts:
+                        all_wifi.extend(entries)
+                    if hoststat:
+                        ap_hoststats[self._gateway_host] = hoststat
+
+            for host in self._ap_hosts:
+                result = wifi_results[idx]
+                idx += 1
+                if isinstance(result, Exception):
+                    continue
+                entries, hoststat = result
+                if self._enable_network_hosts:
+                    all_wifi.extend(entries)
+                ip = host
                 if hoststat:
-                    ap_hoststats[self._gateway_host] = hoststat
+                    ap_hoststats[ip] = hoststat
+                if self._enable_network_hosts and (entries or hoststat):
+                    alive_ap_ips.append(ip)
 
-        for host in self._ap_hosts:
-            result = wifi_results[idx]
-            idx += 1
-            if isinstance(result, Exception):
-                continue
-            entries, hoststat = result
-            all_wifi.extend(entries)
-            ip = host
-            if hoststat:
-                ap_hoststats[ip] = hoststat
-            if entries or hoststat:
-                alive_ap_ips.append(ip)
+        active_ap_names = set()
+        if self._enable_network_hosts:
+            active_ap_names = {"Gateway"} if self._gateway_host else set()
+            for host in self._ap_hosts:
+                active_ap_names.add(host)
+                cached_name = self._ap_name_cache.get(host)
+                if cached_name:
+                    active_ap_names.add(cached_name)
+                mapped_name = name_map.get(host)
+                if mapped_name:
+                    active_ap_names.add(mapped_name)
 
-        active_ap_names = {"Gateway"} if self._gateway_host else set()
-        for host in self._ap_hosts:
-            active_ap_names.add(host)
-            cached_name = self._ap_name_cache.get(host)
-            if cached_name:
-                active_ap_names.add(cached_name)
-            mapped_name = name_map.get(host)
-            if mapped_name:
-                active_ap_names.add(mapped_name)
-
-        # Inject AP IPv6 into NDP
-        for ap_host, ap_ip6 in ap_ip6_map.items():
-            matched = False
-            for mac, info in leases.items():
-                if info["ip"] == ap_host:
-                    ndp[mac] = ap_ip6
-                    matched = True
-                    break
-            if not matched:
-                for mac, ip in arp_ips.items():
-                    if ip == ap_host:
-                        ndp[mac] = ap_ip6
-                        break
-
-        # Vendor lookup
-        all_macs = (
-            set(leases.keys()) | {w["mac"] for w in all_wifi} | set(arp_ips.keys())
-        )
-        lookup_vendors(all_macs, self._vendor_cache, self._oui_db)
-        await self.hass.async_add_executor_job(
-            save_kv_cache, self._vendor_cache_path, self._vendor_cache
-        )
-
-        # WAN bandwidth
-        if gw_data:
+        # WAN bandwidth (independent of network_hosts; gated by enable_wan_bandwidth)
+        rx_rate: float | None = None
+        tx_rate: float | None = None
+        wan_rx_total = 0
+        wan_tx_total = 0
+        wan_bw_since = int(time.time())
+        if self._enable_wan_bandwidth and gw_data:
             rx_rate, tx_rate, wan_rx_total, wan_tx_total, wan_bw_since = (
-                self._compute_wan_rates(gw_data["rx_bytes"], gw_data["tx_bytes"])
+                self._compute_wan_rates(
+                    gw_data.get("rx_bytes"), gw_data.get("tx_bytes")
+                )
             )
-        else:
-            rx_rate = tx_rate = None
-            wan_rx_total = wan_tx_total = 0
-            wan_bw_since = int(time.time())
 
-        # Per-device bandwidth
-        wifi_bytes: dict[str, dict[str, int]] = {}
-        wifi_signals: dict[str, int] = {}
-        for w in all_wifi:
-            mac = w["mac"]
-            sig = w.get("signal") or -999
-            if mac not in wifi_bytes or sig > wifi_signals.get(mac, -999):
-                wifi_bytes[mac] = {
-                    "ul": w.get("sta_ul_bytes", 0),
-                    "dl": w.get("sta_dl_bytes", 0),
-                }
-                wifi_signals[mac] = sig
-        ip_to_mac = {info["ip"]: mac for mac, info in leases.items() if info.get("ip")}
-        ip_to_mac.update({ip: mac for mac, ip in arp_ips.items()})
-        wired_bytes: dict[str, dict[str, int]] = {}
-        conntrack_lines = gw_data.get("conntrack", []) if gw_data else []
-        for ip, bw in parse_conntrack(conntrack_lines).items():
-            wmac = ip_to_mac.get(ip)
-            if wmac and wmac not in wifi_bytes:
-                wired_bytes[wmac] = bw
-        device_rates, device_accum = self._compute_device_rates(wifi_bytes, wired_bytes)
-
-        # Build device list
         gw_mac = gw_data.get("gw_mac", "") if gw_data else ""
-        gw_ip = gw_data.get("gw_ip", "") if gw_data else ""
-        gw_hostname = gw_data.get("gw_hostname", "") if gw_data else ""
-        gw_ip6 = gw_data.get("gw_ip6", "") if gw_data else ""
-        devices = build_devices(
-            leases,
-            arp_states,
-            stale,
-            all_wifi,
-            self._vendor_cache,
-            gw_mac,
-            gw_ip,
-            gw_hostname,
-            alive_ap_ips,
-            ndp=ndp,
-            gw_ip6=gw_ip6,
-            arp_ips=arp_ips,
-            arp_hostnames=arp_hostnames,
-            prev_state=self._prev_state,
-            rates=device_rates,
-            active_ap_names=active_ap_names,
-        )
+        devices: list[Device] = []
 
-        # Restore identity for devices that rotated their random MAC
-        devices = remap_random_macs(
-            devices, self._prev_state, self._disconnect_threshold_miss
-        )
+        if self._enable_network_hosts:
+            # Inject AP IPv6 into NDP
+            for ap_host, ap_ip6 in ap_ip6_map.items():
+                matched = False
+                for mac, info in leases.items():
+                    if info["ip"] == ap_host:
+                        ndp[mac] = ap_ip6
+                        matched = True
+                        break
+                if not matched:
+                    for mac, ip in arp_ips.items():
+                        if ip == ap_host:
+                            ndp[mac] = ap_ip6
+                            break
 
-        # Aggregate AP bandwidth; inject WAN onto gateway
-        ap_rx: dict[str, int] = {}
-        ap_tx: dict[str, int] = {}
-        for d in devices:
-            if d.connection == "wifi" and d.ap and d.online:
-                if d.rx_bps is not None:
-                    ap_rx[d.ap] = ap_rx.get(d.ap, 0) + d.rx_bps
-                if d.tx_bps is not None:
-                    ap_tx[d.ap] = ap_tx.get(d.ap, 0) + d.tx_bps
-        for d in devices:
-            if d.hostname and d.hostname in ap_rx:
-                d.rx_bps = ap_rx[d.hostname]
-                d.tx_bps = ap_tx.get(d.hostname, 0)
-            elif gw_mac and d.mac == gw_mac:
-                d.rx_bps = rx_rate
-                d.tx_bps = tx_rate
-                d.rx_total = wan_rx_total
-                d.tx_total = wan_tx_total
-                d.bw_since = wan_bw_since
-
-        # Apply accumulated totals
-        for d in devices:
-            if d.mac in device_accum:
-                d.rx_total = device_accum[d.mac].get("rx")
-                d.tx_total = device_accum[d.mac].get("tx")
-                d.bw_since = device_accum[d.mac].get("since")
-
-        # Event detection
-        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        ap_ips_set = set(self._ap_hosts)
-        ap_macs = {mac for mac, info in leases.items() if info.get("ip") in ap_ips_set}
-        events, new_state = detect_events(
-            self._prev_state,
-            devices,
-            ts,
-            ap_macs=ap_macs,
-            min_interval_s=self.update_interval.total_seconds() * 2,
-            disconnect_miss_threshold=self._disconnect_threshold_miss,
-        )
-        if gw_data:
-            wan_events = self._detect_wan_events(
-                gw_data.get("wan_ip", ""),
-                gw_data.get("wan_ip6", "") or gw_data.get("gw_ip6", ""),
-                gw_data.get("gw_mac", ""),
-                gw_data.get("gw_hostname", "gw"),
-                ts,
+            # Vendor lookup
+            all_macs = (
+                set(leases.keys()) | {w["mac"] for w in all_wifi} | set(arp_ips.keys())
             )
-        else:
-            wan_events = []
-        all_events = wan_events + events
-        new_state = prune_old_state(new_state)
+            lookup_vendors(all_macs, self._vendor_cache, self._oui_db)
+            await self.hass.async_add_executor_job(
+                save_kv_cache, self._vendor_cache_path, self._vendor_cache
+            )
 
-        # Carry first_seen back into devices
-        for d in devices:
-            if d.mac in new_state and new_state[d.mac].first_seen:
-                d.first_seen = new_state[d.mac].first_seen
-            if d.bw_since and (not d.first_seen or d.bw_since < d.first_seen):
-                d.first_seen = float(d.bw_since)
+            # Per-device bandwidth
+            wifi_bytes: dict[str, dict[str, int]] = {}
+            wifi_signals: dict[str, int] = {}
+            for w in all_wifi:
+                mac = w["mac"]
+                sig = w.get("signal") or -999
+                if mac not in wifi_bytes or sig > wifi_signals.get(mac, -999):
+                    wifi_bytes[mac] = {
+                        "ul": w.get("sta_ul_bytes", 0),
+                        "dl": w.get("sta_dl_bytes", 0),
+                    }
+                    wifi_signals[mac] = sig
+            ip_to_mac = {
+                info["ip"]: mac for mac, info in leases.items() if info.get("ip")
+            }
+            ip_to_mac.update({ip: mac for mac, ip in arp_ips.items()})
+            wired_bytes: dict[str, dict[str, int]] = {}
+            conntrack_lines = gw_data.get("conntrack", []) if gw_data else []
+            for ip, bw in parse_conntrack(conntrack_lines).items():
+                wmac = ip_to_mac.get(ip)
+                if wmac and wmac not in wifi_bytes:
+                    wired_bytes[wmac] = bw
+            device_rates, device_accum = self._compute_device_rates(
+                wifi_bytes, wired_bytes
+            )
 
-        await self.hass.async_add_executor_job(self._save_state, new_state)
-        self._append_event_buffer(all_events)
+            # Build device list
+            gw_ip = gw_data.get("gw_ip", "") if gw_data else ""
+            gw_hostname = gw_data.get("gw_hostname", "") if gw_data else ""
+            gw_ip6 = gw_data.get("gw_ip6", "") if gw_data else ""
+            devices = build_devices(
+                leases,
+                arp_states,
+                stale,
+                all_wifi,
+                self._vendor_cache,
+                gw_mac,
+                gw_ip,
+                gw_hostname,
+                alive_ap_ips,
+                ndp=ndp,
+                gw_ip6=gw_ip6,
+                arp_ips=arp_ips,
+                arp_hostnames=arp_hostnames,
+                prev_state=self._prev_state,
+                rates=device_rates,
+                active_ap_names=active_ap_names,
+            )
+
+            # Restore identity for devices that rotated their random MAC
+            devices = remap_random_macs(
+                devices, self._prev_state, self._disconnect_threshold_miss
+            )
+
+            # Aggregate AP bandwidth; inject WAN onto gateway
+            ap_rx: dict[str, int] = {}
+            ap_tx: dict[str, int] = {}
+            for d in devices:
+                if d.connection == "wifi" and d.ap and d.online:
+                    if d.rx_bps is not None:
+                        ap_rx[d.ap] = ap_rx.get(d.ap, 0) + d.rx_bps
+                    if d.tx_bps is not None:
+                        ap_tx[d.ap] = ap_tx.get(d.ap, 0) + d.tx_bps
+            for d in devices:
+                if d.hostname and d.hostname in ap_rx:
+                    d.rx_bps = ap_rx[d.hostname]
+                    d.tx_bps = ap_tx.get(d.hostname, 0)
+                elif gw_mac and d.mac == gw_mac and self._enable_wan_bandwidth:
+                    d.rx_bps = rx_rate
+                    d.tx_bps = tx_rate
+                    d.rx_total = wan_rx_total
+                    d.tx_total = wan_tx_total
+                    d.bw_since = wan_bw_since
+
+            # Apply accumulated totals
+            for d in devices:
+                if d.mac in device_accum:
+                    d.rx_total = device_accum[d.mac].get("rx")
+                    d.tx_total = device_accum[d.mac].get("tx")
+                    d.bw_since = device_accum[d.mac].get("since")
+
+            # Event detection
+            ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            ap_ips_set = set(self._ap_hosts)
+            ap_macs = {
+                mac for mac, info in leases.items() if info.get("ip") in ap_ips_set
+            }
+            events, new_state = detect_events(
+                self._prev_state,
+                devices,
+                ts,
+                ap_macs=ap_macs,
+                min_interval_s=self.update_interval.total_seconds() * 2,
+                disconnect_miss_threshold=self._disconnect_threshold_miss,
+            )
+            if gw_data:
+                wan_events = self._detect_wan_events(
+                    gw_data.get("wan_ip", ""),
+                    gw_data.get("wan_ip6", "") or gw_data.get("gw_ip6", ""),
+                    gw_data.get("gw_mac", ""),
+                    gw_data.get("gw_hostname", "gw"),
+                    ts,
+                )
+            else:
+                wan_events = []
+            all_events = wan_events + events
+            new_state = prune_old_state(new_state)
+
+            # Carry first_seen back into devices
+            for d in devices:
+                if d.mac in new_state and new_state[d.mac].first_seen:
+                    d.first_seen = new_state[d.mac].first_seen
+                if d.bw_since and (not d.first_seen or d.bw_since < d.first_seen):
+                    d.first_seen = float(d.bw_since)
+
+            await self.hass.async_add_executor_job(self._save_state, new_state)
+            self._append_event_buffer(all_events)
 
         host_stats: dict[str, dict[str, Any]] = {}
         if self._enable_host_metrics and self._gateway_host and gw_data:
@@ -2056,18 +2109,20 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             wireguard = await self._collect_wireguard()
 
         result: dict[str, Any] = {
-            "device_count": sum(1 for d in devices if d.online),
             "scan_duration": round(time.time() - scan_start, 2),
-            "wan_ip": gw_data.get("wan_ip", "") if gw_data else "",
-            "wan_ip6": (gw_data.get("wan_ip6") or gw_data.get("gw_ip6", ""))
-            if gw_data
-            else "",
-            "gateway_mac": gw_mac,
-            "wan_rx_rate": rx_rate,
-            "wan_tx_rate": tx_rate,
-            "devices": [asdict(d) for d in devices],
             "partial": False,
         }
+        if self._enable_network_hosts:
+            result["device_count"] = sum(1 for d in devices if d.online)
+            result["wan_ip"] = gw_data.get("wan_ip", "") if gw_data else ""
+            result["wan_ip6"] = (
+                (gw_data.get("wan_ip6") or gw_data.get("gw_ip6", "")) if gw_data else ""
+            )
+            result["gateway_mac"] = gw_mac
+            result["devices"] = [asdict(d) for d in devices]
+        if self._enable_wan_bandwidth:
+            result["wan_rx_rate"] = rx_rate
+            result["wan_tx_rate"] = tx_rate
         if self._enable_host_metrics:
             result["host_stats"] = host_stats
         if self._enable_dns_stats:
