@@ -818,18 +818,10 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._asu_task: asyncio.Task | None = None
         self._asu_missing_tool_logged: set[str] = set()
 
-        # State dir: /dev/shm on HA, /tmp/netscan locally
-        state_dir = (
-            Path(STATE_DIR_HA) if Path(STATE_DIR_HA).exists() else Path(STATE_DIR_LOCAL)
-        )
-        state_dir.mkdir(parents=True, exist_ok=True)
-        self._state_dir = state_dir
-
-        # File paths (persistent across HA restarts)
-        self._prev_state_path = state_dir / ".netscan_prev_state.json"
-        self._vendor_cache_path = state_dir / ".netscan_mac_vendors"
-        self._dns_cache_path = state_dir / ".netscan_dns_cache"
-        self._dns_history_path = state_dir / ".netscan_dns_history.jsonl"
+        # State dir: /dev/shm on HA, /tmp/netscan fallback for local/dev.
+        # The actual existence check + mkdir is deferred to _load_caches
+        # (executor-offloaded) so __init__ stays event-loop-safe.
+        self._set_state_dir(Path(STATE_DIR_HA))
 
         # Integration package dir (for collector script + OUI db)
         self._pkg_dir = Path(__file__).resolve().parent
@@ -887,7 +879,18 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._asu_missing_tool_logged.clear()
         await super().async_shutdown()
 
+    def _set_state_dir(self, state_dir: Path) -> None:
+        """Reassign state_dir and the path attrs derived from it. Pure attr work."""
+        self._state_dir = state_dir
+        self._prev_state_path = state_dir / ".netscan_prev_state.json"
+        self._vendor_cache_path = state_dir / ".netscan_mac_vendors"
+        self._dns_cache_path = state_dir / ".netscan_dns_cache"
+        self._dns_history_path = state_dir / ".netscan_dns_history.jsonl"
+
     def _load_caches(self) -> None:
+        if not self._state_dir.exists():
+            self._set_state_dir(Path(STATE_DIR_LOCAL))
+        self._state_dir.mkdir(parents=True, exist_ok=True)
         self._vendor_cache = load_kv_cache(self._vendor_cache_path)
         self._dns_cache = load_kv_cache(self._dns_cache_path)
         self._oui_db = self._load_oui_db()
