@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import logging
 import sys
 import types
 from pathlib import Path
+from unittest.mock import patch
 
 _ROOT = Path(__file__).parent.parent
 _WRT = _ROOT / "custom_components" / "wrtsensor"
@@ -79,6 +81,7 @@ _prune = _init_mod._prune_orphaned_host_entities
 _prune_wg = _init_mod._prune_wireguard_entities
 _remove_legacy = _init_mod._remove_legacy_event_log_entity
 _ws_recent_events = _init_mod._ws_recent_events
+_async_remove_entry = _init_mod.async_remove_entry
 
 
 def _reset_registry():
@@ -89,10 +92,121 @@ def _make_entry(entry_id="test-entry"):
     return types.SimpleNamespace(entry_id=entry_id)
 
 
+class _FakeConfigEntries:
+    def __init__(self, entries=None) -> None:
+        self._entries = entries or []
+
+    def async_entries(self, domain):
+        assert domain == "wrtsensor"
+        return self._entries
+
+
+class _FakeRemoveHass:
+    def __init__(self, entries=None) -> None:
+        self.config_entries = _FakeConfigEntries(entries)
+        self.executor_calls = 0
+
+    async def async_add_executor_job(self, fn, *args):
+        self.executor_calls += 1
+        return fn(*args)
+
+
+def _set_cleanup_state_dirs(monkeypatch, tmp_path):
+    ha_dir = tmp_path / "dev_shm"
+    local_dir = tmp_path / "tmp_netscan"
+    monkeypatch.setattr(_init_mod, "STATE_DIR_HA", str(ha_dir))
+    monkeypatch.setattr(_init_mod, "STATE_DIR_LOCAL", str(local_dir))
+    return ha_dir, local_dir
+
+
+def _write_cleanup_files(*state_dirs: Path) -> None:
+    for state_dir in state_dirs:
+        state_dir.mkdir(parents=True, exist_ok=True)
+        for basename in _init_mod.STATE_FILE_BASENAMES:
+            (state_dir / basename).write_text("state")
+        (state_dir / "netscan_events.json").write_text("{}\n")
+        (state_dir / "oui.db").write_text("cached oui")
+        (state_dir / "oui.txt").write_text("raw oui")
+
+
 def _make_coordinator(host_stats, *, enable_host_metrics=True):
     return types.SimpleNamespace(
         data={"host_stats": host_stats}, _enable_host_metrics=enable_host_metrics
     )
+
+
+def test_remove_entry_deletes_runtime_state_for_last_entry(monkeypatch, tmp_path):
+    ha_dir, local_dir = _set_cleanup_state_dirs(monkeypatch, tmp_path)
+    _write_cleanup_files(ha_dir, local_dir)
+    hass = _FakeRemoveHass(entries=[])
+
+    asyncio.run(_async_remove_entry(hass, _make_entry()))
+
+    assert hass.executor_calls == 1
+    for state_dir in (ha_dir, local_dir):
+        for basename in _init_mod.STATE_FILE_BASENAMES:
+            assert not (state_dir / basename).exists()
+        # HACS keeps events in memory; the JSONL file is owned by the manual path.
+        assert (state_dir / "netscan_events.json").exists()
+        # OUI artifacts are intentionally retained for faster re-adds.
+        assert (state_dir / "oui.db").exists()
+        assert (state_dir / "oui.txt").exists()
+
+
+def test_remove_entry_keeps_global_state_when_other_entry_exists(
+    monkeypatch, tmp_path
+):
+    ha_dir, local_dir = _set_cleanup_state_dirs(monkeypatch, tmp_path)
+    _write_cleanup_files(ha_dir, local_dir)
+    hass = _FakeRemoveHass(entries=[_make_entry("other-entry")])
+
+    asyncio.run(_async_remove_entry(hass, _make_entry()))
+
+    assert hass.executor_calls == 0
+    for state_dir in (ha_dir, local_dir):
+        for basename in _init_mod.STATE_FILE_BASENAMES:
+            assert (state_dir / basename).exists()
+
+
+def test_remove_entry_ignores_missing_runtime_state(monkeypatch, tmp_path):
+    _set_cleanup_state_dirs(monkeypatch, tmp_path)
+    hass = _FakeRemoveHass(entries=[])
+
+    asyncio.run(_async_remove_entry(hass, _make_entry()))
+
+    assert hass.executor_calls == 1
+
+
+def test_remove_entry_logs_unlink_failure_and_continues(
+    monkeypatch, tmp_path, caplog
+):
+    ha_dir, local_dir = _set_cleanup_state_dirs(monkeypatch, tmp_path)
+    _write_cleanup_files(ha_dir, local_dir)
+    failed = ha_dir / ".netscan_mac_vendors"
+    original_unlink = Path.unlink
+
+    def _unlink(path, *args, **kwargs):
+        if path == failed:
+            raise OSError("permission denied")
+        return original_unlink(path, *args, **kwargs)
+
+    caplog.set_level(logging.WARNING)
+    hass = _FakeRemoveHass(entries=[])
+    with patch.object(Path, "unlink", _unlink):
+        asyncio.run(_async_remove_entry(hass, _make_entry()))
+
+    assert failed.exists()
+    assert not (ha_dir / ".netscan_prev_state.json").exists()
+    assert not (ha_dir / ".netscan_dns_cache").exists()
+    assert not (ha_dir / ".netscan_dns_history.jsonl").exists()
+    for basename in _init_mod.STATE_FILE_BASENAMES:
+        assert not (local_dir / basename).exists()
+    assert (ha_dir / "oui.db").exists()
+    assert (ha_dir / "oui.txt").exists()
+    assert (local_dir / "oui.db").exists()
+    assert (local_dir / "oui.txt").exists()
+    assert "Failed to remove wrtsensor state file" in caplog.text
+    assert str(failed) in caplog.text
 
 
 def test_prune_removes_stale_and_legacy_host_entities():

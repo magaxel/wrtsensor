@@ -10,6 +10,11 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, OptionsFlow
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.helpers.selector import (
+    TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
+)
 
 from .const import (
     ASU_INTERVAL_MAX_H,
@@ -26,7 +31,6 @@ from .const import (
     CONF_GATEWAY_HOST,
     CONF_LAN_IFACE,
     CONF_PRESENCE_MACS,
-    CONF_SCAN_INTERVAL,
     CONF_SSH_KEY_PATH,
     CONF_WAN_IFACE,
     CONF_WG_STALE_THRESHOLD,
@@ -39,7 +43,6 @@ from .const import (
     DEFAULT_ENABLE_WAN_BANDWIDTH,
     DEFAULT_ENABLE_WIREGUARD,
     DEFAULT_LAN_IFACE,
-    DEFAULT_SCAN_INTERVAL,
     DEFAULT_SSH_KEY,
     DEFAULT_WAN_IFACE,
     DEFAULT_WG_STALE_THRESHOLD,
@@ -404,7 +407,9 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
         schema = vol.Schema(
             {
                 vol.Required("ssh_user", default="root"): str,
-                vol.Required("ssh_password"): str,
+                vol.Required("ssh_password"): TextSelector(
+                    TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                ),
             }
         )
         return self.async_show_form(
@@ -469,10 +474,6 @@ class WrtsensorOptionsFlow(OptionsFlow):
                     CONF_AP_HOSTS,
                     default=current.get(CONF_AP_HOSTS, ""),
                 ): str,
-                vol.Optional(
-                    CONF_SCAN_INTERVAL,
-                    default=current.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
-                ): vol.All(vol.Coerce(int), vol.Range(min=30, max=3600)),
                 vol.Optional(
                     CONF_LAN_IFACE,
                     default=current.get(CONF_LAN_IFACE, DEFAULT_LAN_IFACE),

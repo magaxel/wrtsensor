@@ -94,6 +94,24 @@ _core = _ensure_module("homeassistant.core")
 if not hasattr(_core, "callback"):
     _core.callback = lambda fn: fn  # type: ignore[attr-defined]
 
+_selector = _ensure_module("homeassistant.helpers.selector")
+if not hasattr(_selector, "TextSelector"):
+
+    class _TextSelectorType:
+        PASSWORD = "password"
+
+    class _TextSelectorConfig:
+        def __init__(self, *, type=None):
+            self.type = type
+
+    class _TextSelector:
+        def __init__(self, config):
+            self.config = config
+
+    _selector.TextSelector = _TextSelector  # type: ignore[attr-defined]
+    _selector.TextSelectorConfig = _TextSelectorConfig  # type: ignore[attr-defined]
+    _selector.TextSelectorType = _TextSelectorType  # type: ignore[attr-defined]
+
 _def = _ensure_module("homeassistant.data_entry_flow")
 if not hasattr(_def, "FlowResult"):
     _def.FlowResult = dict  # type: ignore[attr-defined]
@@ -514,6 +532,36 @@ def test_options_schema_has_no_ssh_port():
     result = asyncio.run(flow.async_step_init())
 
     assert "ssh_port" not in _schema_keys(result)
+
+
+def test_options_schema_has_no_scan_interval():
+    entry = types.SimpleNamespace(
+        data={
+            cf.CONF_GATEWAY_HOST: "192.0.2.1",
+            cf.CONF_SSH_KEY_PATH: "/tmp/key",
+            cf.CONF_AP_HOSTS: "192.0.2.22",
+        },
+        options={"scan_interval": 300},
+    )
+    flow = cf.WrtsensorOptionsFlow(entry)
+
+    result = asyncio.run(flow.async_step_init())
+
+    assert "scan_interval" not in _schema_keys(result)
+
+
+def test_provision_password_uses_password_selector():
+    flow = cf.WrtsensorConfigFlow()
+
+    result = asyncio.run(flow.async_step_provision_key())
+
+    schema = result["data_schema"]
+    password_selector = next(
+        value
+        for marker, value in schema.items()
+        if getattr(marker, "key", marker) == "ssh_password"
+    )
+    assert password_selector.config.type == cf.TextSelectorType.PASSWORD
 
 
 def test_options_flow_accepts_host_metrics_toggle():

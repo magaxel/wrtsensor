@@ -17,6 +17,9 @@ from .const import (
     DEFAULT_DISCONNECT_THRESHOLD,
     DOMAIN,
     PLATFORMS,
+    STATE_DIR_HA,
+    STATE_DIR_LOCAL,
+    STATE_FILE_BASENAMES,
     STATIC_PATH_URL,
 )
 from .coordinator import WrtsensorCoordinator
@@ -143,6 +146,28 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await coordinator.async_shutdown()
         hass.data[DOMAIN].pop(entry.entry_id, None)
     return unloaded
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Clean up global runtime state after the last config entry is removed."""
+    if hass.config_entries.async_entries(DOMAIN):
+        return
+    await hass.async_add_executor_job(_remove_runtime_state_files)
+
+
+def _remove_runtime_state_files() -> None:
+    """Remove state files created by the HACS integration."""
+    # netscan_events.json is intentionally omitted: HACS stores recent events in
+    # memory only; that file belongs to the standalone command_line path. OUI
+    # artifacts are also retained: they contain no user data and are slow to
+    # re-download when the integration is re-added.
+    for state_dir in (Path(STATE_DIR_HA), Path(STATE_DIR_LOCAL)):
+        for basename in STATE_FILE_BASENAMES:
+            path = state_dir / basename
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as err:
+                _LOGGER.warning("Failed to remove wrtsensor state file %s: %s", path, err)
 
 
 async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:

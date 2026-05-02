@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 DOMAIN = "wrtsensor"
-VERSION = "2.0.0"
+VERSION = "2.0.1"
 
 PLATFORMS = ["sensor", "binary_sensor", "device_tracker", "update"]
 
@@ -17,10 +17,20 @@ DEFAULT_SSH_PORT = 22
 DEFAULT_LAN_IFACE = "br-lan"
 DEFAULT_WAN_IFACE = "eth0"
 DEFAULT_DHCP_LEASES = "/tmp/dhcp.leases"
-DEFAULT_SCAN_INTERVAL = 60
 
 STATE_DIR_HA = "/dev/shm"
 STATE_DIR_LOCAL = "/tmp/netscan"
+STATE_FILE_PREV_STATE = ".netscan_prev_state.json"
+STATE_FILE_MAC_VENDORS = ".netscan_mac_vendors"
+STATE_FILE_DNS_CACHE = ".netscan_dns_cache"
+STATE_FILE_DNS_HISTORY = ".netscan_dns_history.jsonl"
+# Runtime state cleanup allowlist. Adding a basename here deletes it on removal.
+STATE_FILE_BASENAMES = (
+    STATE_FILE_PREV_STATE,
+    STATE_FILE_MAC_VENDORS,
+    STATE_FILE_DNS_CACHE,
+    STATE_FILE_DNS_HISTORY,
+)
 
 COLLECTOR_SCRIPT_NAME = "openwrt_collector.sh"
 COLLECTOR_REMOTE_PATH = "/tmp/wrtsensor_collector.sh"
@@ -41,7 +51,6 @@ CONF_SSH_PORT = "ssh_port"
 CONF_AP_HOSTS = "ap_hosts"
 CONF_LAN_IFACE = "lan_iface"
 CONF_WAN_IFACE = "wan_iface"
-CONF_SCAN_INTERVAL = "scan_interval"
 CONF_PRESENCE_MACS = "presence_macs"
 CONF_ENABLE_NETWORK_HOSTS = "enable_network_hosts"
 DEFAULT_ENABLE_NETWORK_HOSTS = True

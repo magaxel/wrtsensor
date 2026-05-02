@@ -18,7 +18,7 @@ import re
 import time
 import urllib.request
 from dataclasses import asdict, dataclass, field, replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -62,7 +62,6 @@ from .const import (
     CONF_ENABLE_WIREGUARD,
     CONF_GATEWAY_HOST,
     CONF_LAN_IFACE,
-    CONF_SCAN_INTERVAL,
     CONF_SSH_KEY_PATH,
     CONF_WAN_IFACE,
     CONF_WG_STALE_THRESHOLD,
@@ -76,15 +75,19 @@ from .const import (
     DEFAULT_ENABLE_WAN_BANDWIDTH,
     DEFAULT_ENABLE_WIREGUARD,
     DEFAULT_LAN_IFACE,
-    DEFAULT_SCAN_INTERVAL,
     DEFAULT_SSH_KEY,
     DEFAULT_SSH_PORT,
     DEFAULT_WAN_IFACE,
     DEFAULT_WG_STALE_THRESHOLD,
     DISCONNECT_MISS_THRESHOLD,
     DOMAIN,
+    SCAN_INTERVAL,
     STATE_DIR_HA,
     STATE_DIR_LOCAL,
+    STATE_FILE_DNS_CACHE,
+    STATE_FILE_DNS_HISTORY,
+    STATE_FILE_MAC_VENDORS,
+    STATE_FILE_PREV_STATE,
     STATE_MAX_AGE_DAYS,
 )
 from .hosts import HostEndpoint, parse_host_endpoint
@@ -823,10 +826,11 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # (executor-offloaded) so __init__ stays event-loop-safe.
         self._set_state_dir(Path(STATE_DIR_HA))
 
-        # Integration package dir (for collector script + OUI db)
+        # Integration package dir (for collector script)
         self._pkg_dir = Path(__file__).resolve().parent
-        self._oui_db_path = self._pkg_dir / "oui.db"
-        self._oui_txt_path = self._pkg_dir / "oui.txt"
+        self._oui_cache_dir = self._config_path(hass, ".storage", DOMAIN)
+        self._oui_db_path = self._oui_cache_dir / "oui.db"
+        self._oui_txt_path = self._oui_cache_dir / "oui.txt"
 
         # In-memory delta state (replaces the file-per-delta approach)
         self._bw_state: dict[str, Any] = {}
@@ -848,15 +852,16 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._needs_oui_download = False
         self._collector_script: str = ""
 
-        scan_interval = timedelta(
-            seconds=int(data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL))
-        )
         self._disconnect_threshold_miss = max(
-            1, int(self._disconnect_threshold_s / scan_interval.total_seconds())
+            1, int(self._disconnect_threshold_s / SCAN_INTERVAL.total_seconds())
         )
-        super().__init__(hass, _LOGGER, name=DOMAIN, update_interval=scan_interval)
+        super().__init__(hass, _LOGGER, name=DOMAIN, update_interval=SCAN_INTERVAL)
 
     # ── Setup ──────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _config_path(hass: HomeAssistant, *parts: str) -> Path:
+        return Path(hass.config.path(*parts))
 
     async def async_setup(self) -> None:
         """Load caches and deploy collector script. Called once from async_setup_entry."""
@@ -882,15 +887,16 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _set_state_dir(self, state_dir: Path) -> None:
         """Reassign state_dir and the path attrs derived from it. Pure attr work."""
         self._state_dir = state_dir
-        self._prev_state_path = state_dir / ".netscan_prev_state.json"
-        self._vendor_cache_path = state_dir / ".netscan_mac_vendors"
-        self._dns_cache_path = state_dir / ".netscan_dns_cache"
-        self._dns_history_path = state_dir / ".netscan_dns_history.jsonl"
+        self._prev_state_path = state_dir / STATE_FILE_PREV_STATE
+        self._vendor_cache_path = state_dir / STATE_FILE_MAC_VENDORS
+        self._dns_cache_path = state_dir / STATE_FILE_DNS_CACHE
+        self._dns_history_path = state_dir / STATE_FILE_DNS_HISTORY
 
     def _load_caches(self) -> None:
         if not self._state_dir.exists():
             self._set_state_dir(Path(STATE_DIR_LOCAL))
         self._state_dir.mkdir(parents=True, exist_ok=True)
+        self._oui_cache_dir.mkdir(parents=True, exist_ok=True)
         self._vendor_cache = load_kv_cache(self._vendor_cache_path)
         self._dns_cache = load_kv_cache(self._dns_cache_path)
         self._oui_db = self._load_oui_db()

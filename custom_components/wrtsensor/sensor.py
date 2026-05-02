@@ -13,7 +13,7 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import DOMAIN, VERSION
 from .coordinator import WrtsensorCoordinator
 from .host_device import host_device_info
 
@@ -83,7 +83,7 @@ def _device_info(entry: ConfigEntry) -> DeviceInfo:
         name=_entry_title(entry),
         manufacturer="wrtsensor",
         model="OpenWrt Network Sensor",
-        sw_version="1.0.0",
+        sw_version=VERSION,
     )
 
 

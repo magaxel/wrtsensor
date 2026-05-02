@@ -81,6 +81,12 @@ Prefer not to use HACS? See [docs/manual-install.md](docs/manual-install.md) for
 
 Open the integration in **Settings → Devices & Services**, hit the triple-dot menu → **Reconfigure** to change gateway, APs, or SSH key path in place. Every host is re-probed; if authentication fails, the flow prompts for a password and re-provisions the key, same as initial setup. Removing a host prunes its CPU/RAM/Disk sensors automatically on the next reload and stops carrying its old Wi-Fi associations into the topology map after the next scan. Turning off **Collect host metrics** in Options also removes those per-host metric sensors on reload. The public SSH key stays in `/etc/dropbear/authorized_keys` on the removed device — delete it manually there if you no longer trust the host.
 
+### Removing the integration entry
+
+Deleting the wrtsensor config entry from **Settings → Devices & Services** unloads the entities and, when it is the last wrtsensor entry, removes the HACS integration's local runtime cache files from `/dev/shm` and `/tmp/netscan`. This is lifecycle cleanup toward Home Assistant's higher quality-scale expectations; it is not required for Bronze.
+
+The downloaded OUI vendor database is retained in the Home Assistant config directory so re-adding the integration does not need a fresh multi-megabyte download. The temporary `/tmp/wrtsensor_collector.sh` helper on each OpenWrt host is also left alone and normally disappears on the next router reboot. Home Assistant recorder/history rows age out through HA's normal purge behavior.
+
 ## Card configuration
 
 Each wrtsensor config entry creates its own scanner entity. Use the entity picker in the card editor, or replace the example IDs below with the entity IDs created for your entry. Drop these snippets into a dashboard via **Raw configuration editor** or the **+ ADD CARD → Manual** editor.
@@ -296,6 +302,8 @@ Device tracker entities are named after the device hostname (e.g. `device_tracke
 ### Upgrading from earlier versions — dashboard migration
 
 Version 2.0.0 changes the **Firmware check interval** option from seconds to hours. Existing `asu_interval_s` option values are ignored; use **Configure** to save the desired 1-24 hour interval.
+
+Version 2.0.1 removes the custom **Scan interval** option to follow Home Assistant integration quality guidance. wrtsensor now always polls every 60 seconds. Existing stored scan interval values are ignored and disappear the next time you save Options.
 
 The compat `sensor.<entry>_network_scanner` no longer carries the full god-blob of every feature. After upgrading, its attributes are limited to network-host data (`devices`, `wan_ip`, `wan_ip6`, `gateway_mac`, `partial`, `scan_duration`). Per-feature data lives on the dedicated sensors:
 
