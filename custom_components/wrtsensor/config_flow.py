@@ -142,6 +142,69 @@ async def _probe_hosts(user_input: dict[str, Any]) -> ProbeResult:
     return result
 
 
+async def _probe_options_hosts(
+    user_input: dict[str, Any], current: dict[str, Any]
+) -> ProbeResult:
+    """Validate options-flow host edits without blocking removals on old hosts."""
+    result = ProbeResult(
+        gateway_host=user_input.get(CONF_GATEWAY_HOST, "").strip(),
+        ssh_key_path=user_input[CONF_SSH_KEY_PATH].strip(),
+        ap_hosts_raw=user_input.get(CONF_AP_HOSTS, ""),
+    )
+    result.ap_hosts = _parse_hosts(result.ap_hosts_raw)
+
+    if not result.gateway_host and not result.ap_hosts:
+        result.errors["base"] = "at_least_one_host"
+        return result
+
+    try:
+        all_endpoints = _parse_config_endpoints(result.gateway_host, result.ap_hosts)
+    except HostEndpointError:
+        result.errors["base"] = "invalid_host"
+        result.placeholders["failures"] = ", ".join(
+            ([result.gateway_host] if result.gateway_host else []) + result.ap_hosts
+        )
+        return result
+
+    current_gateway = (current.get(CONF_GATEWAY_HOST, "") or "").strip()
+    current_aps = _parse_hosts(current.get(CONF_AP_HOSTS, "") or "")
+    current_key = (current.get(CONF_SSH_KEY_PATH, DEFAULT_SSH_KEY) or "").strip()
+    key_changed = result.ssh_key_path != current_key
+    if key_changed:
+        endpoints_to_probe = all_endpoints
+    else:
+        try:
+            current_endpoint_ids = {
+                (ep.host, ep.port)
+                for ep in _parse_config_endpoints(current_gateway, current_aps)
+            }
+        except HostEndpointError:
+            current_endpoint_ids = set()
+        endpoints_to_probe = [
+            ep for ep in all_endpoints if (ep.host, ep.port) not in current_endpoint_ids
+        ]
+
+    if not endpoints_to_probe:
+        return result
+
+    test_results = await asyncio.gather(
+        *[_test_ssh(ep.host, result.ssh_key_path, ep.port) for ep in endpoints_to_probe]
+    )
+    failures = [(ep, r) for ep, r in zip(endpoints_to_probe, test_results) if r]
+    non_auth = [(ep, r) for ep, r in failures if r != "auth_failed"]
+    auth_failed = [(ep, r) for ep, r in failures if r == "auth_failed"]
+
+    if non_auth:
+        result.errors["base"] = "setup_failed"
+        result.placeholders["failures"] = _format_failures(
+            [(ep.raw, r) for ep, r in non_auth]
+        )
+    elif auth_failed:
+        result.needs_provision = True
+
+    return result
+
+
 def _normalized_connection(result: ProbeResult) -> dict[str, str]:
     """Connection-field overlay for storage: stripped + canonical CSV."""
     return {
@@ -382,7 +445,7 @@ class WrtsensorOptionsFlow(OptionsFlow):
         current = {**self._config_entry.data, **self._config_entry.options}
 
         if user_input is not None:
-            probe = await _probe_hosts(user_input)
+            probe = await _probe_options_hosts(user_input, current)
             if probe.needs_provision:
                 self._pending = {**user_input, **_normalized_connection(probe)}
                 return await self.async_step_provision_key()
