@@ -156,9 +156,15 @@ if not hasattr(_vol, "Schema"):
         def __eq__(self, other):
             return isinstance(other, _Marker) and self.key == other.key
 
+    class _RequiredMarker(_Marker):
+        pass
+
+    class _OptionalMarker(_Marker):
+        pass
+
     _vol.Schema = lambda d: d  # type: ignore[attr-defined]
-    _vol.Required = _Marker  # type: ignore[attr-defined]
-    _vol.Optional = _Marker  # type: ignore[attr-defined]
+    _vol.Required = _RequiredMarker  # type: ignore[attr-defined]
+    _vol.Optional = _OptionalMarker  # type: ignore[attr-defined]
     _vol.All = lambda *a, **kw: object  # type: ignore[attr-defined]
     _vol.Coerce = lambda t: t  # type: ignore[attr-defined]
     _vol.Range = lambda **kw: object  # type: ignore[attr-defined]
@@ -697,6 +703,19 @@ def test_options_schema_includes_gateway():
     assert cf.CONF_GATEWAY_HOST in keys
     assert cf.CONF_SSH_KEY_PATH in keys
     assert cf.CONF_AP_HOSTS in keys
+
+
+def test_options_connection_fields_are_required_to_allow_clearing():
+    """Optional text fields with defaults can restore the old value when blank."""
+    entry = _options_entry()
+    flow = cf.WrtsensorOptionsFlow(entry)
+
+    result = asyncio.run(flow.async_step_init())
+    schema = result["data_schema"]
+    markers = {getattr(marker, "key", marker): marker for marker in schema}
+
+    assert isinstance(markers[cf.CONF_GATEWAY_HOST], cf.vol.Required)
+    assert isinstance(markers[cf.CONF_AP_HOSTS], cf.vol.Required)
 
 
 def test_options_flow_changes_gateway():
