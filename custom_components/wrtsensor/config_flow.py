@@ -465,13 +465,13 @@ class WrtsensorOptionsFlow(OptionsFlow):
                     CONF_SSH_KEY_PATH,
                     default=current.get(CONF_SSH_KEY_PATH, DEFAULT_SSH_KEY),
                 ): str,
-                vol.Required(
+                vol.Optional(
                     CONF_GATEWAY_HOST,
-                    default=current.get(CONF_GATEWAY_HOST, ""),
+                    description={"suggested_value": current.get(CONF_GATEWAY_HOST, "")},
                 ): str,
-                vol.Required(
+                vol.Optional(
                     CONF_AP_HOSTS,
-                    default=current.get(CONF_AP_HOSTS, ""),
+                    description={"suggested_value": current.get(CONF_AP_HOSTS, "")},
                 ): str,
                 vol.Optional(
                     CONF_LAN_IFACE,

@@ -149,6 +149,8 @@ if not hasattr(_vol, "Schema"):
     class _Marker:
         def __init__(self, key, default=None, description=None):
             self.key = key
+            self.default = default
+            self.description = description
 
         def __hash__(self):
             return hash(self.key)
@@ -705,8 +707,8 @@ def test_options_schema_includes_gateway():
     assert cf.CONF_AP_HOSTS in keys
 
 
-def test_options_connection_fields_are_required_to_allow_clearing():
-    """Optional text fields with defaults can restore the old value when blank."""
+def test_options_connection_fields_use_suggested_value_to_allow_clearing():
+    """Defaults can restore the old value; suggested_value can be cleared."""
     entry = _options_entry()
     flow = cf.WrtsensorOptionsFlow(entry)
 
@@ -714,8 +716,14 @@ def test_options_connection_fields_are_required_to_allow_clearing():
     schema = result["data_schema"]
     markers = {getattr(marker, "key", marker): marker for marker in schema}
 
-    assert isinstance(markers[cf.CONF_GATEWAY_HOST], cf.vol.Required)
-    assert isinstance(markers[cf.CONF_AP_HOSTS], cf.vol.Required)
+    gateway = markers[cf.CONF_GATEWAY_HOST]
+    ap_hosts = markers[cf.CONF_AP_HOSTS]
+    assert isinstance(gateway, cf.vol.Optional)
+    assert isinstance(ap_hosts, cf.vol.Optional)
+    assert gateway.default is None
+    assert ap_hosts.default is None
+    assert gateway.description == {"suggested_value": "192.0.2.1"}
+    assert ap_hosts.description == {"suggested_value": "192.0.2.22"}
 
 
 def test_options_flow_changes_gateway():
