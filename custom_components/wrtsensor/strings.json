@@ -25,20 +25,6 @@
           "ssh_user": "SSH username on the OpenWrt device. Default: root.",
           "ssh_password": "SSH password. Used once to provision the key, never stored."
         }
-      },
-      "reconfigure": {
-        "title": "Reconfigure wrtsensor",
-        "description": "Change gateway, access points, or SSH key path. Every host is re-tested; removing a host prunes its per-host sensors on the next reload.",
-        "data": {
-          "gateway_host": "Gateway IP address (optional)",
-          "ssh_key_path": "SSH private key path",
-          "ap_hosts": "Access point IPs"
-        },
-        "data_description": {
-          "gateway_host": "Leave empty for APs-only mode. Any OpenWrt box that routes counts as a gateway. Port 22 is used by default; add :2222 for IPv4 or [2001:db8::1]:2222 for IPv6.",
-          "ssh_key_path": "Absolute path to the SSH private key on the HA host. Example: /config/ssh/id_ed25519",
-          "ap_hosts": "Comma-separated IPs of OpenWrt access points. Port 22 is used by default; add :2222 for IPv4 or [2001:db8::22]:2222 for IPv6."
-        }
       }
     },
     "error": {
@@ -56,8 +42,7 @@
       "at_least_one_host": "Enter at least a gateway or one access point."
     },
     "abort": {
-      "already_configured": "This host is already configured",
-      "reconfigure_successful": "Configuration updated"
+      "already_configured": "This host is already configured"
     }
   },
   "options": {
@@ -66,6 +51,7 @@
         "title": "wrtsensor options",
         "data": {
           "ssh_key_path": "SSH private key path",
+          "gateway_host": "Gateway IP address (optional)",
           "ap_hosts": "Access point IPs",
           "lan_iface": "LAN bridge interface",
           "wan_iface": "WAN interface",
@@ -82,6 +68,7 @@
         },
         "data_description": {
           "ssh_key_path": "Absolute path to the SSH private key on the HA host. Example: /config/ssh/id_ed25519",
+          "gateway_host": "IP address of the OpenWrt router that acts as your gateway. Leave empty for APs-only mode. Port 22 is used by default; add :2222 for IPv4 or [2001:db8::1]:2222 for IPv6.",
           "ap_hosts": "Comma-separated IPs of OpenWrt access points to collect Wi-Fi associations and host stats from. Port 22 is used by default; add :2222 for IPv4 or [2001:db8::22]:2222 for IPv6. Example: 192.168.1.22,192.168.1.23:2222",
           "lan_iface": "Bridge interface used for the LAN on OpenWrt. Default: br-lan. Change only if your router uses a different name.",
           "wan_iface": "WAN-facing interface on the gateway used to read RX/TX byte counters. Default: eth0.",
@@ -96,6 +83,18 @@
           "enable_asu": "Add an Update entity per OpenWrt host that polls the OpenWrt Attended Sysupgrade service every few hours via the device's `owut` tool. OpenWrt 25.12 images include owut by default on devices with larger flash storage; otherwise install it with `opkg update && opkg install owut` on 24.10 or `apk -U add owut` on 25.12/main. Each entity exposes a LuCI link to that host's Attended Sysupgrade page — click it to perform the actual upgrade. Default: off.",
           "asu_interval_h": "How often each host probes sysupgrade.openwrt.org. Min 1 h, max 24 h. Default: 6 h."
         }
+      },
+      "provision_key": {
+        "title": "Add SSH key to OpenWrt devices",
+        "description": "Key authentication failed for one or more hosts. Enter credentials to automatically add the public key to each OpenWrt device. The password is not stored.",
+        "data": {
+          "ssh_user": "Username",
+          "ssh_password": "Password"
+        },
+        "data_description": {
+          "ssh_user": "SSH username on the OpenWrt device. Default: root.",
+          "ssh_password": "SSH password. Used once to provision the key, never stored."
+        }
       }
     },
     "error": {
@@ -103,6 +102,11 @@
       "auth_failed": "SSH authentication failed",
       "cannot_connect": "Cannot connect",
       "no_response": "Host returned no hostname",
+      "pub_key_unreadable": "Cannot read public key from the private key file",
+      "provision_auth_failed": "Password authentication failed — check username and password",
+      "provision_cannot_connect": "Cannot connect to device for provisioning — check IP and network",
+      "provision_failed": "Could not add the SSH key on: {failures}",
+      "auth_failed_after_provision": "Key was provisioned but some hosts still reject it: {failures}",
       "setup_failed": "Setup failed: {failures}",
       "invalid_host": "Invalid host or port: {failures}",
       "at_least_one_host": "Enter at least a gateway or one access point."

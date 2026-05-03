@@ -167,7 +167,9 @@ def _remove_runtime_state_files() -> None:
             try:
                 path.unlink(missing_ok=True)
             except OSError as err:
-                _LOGGER.warning("Failed to remove wrtsensor state file %s: %s", path, err)
+                _LOGGER.warning(
+                    "Failed to remove wrtsensor state file %s: %s", path, err
+                )
 
 
 async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
