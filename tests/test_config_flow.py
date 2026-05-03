@@ -714,7 +714,8 @@ def test_options_flow_changes_gateway():
             )
         )
     assert result["type"] == "create_entry"
-    assert result["data"][cf.CONF_GATEWAY_HOST] == "192.0.2.99"
+    assert entry.data[cf.CONF_GATEWAY_HOST] == "192.0.2.99"
+    assert cf.CONF_GATEWAY_HOST not in result["data"]
 
 
 def test_options_flow_can_remove_gateway():
@@ -732,7 +733,8 @@ def test_options_flow_can_remove_gateway():
             )
         )
     assert result["type"] == "create_entry"
-    assert result["data"][cf.CONF_GATEWAY_HOST] == ""
+    assert entry.data[cf.CONF_GATEWAY_HOST] == ""
+    assert cf.CONF_GATEWAY_HOST not in result["data"]
 
 
 def test_options_flow_can_add_gateway_to_aps_only():
@@ -755,7 +757,8 @@ def test_options_flow_can_add_gateway_to_aps_only():
             )
         )
     assert result["type"] == "create_entry"
-    assert result["data"][cf.CONF_GATEWAY_HOST] == "192.0.2.1"
+    assert entry.data[cf.CONF_GATEWAY_HOST] == "192.0.2.1"
+    assert cf.CONF_GATEWAY_HOST not in result["data"]
 
 
 def test_options_flow_normalizes_ap_hosts():
@@ -772,9 +775,12 @@ def test_options_flow_normalizes_ap_hosts():
                 }
             )
         )
-    assert result["data"][cf.CONF_GATEWAY_HOST] == "192.0.2.1"
-    assert result["data"][cf.CONF_SSH_KEY_PATH] == "/tmp/key"
-    assert result["data"][cf.CONF_AP_HOSTS] == "192.0.2.22,192.0.2.23"
+    assert entry.data[cf.CONF_GATEWAY_HOST] == "192.0.2.1"
+    assert entry.data[cf.CONF_SSH_KEY_PATH] == "/tmp/key"
+    assert entry.data[cf.CONF_AP_HOSTS] == "192.0.2.22,192.0.2.23"
+    assert cf.CONF_GATEWAY_HOST not in result["data"]
+    assert cf.CONF_SSH_KEY_PATH not in result["data"]
+    assert cf.CONF_AP_HOSTS not in result["data"]
 
 
 def test_options_flow_mixed_failure_skips_provision():
@@ -840,7 +846,8 @@ def test_options_flow_provision_preserves_unrelated_options():
             flow.async_step_provision_key({"ssh_user": "root", "ssh_password": "pw"})
         )
     assert result["type"] == "create_entry"
-    assert result["data"][cf.CONF_GATEWAY_HOST] == "192.0.2.99"
+    assert entry.data[cf.CONF_GATEWAY_HOST] == "192.0.2.99"
+    assert cf.CONF_GATEWAY_HOST not in result["data"]
     assert result["data"][cf.CONF_DISCONNECT_THRESHOLD] == 600
     assert result["data"][cf.CONF_ENABLE_WIREGUARD] is True
 

@@ -72,6 +72,11 @@ _ERROR_LABELS = {
     "provision_cannot_connect": "cannot connect for provisioning",
     "pub_key_unreadable": "public key unreadable",
 }
+_CONNECTION_OPTION_KEYS = {
+    CONF_GATEWAY_HOST,
+    CONF_SSH_KEY_PATH,
+    CONF_AP_HOSTS,
+}
 
 
 def _format_failures(pairs: list[tuple[str, str]]) -> str:
@@ -149,6 +154,11 @@ def _normalized_connection(result: ProbeResult) -> dict[str, str]:
         CONF_SSH_KEY_PATH: result.ssh_key_path,
         CONF_AP_HOSTS: ",".join(result.ap_hosts),
     }
+
+
+def _options_without_connection_fields(data: dict[str, Any]) -> dict[str, Any]:
+    """Return options payload without fields owned by ConfigEntry.data."""
+    return {k: v for k, v in data.items() if k not in _CONNECTION_OPTION_KEYS}
 
 
 async def _test_ssh(host: str, ssh_key_path: str, ssh_port: int = 22) -> str | None:
@@ -363,6 +373,17 @@ class WrtsensorOptionsFlow(OptionsFlow):
         self._config_entry = config_entry
         self._pending: dict[str, Any] = {}
 
+    def _update_connection_data(self, connection: dict[str, str]) -> None:
+        """Persist connection fields in ConfigEntry.data, not options."""
+        new_data = {**self._config_entry.data, **connection}
+        hass = getattr(self, "hass", None)
+        if hass is None:
+            # Unit-test stubs instantiate the flow directly without HA's flow
+            # manager. Production OptionsFlow instances always have hass.
+            self._config_entry.data = new_data
+            return
+        hass.config_entries.async_update_entry(self._config_entry, data=new_data)
+
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
@@ -376,9 +397,10 @@ class WrtsensorOptionsFlow(OptionsFlow):
                 self._pending = {**user_input, **_normalized_connection(probe)}
                 return await self.async_step_provision_key()
             if not probe.errors:
+                self._update_connection_data(_normalized_connection(probe))
                 return self.async_create_entry(
                     title="",
-                    data={**user_input, **_normalized_connection(probe)},
+                    data=_options_without_connection_fields(user_input),
                 )
             errors = probe.errors
             placeholders = probe.placeholders
@@ -489,7 +511,16 @@ class WrtsensorOptionsFlow(OptionsFlow):
                 user_input["ssh_password"],
             )
             if not errors:
-                return self.async_create_entry(title="", data=self._pending)
+                self._update_connection_data(
+                    {
+                        key: self._pending[key]
+                        for key in _CONNECTION_OPTION_KEYS
+                        if key in self._pending
+                    }
+                )
+                return self.async_create_entry(
+                    title="", data=_options_without_connection_fields(self._pending)
+                )
 
         return self.async_show_form(
             step_id="provision_key",
