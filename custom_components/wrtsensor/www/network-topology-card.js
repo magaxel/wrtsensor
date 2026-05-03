@@ -333,6 +333,9 @@ class NetworkTopologyCard extends HTMLElement {
     const gatewayMac = String(attr.gateway_mac ?? "").toLowerCase();
     const partial = attr.partial ?? false;
     const gatewayLabel = this._config.gateway_label;
+    const configuredAps = attr.ap_hosts ?? [];
+    const hostStats = attr.host_stats ?? {};
+    const hasGateway = !!(gatewayMac || wanIp || wanIp6);
 
     const devices = this._config.show_offline
       ? allDevices
@@ -350,14 +353,21 @@ class NetworkTopologyCard extends HTMLElement {
     for (const d of allDevices) {
       if (d.ap) apHostnames.add(d.ap);
     }
+    for (const host of configuredAps) {
+      if (host) apHostnames.add(String(host));
+      const stats = hostStats[host] ?? {};
+      if (stats.hostname) apHostnames.add(String(stats.hostname));
+    }
 
     // Prefer the authoritative gateway_mac from the scanner; fall back to
     // connection === "gateway" so partial scans (gateway_mac === "") and
     // stale sensor data still render a gateway node with real device info.
-    const gateway = allDevices.find((d) => {
-      if (gatewayMac && String(d.mac ?? "").toLowerCase() === gatewayMac) return true;
-      return d.connection === "gateway";
-    });
+    const gateway = hasGateway
+      ? allDevices.find((d) => {
+          if (gatewayMac && String(d.mac ?? "").toLowerCase() === gatewayMac) return true;
+          return d.connection === "gateway";
+        })
+      : null;
     const aps = allDevices.filter(
       (d) => apHostnames.has(d.hostname) || apHostnames.has(d.mac?.toLowerCase()),
     );
@@ -427,8 +437,8 @@ class NetworkTopologyCard extends HTMLElement {
     const wgBlockH = wgCount ? (wgRows - 1) * WG_ROW_H + WG_ROW_GAP : 0;
 
     const topMargin = 80 + wgBlockH,
-      gwY = topMargin + 90,
-      apRowY = gwY + 110,
+      gwY = hasGateway ? topMargin + 90 : topMargin,
+      apRowY = hasGateway ? gwY + 110 : topMargin + 90,
       devStartY = apRowY + 90;
     const maxDevs = Math.max(...columns.map((c) => c.devices.length), 0);
     const totalH = devStartY + Math.max(maxDevs * ROW_H + 20, 60) + 40;
@@ -550,13 +560,15 @@ class NetworkTopologyCard extends HTMLElement {
     const inetTooltip =
       [wanIp ? `IPv4: ${wanIp}` : "", wanIp6 ? `IPv6: ${wanIp6}` : ""].filter(Boolean).join("\n") ||
       "Internet";
-    nodes.push(`
-      <g>
-        <title>${_esc(inetTooltip)}</title>
-        <circle cx="${inetX}" cy="${inetY}" r="30" class="ntc-inet" opacity="0.95"
-                stroke="var(--card-background-color, #1c1c1c)" stroke-width="2"/>
-        <svg x="${inetX - 13}" y="${inetY - 13}" width="26" height="26" viewBox="0 0 20 20" class="ntc-inet-icon" pointer-events="none">${ICON_GLOBE}</svg>
-      </g>`);
+    if (hasGateway) {
+      nodes.push(`
+        <g>
+          <title>${_esc(inetTooltip)}</title>
+          <circle cx="${inetX}" cy="${inetY}" r="30" class="ntc-inet" opacity="0.95"
+                  stroke="var(--card-background-color, #1c1c1c)" stroke-width="2"/>
+          <svg x="${inetX - 13}" y="${inetY - 13}" width="26" height="26" viewBox="0 0 20 20" class="ntc-inet-icon" pointer-events="none">${ICON_GLOBE}</svg>
+        </g>`);
+    }
 
     if (wgEnabled && wgPeers.length) {
       const inetTopY = inetY - 30;
@@ -580,26 +592,28 @@ class NetworkTopologyCard extends HTMLElement {
       }
     }
 
-    paths.push(curve(inetX, inetY + 30, gwX, gwY - GW_R, "ntc-link-inet"));
+    if (hasGateway) {
+      paths.push(curve(inetX, inetY + 30, gwX, gwY - GW_R, "ntc-link-inet"));
 
-    const gwOp = gateway ? (gateway.online !== false ? "1" : "0.4") : "1";
-    nodes.push(`
-      <g>
-        ${publicIpRows.length ? `<text x="${gwX - GW_R - 10}" y="${gwY + 4}" text-anchor="end" font-size="11" class="ntc-label">${publicIpLabel}</text>` : ""}
-        ${publicIpRows.map((row, i) => `<text x="${gwX - GW_R - 10}" y="${gwY + 16 + i * 12}" text-anchor="end" font-size="${row.size}" class="ntc-wan"${row.opacity ? ` opacity="${row.opacity}"` : ""}>${_esc(row.value)}</text>`).join("")}
-      </g>`);
-    nodes.push(
-      svgNode(
-        gwX,
-        gwY,
-        GW_R,
-        ICON_ROUTER,
-        nodeTextRows(gateway, gatewayLabel),
-        "ntc-gw",
-        gwOp,
-        gateway ? nodeTitle(gateway) : gatewayLabel,
-      ),
-    );
+      const gwOp = gateway ? (gateway.online !== false ? "1" : "0.4") : "1";
+      nodes.push(`
+        <g>
+          ${publicIpRows.length ? `<text x="${gwX - GW_R - 10}" y="${gwY + 4}" text-anchor="end" font-size="11" class="ntc-label">${publicIpLabel}</text>` : ""}
+          ${publicIpRows.map((row, i) => `<text x="${gwX - GW_R - 10}" y="${gwY + 16 + i * 12}" text-anchor="end" font-size="${row.size}" class="ntc-wan"${row.opacity ? ` opacity="${row.opacity}"` : ""}>${_esc(row.value)}</text>`).join("")}
+        </g>`);
+      nodes.push(
+        svgNode(
+          gwX,
+          gwY,
+          GW_R,
+          ICON_ROUTER,
+          nodeTextRows(gateway, gatewayLabel),
+          "ntc-gw",
+          gwOp,
+          gateway ? nodeTitle(gateway) : gatewayLabel,
+        ),
+      );
+    }
 
     if (partial) {
       nodes.push(
@@ -611,7 +625,9 @@ class NetworkTopologyCard extends HTMLElement {
       const col = columns[ci];
       const cx = colCenters[ci];
       const colTopY = col.ap ? apRowY : devStartY;
-      paths.push(curve(gwX, gwY + GW_R, cx, colTopY - (col.ap ? AP_R : NODE_R)));
+      if (hasGateway) {
+        paths.push(curve(gwX, gwY + GW_R, cx, colTopY - (col.ap ? AP_R : NODE_R)));
+      }
 
       if (col.ap) {
         const ap = col.ap;
@@ -637,9 +653,14 @@ class NetworkTopologyCard extends HTMLElement {
         for (let di = 0; di < col.devices.length; di++) {
           const d = col.devices[di];
           const dy = devStartY + di * ROW_H;
-          const prevY = di === 0 ? gwY + GW_R : devStartY + (di - 1) * ROW_H + NODE_R;
-          const prevX = di === 0 ? gwX : cx;
-          if (di === 0) paths.push(curve(prevX, prevY, cx, dy - NODE_R));
+          const prevY =
+            di === 0
+              ? hasGateway
+                ? gwY + GW_R
+                : dy - NODE_R
+              : devStartY + (di - 1) * ROW_H + NODE_R;
+          const prevX = di === 0 ? (hasGateway ? gwX : cx) : cx;
+          if (di === 0 && hasGateway) paths.push(curve(prevX, prevY, cx, dy - NODE_R));
           else paths.push(line(prevX, prevY, cx, dy - NODE_R));
           if (!this._iconCache[d.mac]) this._iconCache[d.mac] = _deviceIcon(d);
           const icon = this._iconCache[d.mac];

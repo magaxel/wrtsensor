@@ -51,8 +51,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await _register_static_path(hass)
     _register_websocket_commands(hass)
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
     _prune_orphaned_host_devices(hass, entry, coordinator)
     _remove_legacy_event_log_entity(hass, entry)
     _prune_wireguard_entities(hass, entry, coordinator)
@@ -60,6 +58,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _prune_network_host_entities(hass, entry, coordinator)
     _prune_wan_bandwidth_entities(hass, entry, coordinator)
     _prune_dns_entities(hass, entry, coordinator)
+
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True

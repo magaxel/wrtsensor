@@ -131,6 +131,8 @@ _ALL_COMPAT_KEYS = (
     "wan_ip",
     "wan_ip6",
     "gateway_mac",
+    "ap_hosts",
+    "host_stats",
     "scan_duration",
     "partial",
 )
@@ -163,8 +165,19 @@ def test_network_scanner_attributes_partial_data():
 
     assert attrs == {"device_count": 3, "wan_ip": "1.2.3.4", "partial": True}
     assert "dns_stats" not in attrs
-    assert "host_stats" not in attrs
     assert "devices" not in attrs
+
+
+def test_network_scanner_attributes_include_topology_ap_hints():
+    data = {
+        "ap_hosts": ["192.0.2.22"],
+        "host_stats": {"192.0.2.22": {"hostname": "ap1"}},
+    }
+
+    attrs = _make_sensor(data).extra_state_attributes
+
+    assert attrs["ap_hosts"] == ["192.0.2.22"]
+    assert attrs["host_stats"] == {"192.0.2.22": {"hostname": "ap1"}}
 
 
 def test_network_scanner_attributes_no_data():

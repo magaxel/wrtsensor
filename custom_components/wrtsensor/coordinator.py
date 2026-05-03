@@ -2128,6 +2128,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 (gw_data.get("wan_ip6") or gw_data.get("gw_ip6", "")) if gw_data else ""
             )
             result["gateway_mac"] = gw_mac
+            result["ap_hosts"] = list(self._ap_hosts)
             result["devices"] = [asdict(d) for d in devices]
         if self._enable_wan_bandwidth:
             result["wan_rx_rate"] = rx_rate

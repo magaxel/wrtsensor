@@ -707,6 +707,9 @@ def test_setup_entry_does_not_touch_lovelace_storage():
 
     assert "static" in calls
     assert "prune" in calls
+    assert calls.index("prune") < calls.index(
+        "forward:sensor,binary_sensor,device_tracker,update"
+    )
     assert all(call != "_register_lovelace_resources" for call in calls)
 
 
