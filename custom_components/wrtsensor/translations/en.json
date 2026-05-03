@@ -50,8 +50,8 @@
       "init": {
         "title": "wrtsensor options",
         "data": {
-          "gateway_host": "Gateway IP address (optional)",
           "ssh_key_path": "SSH private key path",
+          "gateway_host": "Gateway IP address (optional)",
           "ap_hosts": "Access point IPs",
           "lan_iface": "LAN bridge interface",
           "wan_iface": "WAN interface",
@@ -67,8 +67,8 @@
           "asu_interval_h": "Firmware check interval (hours)"
         },
         "data_description": {
-          "gateway_host": "IP address of the OpenWrt router that acts as your gateway. Leave empty for APs-only mode. Port 22 is used by default; add :2222 for IPv4 or [2001:db8::1]:2222 for IPv6.",
           "ssh_key_path": "Absolute path to the SSH private key on the HA host. Example: /config/ssh/id_ed25519",
+          "gateway_host": "IP address of the OpenWrt router that acts as your gateway. Leave empty for APs-only mode. Port 22 is used by default; add :2222 for IPv4 or [2001:db8::1]:2222 for IPv6.",
           "ap_hosts": "Comma-separated IPs of OpenWrt access points to collect Wi-Fi associations and host stats from. Port 22 is used by default; add :2222 for IPv4 or [2001:db8::22]:2222 for IPv6. Example: 192.168.1.22,192.168.1.23:2222",
           "lan_iface": "Bridge interface used for the LAN on OpenWrt. Default: br-lan. Change only if your router uses a different name.",
           "wan_iface": "WAN-facing interface on the gateway used to read RX/TX byte counters. Default: eth0.",

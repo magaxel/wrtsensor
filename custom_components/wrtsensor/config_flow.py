@@ -12,6 +12,9 @@ from homeassistant.config_entries import ConfigEntry, ConfigFlow, OptionsFlow
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.selector import (
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
     TextSelector,
     TextSelectorConfig,
     TextSelectorType,
@@ -382,13 +385,13 @@ class WrtsensorOptionsFlow(OptionsFlow):
 
         schema = vol.Schema(
             {
-                vol.Optional(
-                    CONF_GATEWAY_HOST,
-                    default=current.get(CONF_GATEWAY_HOST, ""),
-                ): str,
                 vol.Required(
                     CONF_SSH_KEY_PATH,
                     default=current.get(CONF_SSH_KEY_PATH, DEFAULT_SSH_KEY),
+                ): str,
+                vol.Optional(
+                    CONF_GATEWAY_HOST,
+                    default=current.get(CONF_GATEWAY_HOST, ""),
                 ): str,
                 vol.Optional(
                     CONF_AP_HOSTS,
@@ -455,9 +458,14 @@ class WrtsensorOptionsFlow(OptionsFlow):
                 vol.Optional(
                     CONF_ASU_INTERVAL_H,
                     default=current.get(CONF_ASU_INTERVAL_H, DEFAULT_ASU_INTERVAL_H),
-                ): vol.All(
-                    vol.Coerce(int),
-                    vol.Range(min=ASU_INTERVAL_MIN_H, max=ASU_INTERVAL_MAX_H),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=ASU_INTERVAL_MIN_H,
+                        max=ASU_INTERVAL_MAX_H,
+                        step=1,
+                        mode=NumberSelectorMode.BOX,
+                        unit_of_measurement="h",
+                    )
                 ),
             }
         )

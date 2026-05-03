@@ -97,6 +97,29 @@ if not hasattr(_core, "callback"):
 _selector = _ensure_module("homeassistant.helpers.selector")
 if not hasattr(_selector, "TextSelector"):
 
+    class _NumberSelectorMode:
+        BOX = "box"
+
+    class _NumberSelectorConfig:
+        def __init__(
+            self,
+            *,
+            min=None,
+            max=None,
+            step=None,
+            mode=None,
+            unit_of_measurement=None,
+        ):
+            self.min = min
+            self.max = max
+            self.step = step
+            self.mode = mode
+            self.unit_of_measurement = unit_of_measurement
+
+    class _NumberSelector:
+        def __init__(self, config):
+            self.config = config
+
     class _TextSelectorType:
         PASSWORD = "password"
 
@@ -108,6 +131,9 @@ if not hasattr(_selector, "TextSelector"):
         def __init__(self, config):
             self.config = config
 
+    _selector.NumberSelector = _NumberSelector  # type: ignore[attr-defined]
+    _selector.NumberSelectorConfig = _NumberSelectorConfig  # type: ignore[attr-defined]
+    _selector.NumberSelectorMode = _NumberSelectorMode  # type: ignore[attr-defined]
     _selector.TextSelector = _TextSelector  # type: ignore[attr-defined]
     _selector.TextSelectorConfig = _TextSelectorConfig  # type: ignore[attr-defined]
     _selector.TextSelectorType = _TextSelectorType  # type: ignore[attr-defined]
@@ -565,6 +591,31 @@ def test_provision_password_uses_password_selector():
     assert password_selector.config.type == cf.TextSelectorType.PASSWORD
 
 
+def test_asu_interval_uses_number_box_selector():
+    entry = types.SimpleNamespace(
+        data={
+            cf.CONF_GATEWAY_HOST: "192.0.2.1",
+            cf.CONF_SSH_KEY_PATH: "/tmp/key",
+            cf.CONF_AP_HOSTS: "192.0.2.22",
+        },
+        options={},
+    )
+    flow = cf.WrtsensorOptionsFlow(entry)
+
+    result = asyncio.run(flow.async_step_init())
+
+    schema = result["data_schema"]
+    asu_selector = next(
+        value
+        for marker, value in schema.items()
+        if getattr(marker, "key", marker) == cf.CONF_ASU_INTERVAL_H
+    )
+    assert asu_selector.config.mode == cf.NumberSelectorMode.BOX
+    assert asu_selector.config.min == cf.ASU_INTERVAL_MIN_H
+    assert asu_selector.config.max == cf.ASU_INTERVAL_MAX_H
+    assert asu_selector.config.step == 1
+
+
 def test_options_flow_accepts_host_metrics_toggle():
     """The host metrics toggle round-trips through the options flow."""
     entry = types.SimpleNamespace(
@@ -640,7 +691,9 @@ def test_options_schema_includes_gateway():
 
     result = asyncio.run(flow.async_step_init())
 
-    keys = _schema_keys(result)
+    ordered_keys = [getattr(marker, "key", marker) for marker in result["data_schema"]]
+    keys = set(ordered_keys)
+    assert ordered_keys[0] == cf.CONF_SSH_KEY_PATH
     assert cf.CONF_GATEWAY_HOST in keys
     assert cf.CONF_SSH_KEY_PATH in keys
     assert cf.CONF_AP_HOSTS in keys
