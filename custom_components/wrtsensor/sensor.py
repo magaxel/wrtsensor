@@ -48,7 +48,7 @@ async def async_setup_entry(
             WrtsensorDNSHitPctSensor(coordinator, entry),
             WrtsensorDNSLatencySensor(coordinator, entry),
         ]
-    if coordinator._enable_wireguard:
+    if coordinator._gateway_host and coordinator._enable_wireguard:
         entities.append(WrtsensorWireguardSensor(coordinator, entry))
 
     async_add_entities(entities)

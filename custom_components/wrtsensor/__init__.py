@@ -10,7 +10,7 @@ from homeassistant.components import websocket_api
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from .const import (
     CONF_DISCONNECT_THRESHOLD,
@@ -53,7 +53,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    _prune_orphaned_host_entities(hass, entry, coordinator)
+    _prune_orphaned_host_devices(hass, entry, coordinator)
     _remove_legacy_event_log_entity(hass, entry)
     _prune_wireguard_entities(hass, entry, coordinator)
     _prune_asu_entities(hass, entry, coordinator)
@@ -65,20 +65,43 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
-def _prune_orphaned_host_entities(
+def _host_from_device_identifier(
+    entry_id: str, identifier: tuple[str, str]
+) -> str | None:
+    """Return the host portion of a wrtsensor per-host device identifier.
+
+    Per-host devices use the identifier shape (DOMAIN, f"{entry_id}_{host}")
+    (see host_device.host_device_info). Returns the host string only for that
+    exact shape; rejects the hub identifier (DOMAIN, entry_id) and any future
+    identifier shapes that happen to share the prefix.
+    """
+    domain, value = identifier
+    if domain != DOMAIN:
+        return None
+    prefix = f"{entry_id}_"
+    if not value.startswith(prefix):
+        return None
+    host = value[len(prefix) :]
+    return host or None
+
+
+def _prune_orphaned_host_devices(
     hass: HomeAssistant, entry: ConfigEntry, coordinator: WrtsensorCoordinator
 ) -> None:
-    """Remove per-host sensors whose hostname no longer appears in the scan.
+    """Remove per-host devices for hosts no longer in the configured set.
 
-    Triggers after every reload — including the reload kicked off by the
-    reconfigure / options flow when a host is removed. Device trackers are
-    intentionally left alone: MAC-keyed, HA-managed, disabled by default.
+    Driven by the configured host set (gateway + APs) rather than scan
+    results, so a removed host is cleaned up immediately on reload — even on
+    a cold start where host_stats is empty. Removing a device cascades to
+    every entity owned by that device (cpu/ram/disk, firmware update),
+    eliminating registry orphans.
+
+    The host-metrics-disabled case is handled separately: cpu/ram/disk
+    entities must be removed but the host device + firmware entity stay.
+    Device trackers are MAC-keyed and HA-managed, so they are left alone.
     """
-    data = coordinator.data or {}
-    host_stats = data.get("host_stats") or {}
-    reg = er.async_get(hass)
-
     if not getattr(coordinator, "_enable_host_metrics", True):
+        reg = er.async_get(hass)
         for reg_entry in list(er.async_entries_for_config_entry(reg, entry.entry_id)):
             if (
                 _parse_host_metric_unique_id(entry.entry_id, reg_entry.unique_id)
@@ -90,28 +113,27 @@ def _prune_orphaned_host_entities(
                 reg_entry.entity_id,
             )
             reg.async_remove(reg_entry.entity_id)
-        return
 
-    if not host_stats:
-        # Don't prune blindly if the scan returned no host data (partial or
-        # cold start) — better to leave unavailable entities than nuke
-        # everything.
-        return
-    live = set(host_stats.keys())
-    for reg_entry in list(er.async_entries_for_config_entry(reg, entry.entry_id)):
-        parsed = _parse_host_metric_unique_id(entry.entry_id, reg_entry.unique_id)
-        if parsed is None:
-            continue
-        hostname, metric, legacy = parsed
-        if not legacy and hostname in live:
-            continue
-        _LOGGER.info(
-            "Pruning wrtsensor host entity %s (hostname %s, metric %s)",
-            reg_entry.entity_id,
-            hostname,
-            metric,
-        )
-        reg.async_remove(reg_entry.entity_id)
+    configured: set[str] = set()
+    if coordinator._gateway_host:
+        configured.add(coordinator._gateway_host)
+    configured.update(coordinator._ap_hosts)
+
+    dev_reg = dr.async_get(hass)
+    for device in list(dr.async_entries_for_config_entry(dev_reg, entry.entry_id)):
+        for identifier in device.identifiers:
+            host = _host_from_device_identifier(entry.entry_id, identifier)
+            if host is None:
+                continue
+            if host in configured:
+                break
+            _LOGGER.info(
+                "Removing wrtsensor host device %s (host %s no longer configured)",
+                device.id,
+                host,
+            )
+            dev_reg.async_remove_device(device.id)
+            break
 
 
 def _parse_host_metric_unique_id(
@@ -202,7 +224,7 @@ def _prune_wireguard_entities(
     peer_prefix = f"{entry.entry_id}_wgpeer_"
     sensor_uid = f"{entry.entry_id}_wireguard"
 
-    if not coordinator._enable_wireguard:
+    if not coordinator._enable_wireguard or not coordinator._gateway_host:
         for reg_entry in list(er.async_entries_for_config_entry(reg, entry.entry_id)):
             if (
                 reg_entry.unique_id.startswith(peer_prefix)
@@ -298,7 +320,10 @@ def _prune_network_host_entities(
 def _prune_wan_bandwidth_entities(
     hass: HomeAssistant, entry: ConfigEntry, coordinator: WrtsensorCoordinator
 ) -> None:
-    if getattr(coordinator, "_enable_wan_bandwidth", True):
+    if (
+        getattr(coordinator, "_enable_wan_bandwidth", True)
+        and coordinator._gateway_host
+    ):
         return
     reg = er.async_get(hass)
     targets = {f"{entry.entry_id}_wan_download", f"{entry.entry_id}_wan_upload"}
@@ -314,7 +339,7 @@ def _prune_wan_bandwidth_entities(
 def _prune_dns_entities(
     hass: HomeAssistant, entry: ConfigEntry, coordinator: WrtsensorCoordinator
 ) -> None:
-    if getattr(coordinator, "_enable_dns_stats", True):
+    if getattr(coordinator, "_enable_dns_stats", True) and coordinator._gateway_host:
         return
     reg = er.async_get(hass)
     targets = {f"{entry.entry_id}_dns_hit_pct", f"{entry.entry_id}_dns_latency"}

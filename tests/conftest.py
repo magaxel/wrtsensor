@@ -49,6 +49,7 @@ for _p in [
     "homeassistant.helpers",
     "homeassistant.helpers.update_coordinator",
     "homeassistant.helpers.entity_registry",
+    "homeassistant.helpers.device_registry",
 ]:
     _stub(_p)
 
@@ -65,6 +66,9 @@ sys.modules["homeassistant.helpers"].update_coordinator = sys.modules[
 sys.modules["homeassistant.helpers"].entity_registry = sys.modules[
     "homeassistant.helpers.entity_registry"
 ]  # type: ignore[attr-defined]
+sys.modules["homeassistant.helpers"].device_registry = sys.modules[
+    "homeassistant.helpers.device_registry"
+]  # type: ignore[attr-defined]
 sys.modules["homeassistant.components"].http = sys.modules[
     "homeassistant.components.http"
 ]  # type: ignore[attr-defined]
@@ -79,6 +83,12 @@ if not hasattr(_er_default, "async_get"):
     _er_default.async_get = lambda hass: None  # type: ignore[attr-defined]
 if not hasattr(_er_default, "async_entries_for_config_entry"):
     _er_default.async_entries_for_config_entry = lambda reg, eid: []  # type: ignore[attr-defined]
+
+_dr_default = sys.modules["homeassistant.helpers.device_registry"]
+if not hasattr(_dr_default, "async_get"):
+    _dr_default.async_get = lambda hass: None  # type: ignore[attr-defined]
+if not hasattr(_dr_default, "async_entries_for_config_entry"):
+    _dr_default.async_entries_for_config_entry = lambda reg, eid: []  # type: ignore[attr-defined]
 
 sys.modules["homeassistant.components.http"].StaticPathConfig = object  # type: ignore[attr-defined]
 _ws = sys.modules["homeassistant.components.websocket_api"]
