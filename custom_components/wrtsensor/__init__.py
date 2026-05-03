@@ -100,8 +100,8 @@ def _prune_orphaned_host_devices(
     entities must be removed but the host device + firmware entity stay.
     Device trackers are MAC-keyed and HA-managed, so they are left alone.
     """
+    reg = er.async_get(hass)
     if not getattr(coordinator, "_enable_host_metrics", True):
-        reg = er.async_get(hass)
         for reg_entry in list(er.async_entries_for_config_entry(reg, entry.entry_id)):
             if (
                 _parse_host_metric_unique_id(entry.entry_id, reg_entry.unique_id)
@@ -111,6 +111,21 @@ def _prune_orphaned_host_devices(
             _LOGGER.info(
                 "Removing wrtsensor host metric entity %s (option disabled)",
                 reg_entry.entity_id,
+            )
+            reg.async_remove(reg_entry.entity_id)
+    else:
+        for reg_entry in list(er.async_entries_for_config_entry(reg, entry.entry_id)):
+            parsed = _parse_host_metric_unique_id(entry.entry_id, reg_entry.unique_id)
+            if parsed is None:
+                continue
+            hostname, metric, legacy = parsed
+            if not legacy:
+                continue
+            _LOGGER.info(
+                "Pruning legacy wrtsensor host entity %s (hostname %s, metric %s)",
+                reg_entry.entity_id,
+                hostname,
+                metric,
             )
             reg.async_remove(reg_entry.entity_id)
 

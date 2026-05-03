@@ -2114,7 +2114,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
 
         wireguard: dict[str, Any] | None = None
-        if self._enable_wireguard:
+        if self._enable_wireguard and self._gateway_host:
             wireguard = await self._collect_wireguard()
 
         result: dict[str, Any] = {
@@ -2136,7 +2136,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             result["host_stats"] = host_stats
         if self._enable_dns_stats:
             result["dns_stats"] = dns_stats
-        if self._enable_wireguard:
+        if self._enable_wireguard and self._gateway_host:
             result["wireguard"] = wireguard
         if self._enable_asu:
             result["asu"] = {

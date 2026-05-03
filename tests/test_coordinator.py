@@ -1020,6 +1020,25 @@ def test_wg_disabled_omits_key_from_result():
     assert "wireguard" not in result
 
 
+def test_wg_enabled_without_gateway_omits_key_and_skips_collection():
+    c = _make_coordinator(gateway_host="", ap_hosts="192.0.2.22")
+    c._enable_wireguard = True
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch.object(c, "_collect_gateway", new=AsyncMock(return_value={}))
+        )
+        stack.enter_context(
+            patch.object(
+                c,
+                "_collect_wireguard",
+                new=AsyncMock(side_effect=AssertionError("must not be called")),
+            )
+        )
+        result = asyncio.run(c._async_update_data())
+
+    assert "wireguard" not in result
+
+
 def test_wg_enabled_no_hosts_have_wg_returns_unavailable():
     c = _make_coordinator()
     c._enable_wireguard = True

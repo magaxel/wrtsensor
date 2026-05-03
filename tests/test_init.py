@@ -366,9 +366,7 @@ def test_prune_devices_removes_gateway_when_cleared():
             _singleton_registry.async_get(f"sensor.wrtsensor_10.0.0.22_{metric}")
             is not None
         )
-    assert (
-        _singleton_registry.async_get("update.wrtsensor_10.0.0.1_firmware") is None
-    )
+    assert _singleton_registry.async_get("update.wrtsensor_10.0.0.1_firmware") is None
     assert (
         _singleton_registry.async_get("update.wrtsensor_10.0.0.22_firmware") is not None
     )
@@ -381,9 +379,7 @@ def test_prune_devices_removes_ap_when_dropped_from_csv():
     kept_dev_id = _add_host_device_with_children(entry, "10.0.0.22")
     dropped_dev_id = _add_host_device_with_children(entry, "10.0.0.23")
 
-    coordinator = _make_coordinator(
-        gateway_host="10.0.0.1", ap_hosts=("10.0.0.22",)
-    )
+    coordinator = _make_coordinator(gateway_host="10.0.0.1", ap_hosts=("10.0.0.22",))
     _prune_devices(hass=None, entry=entry, coordinator=coordinator)
 
     assert _singleton_dev_registry.async_get(gw_dev_id) is not None
@@ -394,9 +390,7 @@ def test_prune_devices_removes_ap_when_dropped_from_csv():
             _singleton_registry.async_get(f"sensor.wrtsensor_10.0.0.23_{metric}")
             is None
         )
-    assert (
-        _singleton_registry.async_get("update.wrtsensor_10.0.0.23_firmware") is None
-    )
+    assert _singleton_registry.async_get("update.wrtsensor_10.0.0.23_firmware") is None
 
 
 def test_prune_devices_leaves_hub_device_alone():
@@ -444,6 +438,29 @@ def test_prune_devices_host_metrics_disabled_keeps_devices_and_firmware():
             _singleton_registry.async_get(f"sensor.wrtsensor_10.0.0.22_{metric}")
             is None
         )
+
+
+def test_prune_devices_removes_legacy_metric_entities_for_configured_hosts():
+    """Legacy _host_<host>_<metric> IDs are superseded by _host_metric_* IDs."""
+    _reset_registry()
+    entry = _make_entry()
+    dev_id = _add_host_device_with_children(entry, "10.0.0.22")
+    _singleton_registry.add(
+        "sensor.legacy_10_0_0_22_cpu",
+        f"{entry.entry_id}_host_10.0.0.22_cpu",
+        entry.entry_id,
+    )
+    coordinator = _make_coordinator(
+        gateway_host=None,
+        ap_hosts=("10.0.0.22",),
+        enable_host_metrics=True,
+    )
+
+    _prune_devices(hass=None, entry=entry, coordinator=coordinator)
+
+    assert _singleton_dev_registry.async_get(dev_id) is not None
+    assert _singleton_registry.async_get("sensor.legacy_10_0_0_22_cpu") is None
+    assert _singleton_registry.async_get("sensor.wrtsensor_10.0.0.22_cpu") is not None
 
 
 # ── Gateway-only feature pruners fire on no-gateway ──────────────────────────
