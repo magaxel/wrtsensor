@@ -72,11 +72,6 @@ _ERROR_LABELS = {
     "provision_cannot_connect": "cannot connect for provisioning",
     "pub_key_unreadable": "public key unreadable",
 }
-_CONNECTION_OPTION_KEYS = {
-    CONF_GATEWAY_HOST,
-    CONF_SSH_KEY_PATH,
-    CONF_AP_HOSTS,
-}
 
 
 def _format_failures(pairs: list[tuple[str, str]]) -> str:
@@ -154,11 +149,6 @@ def _normalized_connection(result: ProbeResult) -> dict[str, str]:
         CONF_SSH_KEY_PATH: result.ssh_key_path,
         CONF_AP_HOSTS: ",".join(result.ap_hosts),
     }
-
-
-def _options_without_connection_fields(data: dict[str, Any]) -> dict[str, Any]:
-    """Return options payload without fields owned by ConfigEntry.data."""
-    return {k: v for k, v in data.items() if k not in _CONNECTION_OPTION_KEYS}
 
 
 async def _test_ssh(host: str, ssh_key_path: str, ssh_port: int = 22) -> str | None:
@@ -397,10 +387,11 @@ class WrtsensorOptionsFlow(OptionsFlow):
                 self._pending = {**user_input, **_normalized_connection(probe)}
                 return await self.async_step_provision_key()
             if not probe.errors:
-                self._update_connection_data(_normalized_connection(probe))
+                connection = _normalized_connection(probe)
+                self._update_connection_data(connection)
                 return self.async_create_entry(
                     title="",
-                    data=_options_without_connection_fields(user_input),
+                    data={**user_input, **connection},
                 )
             errors = probe.errors
             placeholders = probe.placeholders
@@ -513,14 +504,12 @@ class WrtsensorOptionsFlow(OptionsFlow):
             if not errors:
                 self._update_connection_data(
                     {
-                        key: self._pending[key]
-                        for key in _CONNECTION_OPTION_KEYS
-                        if key in self._pending
+                        CONF_GATEWAY_HOST: self._pending.get(CONF_GATEWAY_HOST, ""),
+                        CONF_SSH_KEY_PATH: self._pending[CONF_SSH_KEY_PATH],
+                        CONF_AP_HOSTS: self._pending.get(CONF_AP_HOSTS, ""),
                     }
                 )
-                return self.async_create_entry(
-                    title="", data=_options_without_connection_fields(self._pending)
-                )
+                return self.async_create_entry(title="", data=self._pending)
 
         return self.async_show_form(
             step_id="provision_key",
