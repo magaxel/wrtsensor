@@ -79,7 +79,7 @@ Prefer not to use HACS? See [docs/manual-install.md](docs/manual-install.md) for
 
 ### Changing gateway or APs
 
-Open the integration in **Settings → Devices & Services**, hit the triple-dot menu → **Reconfigure** to change gateway, APs, or SSH key path in place. Every host is re-probed; if authentication fails, the flow prompts for a password and re-provisions the key, same as initial setup. Removing a host prunes its CPU/RAM/Disk sensors automatically on the next reload and stops carrying its old Wi-Fi associations into the topology map after the next scan. Turning off **Collect host metrics** in Options also removes those per-host metric sensors on reload. The public SSH key stays in `/etc/dropbear/authorized_keys` on the removed device — delete it manually there if you no longer trust the host.
+Open **Settings → Devices & Services → wrtsensor → Configure** to change the gateway, APs, SSH key path, or any other option in place. Every host is re-probed; if authentication fails, the flow prompts for a password and re-provisions the key, same as initial setup. Removing a host prunes its CPU/RAM/Disk sensors automatically on the next reload and stops carrying its old Wi-Fi associations into the topology map after the next scan. Turning off **Collect host metrics** also removes those per-host metric sensors on reload. The public SSH key stays in `/etc/dropbear/authorized_keys` on the removed device — delete it manually there if you no longer trust the host.
 
 ### Removing the integration entry
 
@@ -304,6 +304,8 @@ Device tracker entities are named after the device hostname (e.g. `device_tracke
 Version 2.0.0 changes the **Firmware check interval** option from seconds to hours. Existing `asu_interval_s` option values are ignored; use **Configure** to save the desired 1-24 hour interval.
 
 Version 2.0.1 removes the custom **Scan interval** option to follow Home Assistant integration quality guidance. wrtsensor now always polls every 60 seconds. Existing stored scan interval values are ignored and disappear the next time you save Options.
+
+Version 2.1.0 unifies connection editing into the **Configure** dialog. The separate **Reconfigure** menu entry is gone; gateway, SSH key path, and AP hosts are now editable from the same Configure form as every other option. Existing config entries continue to work without migration. The stored `ap_hosts` value is canonicalised on save (whitespace stripped, joined with single commas) — `"a, b"` becomes `"a,b"`.
 
 The compat `sensor.<entry>_network_scanner` no longer carries the full god-blob of every feature. After upgrading, its attributes are limited to network-host data (`devices`, `wan_ip`, `wan_ip6`, `gateway_mac`, `partial`, `scan_duration`). Per-feature data lives on the dedicated sensors:
 
