@@ -153,9 +153,7 @@ def test_remove_entry_deletes_runtime_state_for_last_entry(monkeypatch, tmp_path
         assert (state_dir / "oui.txt").exists()
 
 
-def test_remove_entry_keeps_global_state_when_other_entry_exists(
-    monkeypatch, tmp_path
-):
+def test_remove_entry_keeps_global_state_when_other_entry_exists(monkeypatch, tmp_path):
     ha_dir, local_dir = _set_cleanup_state_dirs(monkeypatch, tmp_path)
     _write_cleanup_files(ha_dir, local_dir)
     hass = _FakeRemoveHass(entries=[_make_entry("other-entry")])
@@ -177,9 +175,7 @@ def test_remove_entry_ignores_missing_runtime_state(monkeypatch, tmp_path):
     assert hass.executor_calls == 1
 
 
-def test_remove_entry_logs_unlink_failure_and_continues(
-    monkeypatch, tmp_path, caplog
-):
+def test_remove_entry_logs_unlink_failure_and_continues(monkeypatch, tmp_path, caplog):
     ha_dir, local_dir = _set_cleanup_state_dirs(monkeypatch, tmp_path)
     _write_cleanup_files(ha_dir, local_dir)
     failed = ha_dir / ".netscan_mac_vendors"
