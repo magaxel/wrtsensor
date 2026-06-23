@@ -311,14 +311,13 @@ Version 2.0.1 removes the custom **Scan interval** option to follow Home Assista
 
 Version 2.1.0 unifies connection editing into the **Configure** dialog. The separate **Reconfigure** menu entry is gone; gateway, SSH key path, and AP hosts are now editable from the same Configure form as every other option. Existing config entries continue to work without migration. The stored `ap_hosts` value is canonicalised on save (whitespace stripped, joined with single commas) — `"a, b"` becomes `"a,b"`.
 
-The compat `sensor.<entry>_network_scanner` no longer carries the full god-blob of every feature. After upgrading, its attributes are limited to network-host data (`devices`, `wan_ip`, `wan_ip6`, `gateway_mac`, `partial`, `scan_duration`). Per-feature data lives on the dedicated sensors:
+The compat `sensor.<entry>_network_scanner` no longer carries the full god-blob of every feature. After upgrading, it keeps network-host data (`devices`, `wan_ip`, `wan_ip6`, `gateway_mac`, `ap_hosts`, `switch_hosts`, `partial`, `scan_duration`) plus `host_stats` for the per-host metric entities. Other per-feature data lives on the dedicated sensors:
 
 - `dns_stats` is now on `sensor.<entry>_dns_cache_hit_pct` (consumed by `dns-stats-card`).
-- `host_stats` is on the per-host CPU/RAM/Disk sensors.
 - `wireguard` is on `sensor.<entry>_wireguard` (consumed by `wireguard-card`).
 - `wan_rx_rate` / `wan_tx_rate` are on the WAN download/upload sensors.
 
-If you have an existing `dns-stats-card` configured with `entity: sensor.<entry>_network_scanner`, edit the card and change the `entity:` field to `sensor.<entry>_dns_cache_hit_pct` — or remove and re-add the card to pick up the new default. Until you do, the card displays "DNS stats unavailable…" since the attribute it expects is no longer on the network scanner sensor. Same applies to any custom dashboards or templates reading `host_stats` / `wireguard` / `wan_rx_rate` / `wan_tx_rate` from the network scanner — those keys are gone; data is on the dedicated entities.
+If you have an existing `dns-stats-card` configured with `entity: sensor.<entry>_network_scanner`, edit the card and change the `entity:` field to `sensor.<entry>_dns_cache_hit_pct` — or remove and re-add the card to pick up the new default. Until you do, the card displays "DNS stats unavailable…" since the attribute it expects is no longer on the network scanner sensor. Same applies to any custom dashboards or templates reading `wireguard` / `wan_rx_rate` / `wan_tx_rate` from the network scanner — those keys are gone; data is on the dedicated entities.
 
 ## Network assumptions
 

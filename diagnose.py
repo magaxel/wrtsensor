@@ -2318,7 +2318,12 @@ def main() -> None:
     # Vendor lookup
     vendor_cache = load_kv_cache(VENDOR_CACHE)
     oui_db = load_oui_db()
-    all_macs = set(leases.keys()) | {w["mac"] for w in wifi} | set(arp_ips.keys())
+    all_macs = (
+        set(leases.keys())
+        | {w["mac"] for w in wifi}
+        | set(arp_ips.keys())
+        | set(switch_ports.keys())
+    )
     lookup_vendors(all_macs, vendor_cache, oui_db)
     save_kv_cache(VENDOR_CACHE, vendor_cache)
 

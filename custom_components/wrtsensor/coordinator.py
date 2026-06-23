@@ -2006,7 +2006,10 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             # Vendor lookup
             all_macs = (
-                set(leases.keys()) | {w["mac"] for w in all_wifi} | set(arp_ips.keys())
+                set(leases.keys())
+                | {w["mac"] for w in all_wifi}
+                | set(arp_ips.keys())
+                | set(switch_ports.keys())
             )
             lookup_vendors(all_macs, self._vendor_cache, self._oui_db)
             await self.hass.async_add_executor_job(

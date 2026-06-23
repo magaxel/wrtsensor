@@ -178,6 +178,29 @@ def test_update_attaches_switch_port_from_gateway_fdb():
     assert by_mac["11:22:33:44:55:66"]["switch_port"] == "5"
 
 
+def test_update_resolves_vendor_for_fdb_only_switch_device():
+    """FDB-only devices must be included in OUI lookup before build_devices."""
+    c = _make_coordinator(gateway_host="", switch_hosts="192.0.2.24")
+    c._oui_db = {"11-22-33": "Acme Devices"}
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch.object(c, "_collect_gateway", new=AsyncMock(return_value={}))
+        )
+        stack.enter_context(
+            patch.object(
+                c,
+                "_collect_wifi",
+                new=AsyncMock(return_value=([], [], {"11:22:33:44:55:66": "lan12"})),
+            )
+        )
+        stack.enter_context(patch.object(c, "_detect_wan_events", return_value=[]))
+        result = asyncio.run(c._async_update_data())
+
+    by_mac = {d["mac"]: d for d in result["devices"]}
+    assert by_mac["11:22:33:44:55:66"]["switch_port"] == "12"
+    assert by_mac["11:22:33:44:55:66"]["vendor"] == "Acme Devices"
+
+
 def test_coordinator_ignores_legacy_ssh_port():
     c = WrtsensorCoordinator(
         _FakeHass(),
