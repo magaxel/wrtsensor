@@ -255,6 +255,44 @@ def test_gateway_only_creates_entry():
     assert result["data"][cf.CONF_GATEWAY_HOST] == "192.0.2.1"
 
 
+def test_switch_only_creates_entry_and_probes_switch():
+    """A switch on its own is a valid topology and gets SSH-probed."""
+    flow = cf.WrtsensorConfigFlow()
+    mock = AsyncMock(return_value=None)
+    with patch.object(cf, "_test_ssh", new=mock):
+        result = asyncio.run(
+            flow.async_step_user(
+                {
+                    cf.CONF_GATEWAY_HOST: "",
+                    cf.CONF_SSH_KEY_PATH: "/tmp/key",
+                    cf.CONF_AP_HOSTS: "",
+                    cf.CONF_SWITCH_HOSTS: "192.0.2.24",
+                }
+            )
+        )
+    assert result["type"] == "create_entry"
+    assert result["data"][cf.CONF_SWITCH_HOSTS] == "192.0.2.24"
+    probed = [call.args[0] for call in mock.await_args_list]
+    assert probed == ["192.0.2.24"]
+
+
+def test_switch_hosts_stored_alongside_gateway_and_aps():
+    flow = cf.WrtsensorConfigFlow()
+    with patch.object(cf, "_test_ssh", new=AsyncMock(return_value=None)):
+        result = asyncio.run(
+            flow.async_step_user(
+                {
+                    cf.CONF_GATEWAY_HOST: "192.0.2.1",
+                    cf.CONF_SSH_KEY_PATH: "/tmp/key",
+                    cf.CONF_AP_HOSTS: "192.0.2.22",
+                    cf.CONF_SWITCH_HOSTS: "192.0.2.24, 192.0.2.25",
+                }
+            )
+        )
+    assert result["type"] == "create_entry"
+    assert result["data"][cf.CONF_SWITCH_HOSTS] == "192.0.2.24,192.0.2.25"
+
+
 def test_empty_gateway_probes_all_aps():
     """When no gateway, all APs are SSH-tested (no empty-string probe)."""
     flow = cf.WrtsensorConfigFlow()

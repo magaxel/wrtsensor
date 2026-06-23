@@ -36,12 +36,14 @@ from .parser import (
     parse_board_model,
     parse_conntrack,
     parse_dns_stats,
+    parse_fdb,
     parse_hoststat,
     parse_leases,
     parse_ndp,
     parse_wg_show_sections,
     parse_wg_uci,
     parse_wifi_output,
+    resolve_switch_ports,
 )
 from .const import (
     ASU_PROBE_GAP_S,
@@ -63,6 +65,7 @@ from .const import (
     CONF_GATEWAY_HOST,
     CONF_LAN_IFACE,
     CONF_SSH_KEY_PATH,
+    CONF_SWITCH_HOSTS,
     CONF_WAN_IFACE,
     CONF_WG_STALE_THRESHOLD,
     DEFAULT_ASU_INTERVAL_H,
@@ -111,6 +114,7 @@ class Device:
     vendor: str = ""
     connection: str = "wired"
     ap: str = ""
+    switch_port: str = ""
     band: str = ""
     channel: int | None = None
     essid: str = ""
@@ -168,9 +172,11 @@ def build_devices(
     prev_state: dict[str, StateEntry] | None = None,
     rates: dict[str, dict[str, int | None]] | None = None,
     active_ap_names: set[str] | None = None,
+    switch_ports: dict[str, str] | None = None,
 ) -> list[Device]:
     ndp = dict(ndp or {})
     active_ap_names = active_ap_names or set()
+    switch_ports = switch_ports or {}
     if gw_mac and gw_ip:
         leases[gw_mac] = {"ip": gw_ip, "hostname": gw_hostname}
         if gw_ip6:
@@ -286,6 +292,26 @@ def build_devices(
                     online=online,
                 )
             )
+    if switch_ports:
+        # Switch-only topology: surface MACs known only from the forwarding DB.
+        existing = {d.mac for d in devices}
+        for mac, port in switch_ports.items():
+            if mac in existing:
+                continue
+            devices.append(
+                Device(
+                    mac=mac,
+                    vendor=vendors.get(mac, ""),
+                    connection="wired",
+                    switch_port=port,
+                    online=True,
+                )
+            )
+            existing.add(mac)
+        # Attach the access port to every wired device learned on a switch.
+        for d in devices:
+            if d.connection != "wifi" and d.mac in switch_ports:
+                d.switch_port = switch_ports[d.mac]
     return devices
 
 
@@ -783,11 +809,17 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             parse_host_endpoint(h.strip()) for h in raw_aps.split(",") if h.strip()
         ]
         self._ap_hosts: list[str] = [ep.host for ep in self._ap_endpoints]
+        raw_switches = data.get(CONF_SWITCH_HOSTS, "")
+        self._switch_endpoints: list[HostEndpoint] = [
+            parse_host_endpoint(h.strip()) for h in raw_switches.split(",") if h.strip()
+        ]
+        self._switch_hosts: list[str] = [ep.host for ep in self._switch_endpoints]
         self._endpoint_ports: dict[str, int] = {
             ep.host: ep.port
             for ep in (
                 ([self._gateway_endpoint] if self._gateway_endpoint else [])
                 + self._ap_endpoints
+                + self._switch_endpoints
             )
         }
         self._lan_iface = data.get(CONF_LAN_IFACE, DEFAULT_LAN_IFACE)
@@ -970,7 +1002,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not self._collector_script:
             _LOGGER.warning("openwrt_collector.sh not found in integration package")
             return
-        hosts = self._ap_hosts[:]
+        hosts = self._ap_hosts + self._switch_hosts
         # Also deploy to gateway (it runs the script for gateway-side WiFi)
         all_hosts = ([self._gateway_host] if self._gateway_host else []) + hosts
         await asyncio.gather(
@@ -1176,7 +1208,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _collect_wifi(
         self, host: str, ap_name: str
-    ) -> tuple[list[dict[str, Any]], list[str]]:
+    ) -> tuple[list[dict[str, Any]], list[str], dict[str, str]]:
         metrics_arg = "" if self._enable_host_metrics else " --no-host-metrics"
         out = await self._ssh_run(
             host, f"sh {COLLECTOR_REMOTE_PATH}{metrics_arg}", timeout=12
@@ -1184,7 +1216,8 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         model, board_name = parse_board_model(out)
         if model:
             self._host_models[host] = (model, board_name)
-        return parse_wifi_output(out, ap_name)
+        entries, hoststat = parse_wifi_output(out, ap_name)
+        return entries, hoststat, parse_fdb(out)
 
     @staticmethod
     def _build_wireguard_command() -> str:
@@ -1865,14 +1898,19 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         all_wifi: list[dict] = []
         alive_ap_ips: list[str] = []
         ap_hoststats: dict[str, list[str]] = {}
+        fdb_by_host: dict[str, dict[str, str]] = {}
 
         if collect_host_bundle:
-            # Collect WiFi stations and/or host metrics from gateway + all APs.
+            # Collect WiFi stations, host metrics, and forwarding DB from the
+            # gateway + all APs + all switches. Switches contribute only FDB and
+            # host metrics (no WiFi, not an AP for device association).
             wifi_tasks: list = []
             if self._gateway_host:
                 wifi_tasks.append(self._collect_wifi(self._gateway_host, "Gateway"))
             for host in self._ap_hosts:
                 wifi_tasks.append(self._collect_wifi(host, name_map.get(host, host)))
+            for host in self._switch_hosts:
+                wifi_tasks.append(self._collect_wifi(host, host))
             wifi_results = await asyncio.gather(*wifi_tasks, return_exceptions=True)
 
             idx = 0
@@ -1880,9 +1918,11 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 gw_wifi_result = wifi_results[idx]
                 idx += 1
                 if not isinstance(gw_wifi_result, Exception):
-                    entries, hoststat = gw_wifi_result
+                    entries, hoststat, fdb = gw_wifi_result
                     if self._enable_network_hosts:
                         all_wifi.extend(entries)
+                        if fdb:
+                            fdb_by_host[self._gateway_host] = fdb
                     if hoststat:
                         ap_hoststats[self._gateway_host] = hoststat
 
@@ -1891,14 +1931,33 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 idx += 1
                 if isinstance(result, Exception):
                     continue
-                entries, hoststat = result
+                entries, hoststat, fdb = result
                 if self._enable_network_hosts:
                     all_wifi.extend(entries)
+                    if fdb:
+                        fdb_by_host[host] = fdb
                 ip = host
                 if hoststat:
                     ap_hoststats[ip] = hoststat
                 if self._enable_network_hosts and (entries or hoststat):
                     alive_ap_ips.append(ip)
+
+            for host in self._switch_hosts:
+                result = wifi_results[idx]
+                idx += 1
+                if isinstance(result, Exception):
+                    continue
+                _entries, hoststat, fdb = result
+                if self._enable_network_hosts and fdb:
+                    fdb_by_host[host] = fdb
+                if hoststat:
+                    ap_hoststats[host] = hoststat
+
+        switch_ports: dict[str, str] = {}
+        if self._enable_network_hosts and fdb_by_host:
+            switch_ports = resolve_switch_ports(
+                fdb_by_host, switch_hosts=set(self._switch_hosts)
+            )
 
         active_ap_names = set()
         if self._enable_network_hosts:
@@ -1999,6 +2058,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 prev_state=self._prev_state,
                 rates=device_rates,
                 active_ap_names=active_ap_names,
+                switch_ports=switch_ports,
             )
 
             # Restore identity for devices that rotated their random MAC
@@ -2084,7 +2144,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     **gw_stats,
                 }
         if self._enable_host_metrics:
-            hosts_for_stats = self._ap_hosts
+            hosts_for_stats = self._ap_hosts + self._switch_hosts
         else:
             hosts_for_stats = []
         for host in hosts_for_stats:
@@ -2129,6 +2189,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             result["gateway_mac"] = gw_mac
             result["ap_hosts"] = list(self._ap_hosts)
+            result["switch_hosts"] = list(self._switch_hosts)
             result["devices"] = [asdict(d) for d in devices]
         if self._enable_wan_bandwidth:
             result["wan_rx_rate"] = rx_rate

@@ -4,6 +4,8 @@
 #   MAC|band|essid|signal_dBm|tx_phy_rate|channel|sta_ul_bytes|sta_dl_bytes|noise_dBm|snr_dB|rx_phy_rate|exp_tput
 # Also emits a STAT| line with host CPU/RAM/disk snapshot:
 #   STAT|<cpu_stat_line>|<mem_total_kB>|<mem_available_kB>|<root_disk_use_pct>
+# And one FDB| line per MAC learned on a bridged switch port (DSA):
+#   FDB|<MAC>|<port_netdev>
 # Called remotely over SSH by diagnose.py / coordinator.py.
 # Requires: iwinfo (hard dependency — exits 1 if missing)
 
@@ -27,6 +29,25 @@ if [ "$collect_host_metrics" -eq 1 ]; then
     mem=$(awk '/^MemTotal:/ {t=$2} /^MemAvailable:/ {a=$2} END{print t "|" a}' /proc/meminfo 2>/dev/null)
     disk=$(df / 2>/dev/null | awk 'NR==2 {gsub("%","",$5); print $5+0}')
     echo "STAT|${cpu_line}|${mem}|${disk}"
+fi
+
+# Bridge forwarding DB: which physical port each MAC was learned on. With DSA
+# every port is its own netdev (lanN) enslaved to a bridge. Only dynamic entries
+# on enslaved ports are useful; skip local/permanent (self) entries. Devices
+# without the `bridge` tool (or without DSA) simply emit nothing here.
+if command -v bridge >/dev/null 2>&1; then
+    bridge fdb show 2>/dev/null | awk '
+      /permanent/ || / self/ { next }
+      {
+        mac=""; port=""
+        if ($1 ~ /^[0-9A-Fa-f][0-9A-Fa-f]:/) mac=toupper($1)
+        for (i=1; i<NF; i++) {
+          if ($i == "dev") port=$(i+1)
+          if ($i == "master") master=1
+        }
+        if (mac != "" && port != "" && master) print "FDB|" mac "|" port
+        master=0
+      }'
 fi
 
 # Exit cleanly if no wireless interfaces are up

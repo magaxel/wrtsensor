@@ -127,6 +127,7 @@ class WrtsensorNetworkScannerSensor(_WrtsensorBase):
         "wan_ip6",
         "gateway_mac",
         "ap_hosts",
+        "switch_hosts",
         "host_stats",
         "scan_duration",
         "partial",

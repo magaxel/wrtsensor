@@ -4,13 +4,14 @@
 
 A lightweight Home Assistant network monitor for a home LAN running OpenWrt. A single Python integration SSHes into the router (and any access points) once per minute, collects the complete picture of the network, and exposes it to Home Assistant as sensors, binary sensors, and device trackers. Lovelace custom cards render device lists, topology maps, event logs, and dnsmasq DNS statistics.
 
-Three topologies are supported:
+Any mix of OpenWrt roles is supported — gateway, access points, and managed switches — and each role is optional on its own:
 
 - **Gateway + APs** — the full picture: DHCP leases, ARP/NDP, WAN, dnsmasq stats, Wi-Fi associations, per-host stats.
 - **Gateway only** — one OpenWrt box that routes and does Wi-Fi. Enter its IP in the gateway field; it counts as both gateway *and* AP for Wi-Fi collection.
 - **APs only** — OpenWrt access points behind a non-OpenWrt router. Leave gateway empty; devices are discovered from each AP's `ip neigh` on `br-lan`. WAN, DNS, and conntrack-bandwidth sensors are not created in this mode.
+- **Switches** — OpenWrt managed switches (e.g. a Zyxel GS1900 on `realtek/rtl838x`). Each switch's bridge forwarding table (`bridge fdb`) is read to report **which switch port** a wired device is connected to. Works alongside any of the above, or on its own.
 
-At least one host (gateway or AP) must be configured.
+At least one host (gateway, AP, or switch) must be configured. Switch ports are reported on the `network-table-card` (the **Port** column) and as the `switch_port` attribute on each device.
 
 ## Table of contents
 
@@ -29,7 +30,7 @@ At least one host (gateway or AP) must be configured.
 
 Per scan (every 60 s) the integration produces a single JSON object. Every collection block can be toggled independently in **Settings → Devices & Services → wrtsensor → Configure** — disable a feature and its SSH-side commands and HA entities both disappear:
 
-- **Network hosts** *(optional, on by default)* — MAC, IPv4, IPv6, hostname, vendor (OUI lookup), connection type, online status, plus all per-client device_trackers and presence binary sensors. Required by `network-topology-card`, `network-table-card`, and `network-events-card`. Disabling skips ARP/NDP/Wi-Fi station/conntrack collection on every host.
+- **Network hosts** *(optional, on by default)* — MAC, IPv4, IPv6, hostname, vendor (OUI lookup), connection type, switch port (for wired clients on an OpenWrt switch), online status, plus all per-client device_trackers and presence binary sensors. Required by `network-topology-card`, `network-table-card`, and `network-events-card`. Disabling skips ARP/NDP/Wi-Fi station/conntrack collection on every host.
 - **Wi-Fi metrics** — for associated clients: AP, band, signal, noise, SNR, TX/RX PHY rates, expected throughput, per-station byte counters. Tied to Network hosts.
 - **Host stats** *(optional, on by default)* — CPU%, RAM%, root disk%, hardware model, and board name for the gateway and each AP. The hardware model (from `ubus call system board`) is shown in the HA device registry for each host's sensor cluster. Disable **Collect host metrics** in Options to skip CPU/RAM/storage collection and remove those sensors.
 - **WAN bandwidth** *(optional, on by default)* — gateway WAN interface RX/TX rate and cumulative byte totals. Disable **Collect WAN bandwidth** to skip the byte-counter reads and remove the WAN download/upload sensors.
@@ -77,9 +78,9 @@ All enabled blocks come from a single 20 s SSH call to the gateway plus parallel
 
 Prefer not to use HACS? See [docs/manual-install.md](docs/manual-install.md) for the `command_line` sensor path.
 
-### Changing gateway or APs
+### Changing gateway, APs, or switches
 
-Open **Settings → Devices & Services → wrtsensor → Configure** to change the gateway, APs, SSH key path, or any other option in place. Every host is re-probed; if authentication fails, the flow prompts for a password and re-provisions the key, same as initial setup. Removing a host prunes its CPU/RAM/Disk sensors automatically on the next reload and stops carrying its old Wi-Fi associations into the topology map after the next scan. Turning off **Collect host metrics** also removes those per-host metric sensors on reload. The public SSH key stays in `/etc/dropbear/authorized_keys` on the removed device — delete it manually there if you no longer trust the host.
+Open **Settings → Devices & Services → wrtsensor → Configure** to change the gateway, APs, switches, SSH key path, or any other option in place. Every host is re-probed; if authentication fails, the flow prompts for a password and re-provisions the key, same as initial setup. Removing a host prunes its CPU/RAM/Disk sensors automatically on the next reload and stops carrying its old Wi-Fi associations into the topology map after the next scan. Turning off **Collect host metrics** also removes those per-host metric sensors on reload. The public SSH key stays in `/etc/dropbear/authorized_keys` on the removed device — delete it manually there if you no longer trust the host.
 
 ### Removing the integration entry
 
@@ -108,10 +109,13 @@ columns:
   - mac
   - connection
   - ap
+  - switch_port
   - band
   - tx_rate
   - signal
 ```
+
+The `switch_port` column shows the OpenWrt switch port number a wired device is connected to (when a switch is configured). It is filterable like the other text columns.
 
 ### `network-topology-card`
 
@@ -283,7 +287,7 @@ Each toggle in Options owns a set of entities — turn the toggle off and the en
 
 | Entity ID | Owning option | What it is |
 |-----------|---------------|-----------|
-| `sensor.<entry>_network_scanner` | Track LAN/Wi-Fi clients | Device count as state; `devices`, `wan_ip`, `wan_ip6`, `gateway_mac`, `partial`, `scan_duration` as attributes. Powers the topology, table, and events cards. |
+| `sensor.<entry>_network_scanner` | Track LAN/Wi-Fi clients | Device count as state; `devices` (each with a `switch_port`), `wan_ip`, `wan_ip6`, `gateway_mac`, `ap_hosts`, `switch_hosts`, `partial`, `scan_duration` as attributes. Powers the topology, table, and events cards. |
 | `device_tracker.<hostname>` | Track LAN/Wi-Fi clients | home/not_home per discovered device — **disabled by default** |
 | `binary_sensor.<entry>_presence_<mac>` | Track LAN/Wi-Fi clients | Online/offline per configured MAC (set in Options) |
 | `sensor.<entry>_wan_download` | Collect WAN bandwidth | WAN RX rate in Mbit/s |
@@ -318,13 +322,14 @@ If you have an existing `dns-stats-card` configured with `entity: sensor.<entry>
 
 ## Network assumptions
 
-The integration expects at least one OpenWrt host reachable over SSH (key-based auth). Gateway and APs are both optional on their own — but at least one must be set.
+The integration expects at least one OpenWrt host reachable over SSH (key-based auth). Gateway, APs, and switches are all optional on their own — but at least one must be set.
 
 | Role | Address (example) |
 |------|-------------------|
 | Gateway — optional | `192.0.2.1` |
 | AP — optional | `192.0.2.10` |
 | AP — optional (more as needed) | `192.0.2.11`, `192.0.2.12`, … |
+| Switch — optional (more as needed) | `192.0.2.24`, … |
 | LAN bridge | `br-lan` |
 | WAN interface | `eth0` |
 

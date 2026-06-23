@@ -6,12 +6,14 @@
         "data": {
           "gateway_host": "Gateway IP address (optional)",
           "ssh_key_path": "SSH private key path",
-          "ap_hosts": "Access point IPs"
+          "ap_hosts": "Access point IPs",
+          "switch_hosts": "Switch IPs"
         },
         "data_description": {
           "gateway_host": "IP address of the OpenWrt router that acts as your gateway. Port 22 is used by default; add :2222 for IPv4 or use [2001:db8::1]:2222 for IPv6 with a custom port.",
           "ssh_key_path": "Absolute path to the SSH private key on the HA host used to authenticate as root. Example: /config/ssh/id_ed25519",
-          "ap_hosts": "Comma-separated IPs of OpenWrt access points. Port 22 is used by default; add :2222 for IPv4 or use [2001:db8::22]:2222 for IPv6 with a custom port. Example: 192.168.1.22,192.168.1.23:2222"
+          "ap_hosts": "Comma-separated IPs of OpenWrt access points. Port 22 is used by default; add :2222 for IPv4 or use [2001:db8::22]:2222 for IPv6 with a custom port. Example: 192.168.1.22,192.168.1.23:2222",
+          "switch_hosts": "Comma-separated IPs of OpenWrt managed switches. Used to report which switch port each wired device is on. Port 22 is used by default; add :2222 for IPv4 or [2001:db8::24]:2222 for IPv6. Example: 192.168.1.24"
         }
       },
       "provision_key": {
@@ -39,7 +41,7 @@
       "provision_failed": "Could not add the SSH key on: {failures}",
       "auth_failed_after_provision": "Key was provisioned but some hosts still reject it: {failures}",
       "invalid_host": "Invalid host or port: {failures}",
-      "at_least_one_host": "Enter at least a gateway or one access point."
+      "at_least_one_host": "Enter at least a gateway, access point, or switch."
     },
     "abort": {
       "already_configured": "This host is already configured"
@@ -53,6 +55,7 @@
           "ssh_key_path": "SSH private key path",
           "gateway_host": "Gateway IP address (optional)",
           "ap_hosts": "Access point IPs",
+          "switch_hosts": "Switch IPs",
           "lan_iface": "LAN bridge interface",
           "wan_iface": "WAN interface",
           "disconnect_threshold_s": "Disconnect threshold (seconds)",
@@ -70,6 +73,7 @@
           "ssh_key_path": "Absolute path to the SSH private key on the HA host. Example: /config/ssh/id_ed25519",
           "gateway_host": "IP address of the OpenWrt router that acts as your gateway. Leave empty for APs-only mode. Port 22 is used by default; add :2222 for IPv4 or [2001:db8::1]:2222 for IPv6.",
           "ap_hosts": "Comma-separated IPs of OpenWrt access points to collect Wi-Fi associations and host stats from. Port 22 is used by default; add :2222 for IPv4 or [2001:db8::22]:2222 for IPv6. Example: 192.168.1.22,192.168.1.23:2222",
+          "switch_hosts": "Comma-separated IPs of OpenWrt managed switches. The integration reads each switch's bridge forwarding table to show which port a wired device is connected to. Port 22 is used by default; add :2222 for IPv4 or [2001:db8::24]:2222 for IPv6. Example: 192.168.1.24",
           "lan_iface": "Bridge interface used for the LAN on OpenWrt. Default: br-lan. Change only if your router uses a different name.",
           "wan_iface": "WAN-facing interface on the gateway used to read RX/TX byte counters. Default: eth0.",
           "disconnect_threshold_s": "How long a device must be absent before a disconnect event is recorded. Default: 120 s (2 missed scans at 60 s interval).",
@@ -109,7 +113,7 @@
       "auth_failed_after_provision": "Key was provisioned but some hosts still reject it: {failures}",
       "setup_failed": "Setup failed: {failures}",
       "invalid_host": "Invalid host or port: {failures}",
-      "at_least_one_host": "Enter at least a gateway or one access point."
+      "at_least_one_host": "Enter at least a gateway, access point, or switch."
     }
   }
 }
