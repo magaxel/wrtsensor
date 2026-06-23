@@ -133,6 +133,7 @@ def _prune_orphaned_host_devices(
     if coordinator._gateway_host:
         configured.add(coordinator._gateway_host)
     configured.update(coordinator._ap_hosts)
+    configured.update(coordinator._switch_hosts)
 
     dev_reg = dr.async_get(hass)
     for device in list(dr.async_entries_for_config_entry(dev_reg, entry.entry_id)):

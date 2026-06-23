@@ -203,6 +203,7 @@ def _make_coordinator(
     *,
     gateway_host: str | None = "10.0.0.1",
     ap_hosts: tuple[str, ...] = ("10.0.0.22", "10.0.0.23"),
+    switch_hosts: tuple[str, ...] = (),
     enable_host_metrics: bool = True,
     enable_wireguard: bool = False,
     enable_wan_bandwidth: bool = True,
@@ -212,6 +213,7 @@ def _make_coordinator(
     return types.SimpleNamespace(
         _gateway_host=gateway_host,
         _ap_hosts=list(ap_hosts),
+        _switch_hosts=list(switch_hosts),
         _enable_host_metrics=enable_host_metrics,
         _enable_wireguard=enable_wireguard,
         _enable_wan_bandwidth=enable_wan_bandwidth,
@@ -391,6 +393,22 @@ def test_prune_devices_removes_ap_when_dropped_from_csv():
             is None
         )
     assert _singleton_registry.async_get("update.wrtsensor_10.0.0.23_firmware") is None
+
+
+def test_prune_devices_keeps_configured_switch_host():
+    """A configured switch host's device must not be pruned as orphaned."""
+    _reset_registry()
+    entry = _make_entry()
+    gw_dev_id = _add_host_device_with_children(entry, "10.0.0.1")
+    switch_dev_id = _add_host_device_with_children(entry, "10.0.0.21")
+
+    coordinator = _make_coordinator(
+        gateway_host="10.0.0.1", ap_hosts=(), switch_hosts=("10.0.0.21",)
+    )
+    _prune_devices(hass=None, entry=entry, coordinator=coordinator)
+
+    assert _singleton_dev_registry.async_get(gw_dev_id) is not None
+    assert _singleton_dev_registry.async_get(switch_dev_id) is not None
 
 
 def test_prune_devices_leaves_hub_device_alone():

@@ -1416,8 +1416,10 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return info
 
     def _asu_hosts(self) -> list[str]:
-        return ([self._gateway_host] if self._gateway_host else []) + list(
-            self._ap_hosts
+        return (
+            ([self._gateway_host] if self._gateway_host else [])
+            + list(self._ap_hosts)
+            + list(self._switch_hosts)
         )
 
     async def _asu_probe_once(self) -> bool:

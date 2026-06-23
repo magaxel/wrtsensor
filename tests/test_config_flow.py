@@ -456,6 +456,33 @@ def test_provision_step_provisions_all_hosts():
     assert result["type"] == "create_entry"
 
 
+def test_provision_step_includes_switch_hosts():
+    """provision_key must also provision/validate switch hosts, not just GW+APs."""
+    flow = cf.WrtsensorConfigFlow()
+    flow._pending = {
+        cf.CONF_GATEWAY_HOST: "192.0.2.1",
+        cf.CONF_SSH_KEY_PATH: "/tmp/key",
+        cf.CONF_AP_HOSTS: "192.0.2.22",
+        cf.CONF_SWITCH_HOSTS: "192.0.2.24:2200",
+    }
+    prov = AsyncMock(return_value=None)
+    post = AsyncMock(return_value=None)
+    with (
+        patch.object(cf, "_provision_ssh_key", new=prov),
+        patch.object(cf, "_test_ssh", new=post),
+    ):
+        result = asyncio.run(
+            flow.async_step_provision_key({"ssh_user": "root", "ssh_password": "pw"})
+        )
+    provisioned = [call.args[0] for call in prov.await_args_list]
+    assert provisioned == ["192.0.2.1", "192.0.2.22", "192.0.2.24"]
+    # switch endpoint's inline port is honored during provisioning
+    assert prov.await_args_list[-1].args[1] == 2200
+    tested = [call.args[0] for call in post.await_args_list]
+    assert tested == ["192.0.2.1", "192.0.2.22", "192.0.2.24"]
+    assert result["type"] == "create_entry"
+
+
 def test_provision_fails_on_one_host_reports_error():
     flow = cf.WrtsensorConfigFlow()
     flow._pending = {

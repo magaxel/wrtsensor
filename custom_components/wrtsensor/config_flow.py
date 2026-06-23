@@ -324,7 +324,8 @@ async def _run_provision(
     key_path = pending[CONF_SSH_KEY_PATH]
     gateway = pending.get(CONF_GATEWAY_HOST, "")
     ap_hosts = _parse_hosts(pending.get(CONF_AP_HOSTS, ""))
-    endpoints = _parse_config_endpoints(gateway, ap_hosts)
+    switch_hosts = _parse_hosts(pending.get(CONF_SWITCH_HOSTS, ""))
+    endpoints = _parse_config_endpoints(gateway, ap_hosts, switch_hosts)
 
     prov_results = await asyncio.gather(
         *[

@@ -32,9 +32,9 @@ async def async_setup_entry(
     coordinator: WrtsensorCoordinator = hass.data[DOMAIN][entry.entry_id]
     if not coordinator._enable_asu:
         return
-    hosts = ([coordinator._gateway_host] if coordinator._gateway_host else []) + list(
-        coordinator._ap_hosts
-    )
+    # Reuse the coordinator's host list (gateway + APs + switches) so the
+    # firmware entities and the ASU probe loop always cover the same hosts.
+    hosts = coordinator._asu_hosts()
     if not hosts:
         return
     async_add_entities(WrtsensorHostUpdate(coordinator, entry, host) for host in hosts)
