@@ -2524,6 +2524,7 @@ def main() -> None:
                 "vendor": d.vendor,
                 "connection": d.connection,
                 "ap": d.ap,
+                "switch_port": d.switch_port,
                 "band": d.band,
                 "channel": d.channel,
                 "essid": d.essid,
