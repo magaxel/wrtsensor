@@ -103,6 +103,7 @@ class _FakeCoordinator:
         last_update_success: bool = True,
         gateway_host: str = "192.0.2.1",
         ap_hosts: tuple[str, ...] = ("192.0.2.10", "192.0.2.11"),
+        switch_hosts: tuple[str, ...] = (),
         enable_asu: bool = True,
     ) -> None:
         self.data = {
@@ -112,7 +113,15 @@ class _FakeCoordinator:
         self.last_update_success = last_update_success
         self._gateway_host = gateway_host
         self._ap_hosts = list(ap_hosts)
+        self._switch_hosts = list(switch_hosts)
         self._enable_asu = enable_asu
+
+    def _asu_hosts(self) -> list[str]:
+        return (
+            ([self._gateway_host] if self._gateway_host else [])
+            + list(self._ap_hosts)
+            + list(self._switch_hosts)
+        )
 
 
 def _ok_info(installed: str = "24.10.1 r28597", latest: str | None = None) -> dict:
@@ -235,6 +244,15 @@ def test_setup_creates_one_entity_per_host_before_first_probe():
     assert hostnames == ["192.0.2.1", "192.0.2.10", "192.0.2.11"]
     # All start unavailable until cache fills.
     assert all(e.available is False for e in added)
+
+
+def test_setup_creates_firmware_entity_for_switch_host():
+    """Switch hosts get a firmware/ASU entity, same as gateway and APs."""
+    coord = _FakeCoordinator(
+        asu={}, gateway_host="", ap_hosts=(), switch_hosts=("192.0.2.24",)
+    )
+    added = _collect_added(coord)
+    assert [e._hostname for e in added] == ["192.0.2.24"]
 
 
 def test_setup_skips_entities_when_option_disabled():

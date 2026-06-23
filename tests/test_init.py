@@ -31,18 +31,33 @@ _er = _stub("homeassistant.helpers.entity_registry")
 
 
 class _RegEntry:
-    def __init__(self, entity_id: str, unique_id: str, config_entry_id: str):
+    def __init__(
+        self,
+        entity_id: str,
+        unique_id: str,
+        config_entry_id: str,
+        device_id: str | None = None,
+    ):
         self.entity_id = entity_id
         self.unique_id = unique_id
         self.config_entry_id = config_entry_id
+        self.device_id = device_id
 
 
 class _Registry:
     def __init__(self) -> None:
         self._entries: dict[str, _RegEntry] = {}
 
-    def add(self, entity_id: str, unique_id: str, config_entry_id: str) -> None:
-        self._entries[entity_id] = _RegEntry(entity_id, unique_id, config_entry_id)
+    def add(
+        self,
+        entity_id: str,
+        unique_id: str,
+        config_entry_id: str,
+        device_id: str | None = None,
+    ) -> None:
+        self._entries[entity_id] = _RegEntry(
+            entity_id, unique_id, config_entry_id, device_id
+        )
 
     def async_get(self, entity_id: str):
         return self._entries.get(entity_id)
@@ -66,6 +81,57 @@ _er.async_get = _async_get  # type: ignore[attr-defined]
 _er.async_entries_for_config_entry = _async_entries_for_config_entry  # type: ignore[attr-defined]
 
 
+# device_registry stub with cascade-into-entity-registry on remove
+_dr = _stub("homeassistant.helpers.device_registry")
+
+
+class _DeviceEntry:
+    def __init__(
+        self, device_id: str, identifiers: set[tuple[str, str]], config_entry_id: str
+    ):
+        self.id = device_id
+        self.identifiers = identifiers
+        self.config_entry_id = config_entry_id
+
+
+class _DeviceRegistry:
+    def __init__(self) -> None:
+        self._devices: dict[str, _DeviceEntry] = {}
+
+    def add(
+        self, device_id: str, identifiers: set[tuple[str, str]], config_entry_id: str
+    ) -> _DeviceEntry:
+        dev = _DeviceEntry(device_id, identifiers, config_entry_id)
+        self._devices[device_id] = dev
+        return dev
+
+    def async_get(self, device_id: str):
+        return self._devices.get(device_id)
+
+    def async_remove_device(self, device_id: str) -> None:
+        self._devices.pop(device_id, None)
+        # Cascade: HA removes every entity_registry entry whose device_id
+        # points at the removed device.
+        for entity_id, reg_entry in list(_singleton_registry._entries.items()):
+            if reg_entry.device_id == device_id:
+                _singleton_registry._entries.pop(entity_id, None)
+
+
+_singleton_dev_registry = _DeviceRegistry()
+
+
+def _dr_async_get(_hass):  # noqa: D401
+    return _singleton_dev_registry
+
+
+def _dr_async_entries_for_config_entry(reg, entry_id):
+    return [d for d in reg._devices.values() if d.config_entry_id == entry_id]
+
+
+_dr.async_get = _dr_async_get  # type: ignore[attr-defined]
+_dr.async_entries_for_config_entry = _dr_async_entries_for_config_entry  # type: ignore[attr-defined]
+
+
 # Load __init__.py once
 _init_name = "custom_components.wrtsensor.__init_prune_test__"
 if _init_name not in sys.modules:
@@ -77,15 +143,19 @@ if _init_name not in sys.modules:
 else:
     _init_mod = sys.modules[_init_name]
 
-_prune = _init_mod._prune_orphaned_host_entities
+_prune_devices = _init_mod._prune_orphaned_host_devices
 _prune_wg = _init_mod._prune_wireguard_entities
+_prune_wan = _init_mod._prune_wan_bandwidth_entities
+_prune_dns = _init_mod._prune_dns_entities
 _remove_legacy = _init_mod._remove_legacy_event_log_entity
 _ws_recent_events = _init_mod._ws_recent_events
 _async_remove_entry = _init_mod.async_remove_entry
+_DOMAIN = _init_mod.DOMAIN
 
 
 def _reset_registry():
     _singleton_registry._entries.clear()
+    _singleton_dev_registry._devices.clear()
 
 
 def _make_entry(entry_id="test-entry"):
@@ -129,10 +199,54 @@ def _write_cleanup_files(*state_dirs: Path) -> None:
         (state_dir / "oui.txt").write_text("raw oui")
 
 
-def _make_coordinator(host_stats, *, enable_host_metrics=True):
+def _make_coordinator(
+    *,
+    gateway_host: str | None = "10.0.0.1",
+    ap_hosts: tuple[str, ...] = ("10.0.0.22", "10.0.0.23"),
+    switch_hosts: tuple[str, ...] = (),
+    enable_host_metrics: bool = True,
+    enable_wireguard: bool = False,
+    enable_wan_bandwidth: bool = True,
+    enable_dns_stats: bool = True,
+    data: dict | None = None,
+):
     return types.SimpleNamespace(
-        data={"host_stats": host_stats}, _enable_host_metrics=enable_host_metrics
+        _gateway_host=gateway_host,
+        _ap_hosts=list(ap_hosts),
+        _switch_hosts=list(switch_hosts),
+        _enable_host_metrics=enable_host_metrics,
+        _enable_wireguard=enable_wireguard,
+        _enable_wan_bandwidth=enable_wan_bandwidth,
+        _enable_dns_stats=enable_dns_stats,
+        data=data if data is not None else {"host_stats": {}},
     )
+
+
+def _add_host_device_with_children(entry, host: str) -> str:
+    """Register a per-host device + its cpu/ram/disk + firmware entities.
+
+    Returns the synthetic device_id so tests can assert removal.
+    """
+    device_id = f"dev_{host}"
+    _singleton_dev_registry.add(
+        device_id,
+        identifiers={(_DOMAIN, f"{entry.entry_id}_{host}")},
+        config_entry_id=entry.entry_id,
+    )
+    for metric in ("cpu", "ram", "disk"):
+        _singleton_registry.add(
+            entity_id=f"sensor.wrtsensor_{host}_{metric}",
+            unique_id=f"{entry.entry_id}_host_metric_{host}_{metric}",
+            config_entry_id=entry.entry_id,
+            device_id=device_id,
+        )
+    _singleton_registry.add(
+        entity_id=f"update.wrtsensor_{host}_firmware",
+        unique_id=f"{entry.entry_id}_host_{host}_firmware",
+        config_entry_id=entry.entry_id,
+        device_id=device_id,
+    )
+    return device_id
 
 
 def test_remove_entry_deletes_runtime_state_for_last_entry(monkeypatch, tmp_path):
@@ -205,121 +319,226 @@ def test_remove_entry_logs_unlink_failure_and_continues(monkeypatch, tmp_path, c
     assert str(failed) in caplog.text
 
 
-def test_prune_removes_stale_and_legacy_host_entities():
+# ── _host_from_device_identifier ─────────────────────────────────────────────
+
+
+def test_host_identifier_parser_accepts_per_host_shape():
+    parse = _init_mod._host_from_device_identifier
+    assert parse("entry-1", (_DOMAIN, "entry-1_10.0.0.22")) == "10.0.0.22"
+
+
+def test_host_identifier_parser_rejects_hub_identifier():
+    """Identifier (DOMAIN, entry_id) is the hub device — must not be matched."""
+    parse = _init_mod._host_from_device_identifier
+    assert parse("entry-1", (_DOMAIN, "entry-1")) is None
+
+
+def test_host_identifier_parser_rejects_other_domain():
+    parse = _init_mod._host_from_device_identifier
+    assert parse("entry-1", ("other_domain", "entry-1_10.0.0.22")) is None
+
+
+# ── _prune_orphaned_host_devices ─────────────────────────────────────────────
+
+
+def test_prune_devices_removes_gateway_when_cleared():
+    """Clearing the gateway must remove its device + child entities (cascade)."""
     _reset_registry()
     entry = _make_entry()
-    # One live host, one stale ghost, plus legacy live IDs from the pre-reset
-    # host sensor scheme.
-    for host, kind in [
-        ("live", "cpu"),
-        ("live", "ram"),
-        ("live", "disk"),
-        ("ghost", "cpu"),
-        ("ghost", "ram"),
-        ("ghost", "disk"),
-    ]:
-        _singleton_registry.add(
-            entity_id=f"sensor.wrtsensor_{host}_{kind}",
-            unique_id=f"{entry.entry_id}_host_metric_{host}_{kind}",
-            config_entry_id=entry.entry_id,
+    gw_dev_id = _add_host_device_with_children(entry, "10.0.0.1")
+    ap1_dev_id = _add_host_device_with_children(entry, "10.0.0.22")
+    ap2_dev_id = _add_host_device_with_children(entry, "10.0.0.23")
+
+    coordinator = _make_coordinator(
+        gateway_host=None, ap_hosts=("10.0.0.22", "10.0.0.23")
+    )
+    _prune_devices(hass=None, entry=entry, coordinator=coordinator)
+
+    # Gateway device gone, APs intact
+    assert _singleton_dev_registry.async_get(gw_dev_id) is None
+    assert _singleton_dev_registry.async_get(ap1_dev_id) is not None
+    assert _singleton_dev_registry.async_get(ap2_dev_id) is not None
+
+    # Cascade: gateway's child entities gone, AP child entities intact
+    for metric in ("cpu", "ram", "disk"):
+        assert (
+            _singleton_registry.async_get(f"sensor.wrtsensor_10.0.0.1_{metric}") is None
         )
-    for kind in ["cpu", "ram", "disk"]:
-        _singleton_registry.add(
-            entity_id=f"sensor.legacy_live_{kind}",
-            unique_id=f"{entry.entry_id}_host_live_{kind}",
-            config_entry_id=entry.entry_id,
+        assert (
+            _singleton_registry.async_get(f"sensor.wrtsensor_10.0.0.22_{metric}")
+            is not None
         )
-    coordinator = _make_coordinator({"live": {"cpu": 1.0}})
-
-    _prune(hass=None, entry=entry, coordinator=coordinator)
-
-    remaining = set(_singleton_registry._entries.keys())
-    assert remaining == {
-        "sensor.wrtsensor_live_cpu",
-        "sensor.wrtsensor_live_ram",
-        "sensor.wrtsensor_live_disk",
-    }
+    assert _singleton_registry.async_get("update.wrtsensor_10.0.0.1_firmware") is None
+    assert (
+        _singleton_registry.async_get("update.wrtsensor_10.0.0.22_firmware") is not None
+    )
 
 
-def test_prune_skips_when_host_stats_empty():
-    """Empty scan must not nuke every host entity — could be a cold start."""
+def test_prune_devices_removes_ap_when_dropped_from_csv():
+    _reset_registry()
+    entry = _make_entry()
+    gw_dev_id = _add_host_device_with_children(entry, "10.0.0.1")
+    kept_dev_id = _add_host_device_with_children(entry, "10.0.0.22")
+    dropped_dev_id = _add_host_device_with_children(entry, "10.0.0.23")
+
+    coordinator = _make_coordinator(gateway_host="10.0.0.1", ap_hosts=("10.0.0.22",))
+    _prune_devices(hass=None, entry=entry, coordinator=coordinator)
+
+    assert _singleton_dev_registry.async_get(gw_dev_id) is not None
+    assert _singleton_dev_registry.async_get(kept_dev_id) is not None
+    assert _singleton_dev_registry.async_get(dropped_dev_id) is None
+    for metric in ("cpu", "ram", "disk"):
+        assert (
+            _singleton_registry.async_get(f"sensor.wrtsensor_10.0.0.23_{metric}")
+            is None
+        )
+    assert _singleton_registry.async_get("update.wrtsensor_10.0.0.23_firmware") is None
+
+
+def test_prune_devices_keeps_configured_switch_host():
+    """A configured switch host's device must not be pruned as orphaned."""
+    _reset_registry()
+    entry = _make_entry()
+    gw_dev_id = _add_host_device_with_children(entry, "10.0.0.1")
+    switch_dev_id = _add_host_device_with_children(entry, "10.0.0.21")
+
+    coordinator = _make_coordinator(
+        gateway_host="10.0.0.1", ap_hosts=(), switch_hosts=("10.0.0.21",)
+    )
+    _prune_devices(hass=None, entry=entry, coordinator=coordinator)
+
+    assert _singleton_dev_registry.async_get(gw_dev_id) is not None
+    assert _singleton_dev_registry.async_get(switch_dev_id) is not None
+
+
+def test_prune_devices_leaves_hub_device_alone():
+    """The hub-level device (identifier (DOMAIN, entry_id)) must never be pruned."""
+    _reset_registry()
+    entry = _make_entry()
+    _singleton_dev_registry.add(
+        "hub_dev",
+        identifiers={(_DOMAIN, entry.entry_id)},
+        config_entry_id=entry.entry_id,
+    )
+    _add_host_device_with_children(entry, "10.0.0.22")
+
+    coordinator = _make_coordinator(gateway_host=None, ap_hosts=("10.0.0.22",))
+    _prune_devices(hass=None, entry=entry, coordinator=coordinator)
+
+    assert _singleton_dev_registry.async_get("hub_dev") is not None
+
+
+def test_prune_devices_host_metrics_disabled_keeps_devices_and_firmware():
+    """When host metrics are disabled, cpu/ram/disk entities go but device stays.
+
+    Drives the host-metrics-disabled branch directly, asserting it does NOT
+    delete the device or its firmware update entity (those belong to ASU).
+    """
+    _reset_registry()
+    entry = _make_entry()
+    dev_id = _add_host_device_with_children(entry, "10.0.0.22")
+
+    coordinator = _make_coordinator(
+        gateway_host="10.0.0.1",
+        ap_hosts=("10.0.0.22",),
+        enable_host_metrics=False,
+    )
+    _prune_devices(hass=None, entry=entry, coordinator=coordinator)
+
+    # Device + firmware survive
+    assert _singleton_dev_registry.async_get(dev_id) is not None
+    assert (
+        _singleton_registry.async_get("update.wrtsensor_10.0.0.22_firmware") is not None
+    )
+    # cpu/ram/disk for the still-configured host are pruned
+    for metric in ("cpu", "ram", "disk"):
+        assert (
+            _singleton_registry.async_get(f"sensor.wrtsensor_10.0.0.22_{metric}")
+            is None
+        )
+
+
+def test_prune_devices_removes_legacy_metric_entities_for_configured_hosts():
+    """Legacy _host_<host>_<metric> IDs are superseded by _host_metric_* IDs."""
+    _reset_registry()
+    entry = _make_entry()
+    dev_id = _add_host_device_with_children(entry, "10.0.0.22")
+    _singleton_registry.add(
+        "sensor.legacy_10_0_0_22_cpu",
+        f"{entry.entry_id}_host_10.0.0.22_cpu",
+        entry.entry_id,
+    )
+    coordinator = _make_coordinator(
+        gateway_host=None,
+        ap_hosts=("10.0.0.22",),
+        enable_host_metrics=True,
+    )
+
+    _prune_devices(hass=None, entry=entry, coordinator=coordinator)
+
+    assert _singleton_dev_registry.async_get(dev_id) is not None
+    assert _singleton_registry.async_get("sensor.legacy_10_0_0_22_cpu") is None
+    assert _singleton_registry.async_get("sensor.wrtsensor_10.0.0.22_cpu") is not None
+
+
+# ── Gateway-only feature pruners fire on no-gateway ──────────────────────────
+
+
+def test_prune_wan_removes_when_gateway_cleared():
     _reset_registry()
     entry = _make_entry()
     _singleton_registry.add(
-        entity_id="sensor.wrtsensor_live_cpu",
-        unique_id=f"{entry.entry_id}_host_live_cpu",
-        config_entry_id=entry.entry_id,
+        "sensor.wrtsensor_wan_download",
+        f"{entry.entry_id}_wan_download",
+        entry.entry_id,
     )
-    coordinator = _make_coordinator({})
+    _singleton_registry.add(
+        "sensor.wrtsensor_wan_upload",
+        f"{entry.entry_id}_wan_upload",
+        entry.entry_id,
+    )
+    coordinator = _make_coordinator(gateway_host=None, enable_wan_bandwidth=True)
 
-    _prune(hass=None, entry=entry, coordinator=coordinator)
+    _prune_wan(None, entry, coordinator)
 
-    assert "sensor.wrtsensor_live_cpu" in _singleton_registry._entries
+    assert _singleton_registry.async_get("sensor.wrtsensor_wan_download") is None
+    assert _singleton_registry.async_get("sensor.wrtsensor_wan_upload") is None
 
 
-def test_prune_removes_all_host_entities_when_host_metrics_disabled():
+def test_prune_wan_keeps_when_gateway_and_toggle_on():
     _reset_registry()
     entry = _make_entry()
     _singleton_registry.add(
-        entity_id="sensor.wrtsensor_live_cpu",
-        unique_id=f"{entry.entry_id}_host_live_cpu",
-        config_entry_id=entry.entry_id,
+        "sensor.wrtsensor_wan_download",
+        f"{entry.entry_id}_wan_download",
+        entry.entry_id,
     )
-    _singleton_registry.add(
-        entity_id="sensor.wrtsensor_live_ram",
-        unique_id=f"{entry.entry_id}_host_live_ram",
-        config_entry_id=entry.entry_id,
-    )
-    _singleton_registry.add(
-        entity_id="sensor.wrtsensor_wan_download",
-        unique_id=f"{entry.entry_id}_wan_download",
-        config_entry_id=entry.entry_id,
-    )
-    coordinator = _make_coordinator({}, enable_host_metrics=False)
+    coordinator = _make_coordinator(gateway_host="10.0.0.1", enable_wan_bandwidth=True)
 
-    _prune(hass=None, entry=entry, coordinator=coordinator)
+    _prune_wan(None, entry, coordinator)
 
-    assert "sensor.wrtsensor_live_cpu" not in _singleton_registry._entries
-    assert "sensor.wrtsensor_live_ram" not in _singleton_registry._entries
-    assert "sensor.wrtsensor_wan_download" in _singleton_registry._entries
+    assert _singleton_registry.async_get("sensor.wrtsensor_wan_download") is not None
 
 
-def test_prune_ignores_non_host_entities():
-    """Entities whose unique_id doesn't match the host_ prefix are left alone."""
+def test_prune_dns_removes_when_gateway_cleared():
     _reset_registry()
     entry = _make_entry()
     _singleton_registry.add(
-        entity_id="sensor.wrtsensor_wan_download",
-        unique_id=f"{entry.entry_id}_wan_download",
-        config_entry_id=entry.entry_id,
+        "sensor.wrtsensor_dns_hit_pct",
+        f"{entry.entry_id}_dns_hit_pct",
+        entry.entry_id,
     )
     _singleton_registry.add(
-        entity_id="sensor.wrtsensor_ghost_cpu",
-        unique_id=f"{entry.entry_id}_host_ghost_cpu",
-        config_entry_id=entry.entry_id,
+        "sensor.wrtsensor_dns_latency",
+        f"{entry.entry_id}_dns_latency",
+        entry.entry_id,
     )
-    coordinator = _make_coordinator({"live": {"cpu": 1.0}})
+    coordinator = _make_coordinator(gateway_host=None, enable_dns_stats=True)
 
-    _prune(hass=None, entry=entry, coordinator=coordinator)
+    _prune_dns(None, entry, coordinator)
 
-    assert "sensor.wrtsensor_wan_download" in _singleton_registry._entries
-    assert "sensor.wrtsensor_ghost_cpu" not in _singleton_registry._entries
-
-
-def test_prune_handles_missing_data():
-    """None coordinator.data is allowed and treated as empty."""
-    _reset_registry()
-    entry = _make_entry()
-    _singleton_registry.add(
-        entity_id="sensor.wrtsensor_live_cpu",
-        unique_id=f"{entry.entry_id}_host_live_cpu",
-        config_entry_id=entry.entry_id,
-    )
-    coordinator = types.SimpleNamespace(data=None)
-
-    _prune(hass=None, entry=entry, coordinator=coordinator)
-
-    assert "sensor.wrtsensor_live_cpu" in _singleton_registry._entries
+    assert _singleton_registry.async_get("sensor.wrtsensor_dns_hit_pct") is None
+    assert _singleton_registry.async_get("sensor.wrtsensor_dns_latency") is None
 
 
 def test_remove_legacy_event_log_entity():
@@ -443,11 +662,14 @@ def test_setup_entry_does_not_touch_lovelace_storage():
     class _FakeCoordinator:
         def __init__(self, hass, entry):
             self.data = {"host_stats": {}}
+            self._gateway_host = "10.0.0.1"
+            self._ap_hosts = []
             self._enable_network_hosts = True
             self._enable_wan_bandwidth = True
             self._enable_dns_stats = True
             self._enable_wireguard = False
             self._enable_asu = False
+            self._enable_host_metrics = True
 
         async def async_setup(self):
             return None
@@ -482,12 +704,12 @@ def test_setup_entry_does_not_touch_lovelace_storage():
 
     original_coordinator = _init_mod.WrtsensorCoordinator
     original_register = _init_mod._register_static_path
-    original_prune = _init_mod._prune_orphaned_host_entities
+    original_prune = _init_mod._prune_orphaned_host_devices
     original_prune_wg = _init_mod._prune_wireguard_entities
     try:
         _init_mod.WrtsensorCoordinator = _FakeCoordinator
         _init_mod._register_static_path = _fake_register_static_path
-        _init_mod._prune_orphaned_host_entities = lambda hass, entry, coordinator: (
+        _init_mod._prune_orphaned_host_devices = lambda hass, entry, coordinator: (
             calls.append("prune")
         )
         _init_mod._prune_wireguard_entities = lambda hass, entry, coordinator: (
@@ -498,20 +720,24 @@ def test_setup_entry_does_not_touch_lovelace_storage():
     finally:
         _init_mod.WrtsensorCoordinator = original_coordinator
         _init_mod._register_static_path = original_register
-        _init_mod._prune_orphaned_host_entities = original_prune
+        _init_mod._prune_orphaned_host_devices = original_prune
         _init_mod._prune_wireguard_entities = original_prune_wg
 
     assert "static" in calls
     assert "prune" in calls
+    assert calls.index("prune") < calls.index(
+        "forward:sensor,binary_sensor,device_tracker,update"
+    )
     assert all(call != "_register_lovelace_resources" for call in calls)
 
 
 # ── WireGuard registry pruning ────────────────────────────────────────────────
 
 
-def _make_wg_coordinator(*, enable: bool, data):
+def _make_wg_coordinator(*, enable: bool, data, gateway_host: str | None = "10.0.0.1"):
     c = types.SimpleNamespace()
     c._enable_wireguard = enable
+    c._gateway_host = gateway_host
     c.data = data
     return c
 
@@ -566,6 +792,22 @@ def test_wg_prune_removes_all_when_option_disabled():
     assert _singleton_registry.async_get("sensor.wireguard") is None
     # Unrelated entries untouched
     assert _singleton_registry.async_get("sensor.unrelated") is not None
+
+
+def test_wg_prune_removes_all_when_gateway_cleared():
+    """No gateway → WG must be removed even with toggle on (sensor cannot work)."""
+    _reset_registry()
+    entry = _make_entry()
+    _singleton_registry.add(
+        "device_tracker.wg_alice", "test-entry_wgpeer_aaa", "test-entry"
+    )
+    _singleton_registry.add("sensor.wireguard", "test-entry_wireguard", "test-entry")
+
+    coordinator = _make_wg_coordinator(enable=True, data=None, gateway_host=None)
+    _prune_wg(None, entry, coordinator)
+
+    assert _singleton_registry.async_get("device_tracker.wg_alice") is None
+    assert _singleton_registry.async_get("sensor.wireguard") is None
 
 
 def test_wg_prune_skips_on_partial_scan():

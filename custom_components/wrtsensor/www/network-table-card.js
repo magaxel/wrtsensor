@@ -56,6 +56,7 @@ const ALL_COLS = [
   { key: "mac", label: "MAC", filterable: true, filterKey: "mac" },
   { key: "connection", label: "", filterable: false },
   { key: "ap", label: "AP", filterable: true, filterKey: "ap" },
+  { key: "switch_port", label: "Port", filterable: true, filterKey: "switch_port" },
   { key: "band", label: "Band", filterable: true, filterKey: "band" },
   { key: "tx_rate", label: "TX (Mbit/s)", filterable: false },
   { key: "signal", label: "Signal (dBm)", filterable: false },
@@ -79,6 +80,7 @@ const DEFAULT_COLS = [
   "mac",
   "connection",
   "ap",
+  "switch_port",
   "band",
   "tx_rate",
   "signal",
@@ -93,6 +95,7 @@ const COL_DISPLAY_NAME = {
   mac: "MAC",
   connection: "Connection",
   ap: "AP",
+  switch_port: "Switch port",
   band: "Band",
   tx_rate: "TX (Mbit/s)",
   signal: "Signal (dBm)",
@@ -507,6 +510,8 @@ class NetworkTableCard extends LitElement {
         return "—";
       case "ap":
         return d.ap || "—";
+      case "switch_port":
+        return d.switch_port || "—";
       case "band":
         return d.band || "—";
       case "tx_rate":
@@ -681,6 +686,9 @@ class NetworkTableCard extends LitElement {
           break;
         case "ap":
           target = d.ap || "";
+          break;
+        case "switch_port":
+          target = d.switch_port || "";
           break;
         case "band":
           target = d.band || "";

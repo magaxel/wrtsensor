@@ -133,8 +133,11 @@ def test_collector_script_runs_against_raw_fixtures(
     assert len(stat_lines) == 1, "expected exactly one STAT| line"
     assert "ERROR" not in stat_lines[0], f"collector reported error: {stat_lines[0]}"
 
-    # Every non-STAT line must be a pipe-delimited client entry starting with a MAC.
-    client_lines = [line for line in lines if not line.startswith("STAT|")]
+    # Every remaining line must be a pipe-delimited client entry starting with a
+    # MAC (BOARD|/FDB| metadata lines are not Wi-Fi stations).
+    client_lines = [
+        line for line in lines if not line.startswith(("STAT|", "BOARD|", "FDB|"))
+    ]
     mac_re = re.compile(r"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}\|")
     for line in client_lines:
         assert mac_re.match(line), f"malformed client line: {line!r}"

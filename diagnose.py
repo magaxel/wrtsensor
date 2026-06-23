@@ -112,6 +112,9 @@ DNS_LAST_SCAN_MAX_GAP_S = 5 * 60
 MAX_EVENT_LINES = 10_000
 DISCONNECT_MISS_THRESHOLD = 3
 STATE_MAX_AGE_DAYS = 7
+# A learned-MAC count above this marks a bridge port as an uplink/trunk rather
+# than an access port, excluding it from switch-port attribution.
+FDB_UPLINK_MAC_THRESHOLD = 4
 
 LAN_IFACE = os.environ.get("NETSCAN_LAN_IFACE", "br-lan")
 DHCP_LEASES = os.environ.get("NETSCAN_DHCP_LEASES", "/tmp/dhcp.leases")
@@ -137,6 +140,7 @@ class Device:
     vendor: str = ""
     connection: str = "wired"  # "wired" | "wifi"
     ap: str = ""
+    switch_port: str = ""
     band: str = ""
     channel: int | None = None
     essid: str = ""
@@ -535,11 +539,15 @@ def parse_ndp(lines: list[str]) -> dict[str, str]:
 
 def collect_wifi(
     host: str, ap_name: str, script: str
-) -> tuple[list[dict[str, Any]], list[str]]:
-    """Get WiFi associations from an OpenWrt host. Returns (entries, hoststat_lines)."""
+) -> tuple[list[dict[str, Any]], list[str], dict[str, str]]:
+    """Get WiFi associations from an OpenWrt host.
+
+    Returns (entries, hoststat_lines, fdb) where fdb maps MAC -> bridge port.
+    """
     out = ssh_run(host, script)
     entries: list[dict[str, Any]] = []
     hoststat: list[str] = []
+    fdb: dict[str, str] = {}
     for line in out.splitlines():
         if line.startswith("STAT|"):
             stat_parts = line.split("|")
@@ -547,6 +555,14 @@ def collect_wifi(
                 hoststat = [stat_parts[1], f"{stat_parts[2]} {stat_parts[3]}"]
                 if len(stat_parts) >= 5:
                     hoststat.append(stat_parts[4])
+            continue
+        if line.startswith("FDB|"):
+            fdb_parts = line.split("|")
+            if len(fdb_parts) >= 3:
+                fmac = fdb_parts[1].strip().upper()
+                fport = fdb_parts[2].strip()
+                if fmac and fport:
+                    fdb[fmac] = fport
             continue
         parts = line.split("|")
         if len(parts) < 3:
@@ -607,7 +623,35 @@ def collect_wifi(
                 "exp_tput": exp_tput,
             }
         )
-    return entries, hoststat
+    return entries, hoststat, fdb
+
+
+def resolve_switch_ports(
+    fdb_by_host: dict[str, dict[str, str]],
+    uplink_threshold: int = FDB_UPLINK_MAC_THRESHOLD,
+) -> dict[str, str]:
+    """Resolve each MAC to the access port it is physically connected to.
+
+    Ports carrying more than ``uplink_threshold`` MACs are uplinks/trunks and
+    ignored; the remaining port with the fewest MACs (the access port) wins.
+    Returns MAC -> port number (trailing digits of the netdev name).
+    """
+    port_macs: dict[tuple[str, str], set[str]] = {}
+    for host, fdb in fdb_by_host.items():
+        for mac, port in fdb.items():
+            port_macs.setdefault((host, port), set()).add(mac)
+    candidates: dict[str, list[tuple[int, str, str]]] = {}
+    for (host, port), macs in port_macs.items():
+        if len(macs) > uplink_threshold:
+            continue
+        for mac in macs:
+            candidates.setdefault(mac, []).append((len(macs), host, port))
+    result: dict[str, str] = {}
+    for mac, cands in candidates.items():
+        _, _, port = min(cands)
+        m = re.search(r"(\d+)$", port)
+        result[mac] = m.group(1) if m else port
+    return result
 
 
 def get_ap_info(host: str) -> tuple[str, str]:
@@ -1573,14 +1617,22 @@ def ping_stale(gw_host: str, ips: list[str]) -> list[str]:
 
 def collect_all_wifi(
     gw_host: str, ap_hosts: list[str], script: str
-) -> tuple[list[dict], list[str], dict[str, str], dict[str, list[str]]]:
+) -> tuple[
+    list[dict],
+    list[str],
+    dict[str, str],
+    dict[str, list[str]],
+    dict[str, dict[str, str]],
+]:
     """Collect WiFi from gateway + all APs in parallel.
-    Returns (wifi_entries, alive_ap_ips, ap_ip6_map, ap_hoststats) where:
-      ap_hoststats is {ap_ip: [cpu_line, 'mem_total mem_avail']}."""
+    Returns (wifi_entries, alive_ap_ips, ap_ip6_map, ap_hoststats, fdb_by_host)
+    where ap_hoststats is {ap_ip: [cpu_line, 'mem_total mem_avail']} and
+    fdb_by_host is {host_ip: {MAC: bridge_port}}."""
     all_wifi: list[dict] = []
     alive_ap_ips: list[str] = []
     ap_ip6_map: dict[str, str] = {}
     ap_hoststats: dict[str, list[str]] = {}
+    fdb_by_host: dict[str, dict[str, str]] = {}
 
     # Phase 1: resolve AP hostnames + IPv6 in parallel
     name_map: dict[str, str] = {}
@@ -1611,11 +1663,13 @@ def collect_all_wifi(
         for wfut in concurrent.futures.as_completed(wifi_futs):
             ap_name, host = wifi_futs[wfut]
             try:
-                entries, hoststat = wfut.result()
+                entries, hoststat, fdb = wfut.result()
                 all_wifi.extend(entries)
                 ip = host.split("@")[-1]
                 if hoststat:
                     ap_hoststats[ip] = hoststat
+                if fdb:
+                    fdb_by_host[ip] = fdb
                 # An AP is considered alive if it returned hoststat (means SSH worked),
                 # even if no clients are currently associated.
                 if host != gw_host and (entries or hoststat):
@@ -1623,7 +1677,7 @@ def collect_all_wifi(
             except Exception:
                 pass
 
-    return all_wifi, alive_ap_ips, ap_ip6_map, ap_hoststats
+    return all_wifi, alive_ap_ips, ap_ip6_map, ap_hoststats, fdb_by_host
 
 
 # ------------------------- Build device list -------------------------
@@ -1645,10 +1699,12 @@ def build_devices(
     arp_hostnames: dict[str, str] | None = None,
     prev_state: dict[str, "StateEntry"] | None = None,
     rates: dict[str, dict[str, int | None]] | None = None,
+    switch_ports: dict[str, str] | None = None,
 ) -> list[Device]:
     """Merge all data sources into a unified device list."""
     # Inject gateway as a lease
     ndp = dict(ndp or {})
+    switch_ports = switch_ports or {}
     if gw_mac and gw_ip:
         leases[gw_mac] = {"ip": gw_ip, "hostname": gw_hostname}
         if gw_ip6:
@@ -1777,6 +1833,27 @@ def build_devices(
                     online=online,
                 )
             )
+
+    if switch_ports:
+        # Switch-only topology: surface MACs known only from the forwarding DB.
+        existing = {d.mac for d in devices}
+        for mac, port in switch_ports.items():
+            if mac in existing:
+                continue
+            devices.append(
+                Device(
+                    mac=mac,
+                    vendor=vendors.get(mac, ""),
+                    connection="wired",
+                    switch_port=port,
+                    online=True,
+                )
+            )
+            existing.add(mac)
+        # Attach the access port to every wired device learned on a switch.
+        for d in devices:
+            if d.connection != "wifi" and d.mac in switch_ports:
+                d.switch_port = switch_ports[d.mac]
 
     return devices
 
@@ -2226,9 +2303,10 @@ def main() -> None:
     arp_hostnames = {mac: dns_cache.get(arp_ips[mac], "") for mac in arp_only_macs}
 
     # Collect WiFi from all APs in parallel
-    wifi, alive_aps, ap_ip6_map, ap_hoststats = collect_all_wifi(
+    wifi, alive_aps, ap_ip6_map, ap_hoststats, fdb_by_host = collect_all_wifi(
         gw_host, ap_hosts, wifi_script
     )
+    switch_ports = resolve_switch_ports(fdb_by_host)
 
     # Inject AP IPv6 addresses into ndp (APs never appear in gateway's NDP with global addresses)
     for ap_ip, ap_ip6 in ap_ip6_map.items():
@@ -2240,7 +2318,12 @@ def main() -> None:
     # Vendor lookup
     vendor_cache = load_kv_cache(VENDOR_CACHE)
     oui_db = load_oui_db()
-    all_macs = set(leases.keys()) | {w["mac"] for w in wifi} | set(arp_ips.keys())
+    all_macs = (
+        set(leases.keys())
+        | {w["mac"] for w in wifi}
+        | set(arp_ips.keys())
+        | set(switch_ports.keys())
+    )
     lookup_vendors(all_macs, vendor_cache, oui_db)
     save_kv_cache(VENDOR_CACHE, vendor_cache)
 
@@ -2289,6 +2372,7 @@ def main() -> None:
         arp_hostnames=arp_hostnames,
         prev_state=prev_state,
         rates=device_rates,
+        switch_ports=switch_ports,
     )
 
     # Aggregate client rates onto AP devices; inject WAN rates onto gateway device
@@ -2445,6 +2529,7 @@ def main() -> None:
                 "vendor": d.vendor,
                 "connection": d.connection,
                 "ap": d.ap,
+                "switch_port": d.switch_port,
                 "band": d.band,
                 "channel": d.channel,
                 "essid": d.essid,

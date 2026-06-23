@@ -16,6 +16,8 @@ parse_ndp = coord.parse_ndp
 parse_hoststat = coord.parse_hoststat
 parse_dns_stats = coord.parse_dns_stats
 parse_board_model = parser.parse_board_model
+parse_fdb = parser.parse_fdb
+resolve_switch_ports = parser.resolve_switch_ports
 _is_random_mac = parser._is_random_mac
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -788,3 +790,65 @@ class TestASUVersionIsNewer:
         # Both unparsable → treated as different strings means "newer".
         assert asu_version_is_newer("garbage-A", "garbage-B") is True
         assert asu_version_is_newer("garbage", "garbage") is False
+
+
+class TestParseFdb:
+    def test_extracts_mac_to_port(self):
+        out = (
+            "STAT|cpu  1 2 3 4|1000|500|10\n"
+            "FDB|AA:BB:CC:DD:EE:01|lan5\n"
+            "FDB|aa:bb:cc:dd:ee:02|lan6\n"
+        )
+        assert parse_fdb(out) == {
+            "AA:BB:CC:DD:EE:01": "lan5",
+            "AA:BB:CC:DD:EE:02": "lan6",
+        }
+
+    def test_ignores_non_fdb_and_malformed_lines(self):
+        out = (
+            "FDB|AA:BB:CC:DD:EE:01\nFDB||lan5\nrandom line\nFDB|AA:BB:CC:DD:EE:03|lan7"
+        )
+        assert parse_fdb(out) == {"AA:BB:CC:DD:EE:03": "lan7"}
+
+    def test_last_writer_wins_for_duplicate_mac(self):
+        out = "FDB|AA:BB:CC:DD:EE:01|lan5\nFDB|AA:BB:CC:DD:EE:01|lan9"
+        assert parse_fdb(out) == {"AA:BB:CC:DD:EE:01": "lan9"}
+
+    def test_wifi_parser_skips_fdb_lines(self):
+        # An FDB| line must never be mistaken for a Wi-Fi station entry.
+        entries, _ = parse_wifi_output("FDB|AA:BB:CC:DD:EE:01|lan5\n", "AP1")
+        assert entries == []
+
+
+class TestResolveSwitchPorts:
+    def test_single_host_single_device(self):
+        ports = resolve_switch_ports({"sw": {"AA:BB:CC:DD:EE:01": "lan5"}})
+        assert ports == {"AA:BB:CC:DD:EE:01": "5"}
+
+    def test_uplink_port_excluded(self):
+        # A router uplink port carrying many MACs must not win over the switch's
+        # access port; the device keeps its real access port.
+        switch = {"AA:BB:CC:DD:EE:01": "lan5"}
+        uplink = {f"AA:BB:CC:DD:EE:{i:02d}": "lan1" for i in range(1, 8)}
+        uplink["AA:BB:CC:DD:EE:01"] = "lan1"  # also seen on the router uplink
+        ports = resolve_switch_ports(
+            {"switch": switch, "router": uplink}, uplink_threshold=4
+        )
+        assert ports["AA:BB:CC:DD:EE:01"] == "5"
+
+    def test_fewest_macs_wins_on_tie(self):
+        # Same MAC on two access-like ports: the less-populated one is the edge.
+        a = {"AA:BB:CC:DD:EE:01": "lan2", "AA:BB:CC:DD:EE:09": "lan2"}
+        b = {"AA:BB:CC:DD:EE:01": "lan3"}
+        ports = resolve_switch_ports({"hostA": a, "hostB": b})
+        assert ports["AA:BB:CC:DD:EE:01"] == "3"
+
+    def test_switch_host_preferred_on_count_tie(self):
+        a = {"AA:BB:CC:DD:EE:01": "lan2"}  # on a plain host
+        b = {"AA:BB:CC:DD:EE:01": "lan8"}  # on the designated switch
+        ports = resolve_switch_ports({"plain": a, "sw": b}, switch_hosts={"sw"})
+        assert ports["AA:BB:CC:DD:EE:01"] == "8"
+
+    def test_non_numeric_port_falls_back_to_raw(self):
+        ports = resolve_switch_ports({"sw": {"AA:BB:CC:DD:EE:01": "wan"}})
+        assert ports == {"AA:BB:CC:DD:EE:01": "wan"}

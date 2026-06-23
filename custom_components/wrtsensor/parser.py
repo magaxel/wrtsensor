@@ -12,6 +12,8 @@ import json
 import re
 from typing import Any
 
+from .const import FDB_UPLINK_MAC_THRESHOLD
+
 _IP_RE = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$")
 
 
@@ -139,6 +141,9 @@ def parse_wifi_output(out: str, ap_name: str) -> tuple[list[dict[str, Any]], lis
                 if len(stat_parts) >= 5:
                     hoststat.append(stat_parts[4])
             continue
+        if line.startswith("FDB|"):
+            # Forwarding-DB lines are handled by parse_fdb; never a wifi station.
+            continue
         parts = line.split("|")
         if len(parts) < 3:
             continue
@@ -176,6 +181,73 @@ def parse_wifi_output(out: str, ap_name: str) -> tuple[list[dict[str, Any]], lis
             }
         )
     return entries, hoststat
+
+
+def parse_fdb(out: str) -> dict[str, str]:
+    """Map MAC -> bridge port netdev from collector ``FDB|`` lines.
+
+    Format per line is ``FDB|<MAC>|<port_netdev>`` (e.g. ``FDB|AA:..|lan5``).
+    Last writer wins if a MAC appears on multiple ports of a single host.
+    """
+    result: dict[str, str] = {}
+    for line in out.splitlines():
+        if not line.startswith("FDB|"):
+            continue
+        parts = line.split("|")
+        if len(parts) >= 3:
+            mac = parts[1].strip().upper()
+            port = parts[2].strip()
+            if mac and port:
+                result[mac] = port
+    return result
+
+
+def _port_number(port: str) -> str:
+    """Display label for a bridge port: trailing digits of the netdev name.
+
+    ``lan5`` -> ``5``, ``lan24`` -> ``24``; falls back to the raw name when
+    there are no trailing digits.
+    """
+    m = re.search(r"(\d+)$", port)
+    return m.group(1) if m else port
+
+
+def resolve_switch_ports(
+    fdb_by_host: dict[str, dict[str, str]],
+    switch_hosts: set[str] | None = None,
+    uplink_threshold: int = FDB_UPLINK_MAC_THRESHOLD,
+) -> dict[str, str]:
+    """Resolve each MAC to the access port it is physically connected to.
+
+    A MAC is learned both on its real access port and on the uplink/trunk ports
+    of every other OpenWrt device. Ports carrying more than ``uplink_threshold``
+    MACs are treated as uplinks and ignored. Among the remaining candidates the
+    port with the fewest MACs (the most specific access port) wins, preferring a
+    designated switch host on ties.
+
+    Returns ``mac -> display_port`` (port number only).
+    """
+    switch_hosts = switch_hosts or set()
+    port_macs: dict[tuple[str, str], set[str]] = {}
+    for host, fdb in fdb_by_host.items():
+        for mac, port in fdb.items():
+            port_macs.setdefault((host, port), set()).add(mac)
+    # Per MAC, collect candidate access ports as sortable tuples:
+    # (mac_count_on_port, switch_preference, host, port). min() then picks the
+    # smallest port (fewest MACs), preferring designated switch hosts on ties.
+    candidates: dict[str, list[tuple[int, int, str, str]]] = {}
+    for (host, port), macs in port_macs.items():
+        if len(macs) > uplink_threshold:
+            continue
+        for mac in macs:
+            candidates.setdefault(mac, []).append(
+                (len(macs), 0 if host in switch_hosts else 1, host, port)
+            )
+    result: dict[str, str] = {}
+    for mac, cands in candidates.items():
+        _, _, _, port = min(cands)
+        result[mac] = _port_number(port)
+    return result
 
 
 def parse_board_model(out: str) -> tuple[str, str]:

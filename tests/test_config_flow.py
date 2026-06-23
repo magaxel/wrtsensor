@@ -149,6 +149,8 @@ if not hasattr(_vol, "Schema"):
     class _Marker:
         def __init__(self, key, default=None, description=None):
             self.key = key
+            self.default = default
+            self.description = description
 
         def __hash__(self):
             return hash(self.key)
@@ -156,9 +158,15 @@ if not hasattr(_vol, "Schema"):
         def __eq__(self, other):
             return isinstance(other, _Marker) and self.key == other.key
 
+    class _RequiredMarker(_Marker):
+        pass
+
+    class _OptionalMarker(_Marker):
+        pass
+
     _vol.Schema = lambda d: d  # type: ignore[attr-defined]
-    _vol.Required = _Marker  # type: ignore[attr-defined]
-    _vol.Optional = _Marker  # type: ignore[attr-defined]
+    _vol.Required = _RequiredMarker  # type: ignore[attr-defined]
+    _vol.Optional = _OptionalMarker  # type: ignore[attr-defined]
     _vol.All = lambda *a, **kw: object  # type: ignore[attr-defined]
     _vol.Coerce = lambda t: t  # type: ignore[attr-defined]
     _vol.Range = lambda **kw: object  # type: ignore[attr-defined]
@@ -245,6 +253,44 @@ def test_gateway_only_creates_entry():
         )
     assert result["type"] == "create_entry"
     assert result["data"][cf.CONF_GATEWAY_HOST] == "192.0.2.1"
+
+
+def test_switch_only_creates_entry_and_probes_switch():
+    """A switch on its own is a valid topology and gets SSH-probed."""
+    flow = cf.WrtsensorConfigFlow()
+    mock = AsyncMock(return_value=None)
+    with patch.object(cf, "_test_ssh", new=mock):
+        result = asyncio.run(
+            flow.async_step_user(
+                {
+                    cf.CONF_GATEWAY_HOST: "",
+                    cf.CONF_SSH_KEY_PATH: "/tmp/key",
+                    cf.CONF_AP_HOSTS: "",
+                    cf.CONF_SWITCH_HOSTS: "192.0.2.24",
+                }
+            )
+        )
+    assert result["type"] == "create_entry"
+    assert result["data"][cf.CONF_SWITCH_HOSTS] == "192.0.2.24"
+    probed = [call.args[0] for call in mock.await_args_list]
+    assert probed == ["192.0.2.24"]
+
+
+def test_switch_hosts_stored_alongside_gateway_and_aps():
+    flow = cf.WrtsensorConfigFlow()
+    with patch.object(cf, "_test_ssh", new=AsyncMock(return_value=None)):
+        result = asyncio.run(
+            flow.async_step_user(
+                {
+                    cf.CONF_GATEWAY_HOST: "192.0.2.1",
+                    cf.CONF_SSH_KEY_PATH: "/tmp/key",
+                    cf.CONF_AP_HOSTS: "192.0.2.22",
+                    cf.CONF_SWITCH_HOSTS: "192.0.2.24, 192.0.2.25",
+                }
+            )
+        )
+    assert result["type"] == "create_entry"
+    assert result["data"][cf.CONF_SWITCH_HOSTS] == "192.0.2.24,192.0.2.25"
 
 
 def test_empty_gateway_probes_all_aps():
@@ -407,6 +453,33 @@ def test_provision_step_provisions_all_hosts():
     assert tested == ["192.0.2.1", "192.0.2.22", "192.0.2.23"]
     tested_ports = [call.args[2] for call in post.await_args_list]
     assert tested_ports == [2222, 22, 2200]
+    assert result["type"] == "create_entry"
+
+
+def test_provision_step_includes_switch_hosts():
+    """provision_key must also provision/validate switch hosts, not just GW+APs."""
+    flow = cf.WrtsensorConfigFlow()
+    flow._pending = {
+        cf.CONF_GATEWAY_HOST: "192.0.2.1",
+        cf.CONF_SSH_KEY_PATH: "/tmp/key",
+        cf.CONF_AP_HOSTS: "192.0.2.22",
+        cf.CONF_SWITCH_HOSTS: "192.0.2.24:2200",
+    }
+    prov = AsyncMock(return_value=None)
+    post = AsyncMock(return_value=None)
+    with (
+        patch.object(cf, "_provision_ssh_key", new=prov),
+        patch.object(cf, "_test_ssh", new=post),
+    ):
+        result = asyncio.run(
+            flow.async_step_provision_key({"ssh_user": "root", "ssh_password": "pw"})
+        )
+    provisioned = [call.args[0] for call in prov.await_args_list]
+    assert provisioned == ["192.0.2.1", "192.0.2.22", "192.0.2.24"]
+    # switch endpoint's inline port is honored during provisioning
+    assert prov.await_args_list[-1].args[1] == 2200
+    tested = [call.args[0] for call in post.await_args_list]
+    assert tested == ["192.0.2.1", "192.0.2.22", "192.0.2.24"]
     assert result["type"] == "create_entry"
 
 
@@ -654,19 +727,19 @@ def test_options_flow_failure_names_host():
         options={},
     )
     flow = cf.WrtsensorOptionsFlow(entry)
-    mock = AsyncMock(side_effect=[None, "cannot_connect"])
+    mock = AsyncMock(return_value="cannot_connect")
     with patch.object(cf, "_test_ssh", new=mock):
         result = asyncio.run(
             flow.async_step_init(
                 {
                     cf.CONF_GATEWAY_HOST: "192.0.2.1",
                     cf.CONF_SSH_KEY_PATH: "/tmp/key",
-                    cf.CONF_AP_HOSTS: "192.0.2.22",
+                    cf.CONF_AP_HOSTS: "192.0.2.22,192.0.2.23",
                 }
             )
         )
     assert result["errors"] == {"base": "setup_failed"}
-    assert "192.0.2.22" in result["description_placeholders"]["failures"]
+    assert "192.0.2.23" in result["description_placeholders"]["failures"]
 
 
 # ── Options flow: gateway + AP editing (replaces former reconfigure flow) ─────
@@ -699,6 +772,25 @@ def test_options_schema_includes_gateway():
     assert cf.CONF_AP_HOSTS in keys
 
 
+def test_options_connection_fields_use_suggested_value_to_allow_clearing():
+    """Defaults can restore the old value; suggested_value can be cleared."""
+    entry = _options_entry()
+    flow = cf.WrtsensorOptionsFlow(entry)
+
+    result = asyncio.run(flow.async_step_init())
+    schema = result["data_schema"]
+    markers = {getattr(marker, "key", marker): marker for marker in schema}
+
+    gateway = markers[cf.CONF_GATEWAY_HOST]
+    ap_hosts = markers[cf.CONF_AP_HOSTS]
+    assert isinstance(gateway, cf.vol.Optional)
+    assert isinstance(ap_hosts, cf.vol.Optional)
+    assert gateway.default is None
+    assert ap_hosts.default is None
+    assert gateway.description == {"suggested_value": "192.0.2.1"}
+    assert ap_hosts.description == {"suggested_value": "192.0.2.22"}
+
+
 def test_options_flow_changes_gateway():
     """Submitting a new gateway via options writes it to the saved data."""
     entry = _options_entry()
@@ -714,6 +806,7 @@ def test_options_flow_changes_gateway():
             )
         )
     assert result["type"] == "create_entry"
+    assert entry.data[cf.CONF_GATEWAY_HOST] == "192.0.2.99"
     assert result["data"][cf.CONF_GATEWAY_HOST] == "192.0.2.99"
 
 
@@ -721,7 +814,11 @@ def test_options_flow_can_remove_gateway():
     """Clearing the gateway is allowed when at least one AP remains."""
     entry = _options_entry()
     flow = cf.WrtsensorOptionsFlow(entry)
-    with patch.object(cf, "_test_ssh", new=AsyncMock(return_value=None)):
+    with patch.object(
+        cf,
+        "_test_ssh",
+        new=AsyncMock(side_effect=AssertionError("unchanged AP must not be probed")),
+    ):
         result = asyncio.run(
             flow.async_step_init(
                 {
@@ -732,7 +829,50 @@ def test_options_flow_can_remove_gateway():
             )
         )
     assert result["type"] == "create_entry"
+    assert entry.data[cf.CONF_GATEWAY_HOST] == ""
     assert result["data"][cf.CONF_GATEWAY_HOST] == ""
+
+
+def test_options_flow_remove_gateway_ignores_existing_ap_probe_failure():
+    """A transient failure on an unchanged AP must not block gateway removal."""
+    entry = _options_entry()
+    flow = cf.WrtsensorOptionsFlow(entry)
+    with patch.object(
+        cf,
+        "_test_ssh",
+        new=AsyncMock(side_effect=AssertionError("unchanged AP must not be probed")),
+    ):
+        result = asyncio.run(
+            flow.async_step_init(
+                {
+                    cf.CONF_GATEWAY_HOST: "",
+                    cf.CONF_SSH_KEY_PATH: "/tmp/key",
+                    cf.CONF_AP_HOSTS: "192.0.2.22",
+                }
+            )
+        )
+
+    assert result["type"] == "create_entry"
+    assert result["data"][cf.CONF_GATEWAY_HOST] == ""
+
+
+def test_options_flow_probes_added_ap():
+    entry = _options_entry()
+    flow = cf.WrtsensorOptionsFlow(entry)
+    probe = AsyncMock(return_value=None)
+    with patch.object(cf, "_test_ssh", new=probe):
+        result = asyncio.run(
+            flow.async_step_init(
+                {
+                    cf.CONF_GATEWAY_HOST: "192.0.2.1",
+                    cf.CONF_SSH_KEY_PATH: "/tmp/key",
+                    cf.CONF_AP_HOSTS: "192.0.2.22,192.0.2.23",
+                }
+            )
+        )
+
+    assert result["type"] == "create_entry"
+    probe.assert_awaited_once_with("192.0.2.23", "/tmp/key", 22)
 
 
 def test_options_flow_can_add_gateway_to_aps_only():
@@ -755,6 +895,7 @@ def test_options_flow_can_add_gateway_to_aps_only():
             )
         )
     assert result["type"] == "create_entry"
+    assert entry.data[cf.CONF_GATEWAY_HOST] == "192.0.2.1"
     assert result["data"][cf.CONF_GATEWAY_HOST] == "192.0.2.1"
 
 
@@ -772,6 +913,9 @@ def test_options_flow_normalizes_ap_hosts():
                 }
             )
         )
+    assert entry.data[cf.CONF_GATEWAY_HOST] == "192.0.2.1"
+    assert entry.data[cf.CONF_SSH_KEY_PATH] == "/tmp/key"
+    assert entry.data[cf.CONF_AP_HOSTS] == "192.0.2.22,192.0.2.23"
     assert result["data"][cf.CONF_GATEWAY_HOST] == "192.0.2.1"
     assert result["data"][cf.CONF_SSH_KEY_PATH] == "/tmp/key"
     assert result["data"][cf.CONF_AP_HOSTS] == "192.0.2.22,192.0.2.23"
@@ -786,16 +930,16 @@ def test_options_flow_mixed_failure_skips_provision():
         result = asyncio.run(
             flow.async_step_init(
                 {
-                    cf.CONF_GATEWAY_HOST: "192.0.2.1",
+                    cf.CONF_GATEWAY_HOST: "192.0.2.99",
                     cf.CONF_SSH_KEY_PATH: "/tmp/key",
-                    cf.CONF_AP_HOSTS: "192.0.2.22",
+                    cf.CONF_AP_HOSTS: "192.0.2.22,192.0.2.23",
                 }
             )
         )
     assert result["type"] == "form"
     assert result["step_id"] == "init"
     assert result["errors"] == {"base": "setup_failed"}
-    assert "192.0.2.22" in result["description_placeholders"]["failures"]
+    assert "192.0.2.23" in result["description_placeholders"]["failures"]
 
 
 def test_options_flow_all_auth_failed_routes_to_provision():
@@ -806,7 +950,7 @@ def test_options_flow_all_auth_failed_routes_to_provision():
         result = asyncio.run(
             flow.async_step_init(
                 {
-                    cf.CONF_GATEWAY_HOST: "192.0.2.1",
+                    cf.CONF_GATEWAY_HOST: "192.0.2.99",
                     cf.CONF_SSH_KEY_PATH: "/tmp/key",
                     cf.CONF_AP_HOSTS: "192.0.2.22",
                 }
@@ -840,6 +984,7 @@ def test_options_flow_provision_preserves_unrelated_options():
             flow.async_step_provision_key({"ssh_user": "root", "ssh_password": "pw"})
         )
     assert result["type"] == "create_entry"
+    assert entry.data[cf.CONF_GATEWAY_HOST] == "192.0.2.99"
     assert result["data"][cf.CONF_GATEWAY_HOST] == "192.0.2.99"
     assert result["data"][cf.CONF_DISCONNECT_THRESHOLD] == 600
     assert result["data"][cf.CONF_ENABLE_WIREGUARD] is True

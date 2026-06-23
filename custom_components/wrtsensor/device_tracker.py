@@ -39,16 +39,17 @@ async def async_setup_entry(
                 if mac and mac not in tracked:
                     tracked.add(mac)
                     new_entities.append(WrtsensorDeviceTracker(coordinator, entry, mac))
-        wg = data.get("wireguard") or {}
-        for iface in wg.get("interfaces", []):
-            for peer in iface.get("peers", []):
-                pid = peer.get("id")
-                if not pid or pid in tracked_peers:
-                    continue
-                tracked_peers.add(pid)
-                new_entities.append(
-                    WrtsensorWireguardPeerTracker(coordinator, entry, pid)
-                )
+        if coordinator._gateway_host and coordinator._enable_wireguard:
+            wg = data.get("wireguard") or {}
+            for iface in wg.get("interfaces", []):
+                for peer in iface.get("peers", []):
+                    pid = peer.get("id")
+                    if not pid or pid in tracked_peers:
+                        continue
+                    tracked_peers.add(pid)
+                    new_entities.append(
+                        WrtsensorWireguardPeerTracker(coordinator, entry, pid)
+                    )
         if new_entities:
             async_add_entities(new_entities)
 
@@ -112,6 +113,7 @@ class WrtsensorDeviceTracker(CoordinatorEntity[WrtsensorCoordinator], ScannerEnt
         return {
             "ip6": dev.get("ip6"),
             "ap": dev.get("ap"),
+            "switch_port": dev.get("switch_port"),
             "signal": dev.get("signal"),
             "vendor": dev.get("vendor"),
             "rx_total": dev.get("rx_total"),

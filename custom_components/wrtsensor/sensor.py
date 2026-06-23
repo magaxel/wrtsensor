@@ -48,7 +48,7 @@ async def async_setup_entry(
             WrtsensorDNSHitPctSensor(coordinator, entry),
             WrtsensorDNSLatencySensor(coordinator, entry),
         ]
-    if coordinator._enable_wireguard:
+    if coordinator._gateway_host and coordinator._enable_wireguard:
         entities.append(WrtsensorWireguardSensor(coordinator, entry))
 
     async_add_entities(entities)
@@ -126,6 +126,9 @@ class WrtsensorNetworkScannerSensor(_WrtsensorBase):
         "wan_ip",
         "wan_ip6",
         "gateway_mac",
+        "ap_hosts",
+        "switch_hosts",
+        "host_stats",
         "scan_duration",
         "partial",
     )
