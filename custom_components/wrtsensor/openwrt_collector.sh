@@ -50,13 +50,17 @@ if command -v bridge >/dev/null 2>&1; then
 elif command -v brctl >/dev/null 2>&1; then
     # brctl showmacs prints a decimal bridge port number; map it to the slave
     # netdev (lanN) via sysfs, where port_no is hex. Only non-local entries.
+    # Uses shell builtins (read, parameter expansion) instead of cat/basename to
+    # avoid dozens of fork/exec per run on RAM-constrained switches.
     for brpath in /sys/class/net/*/bridge; do
         [ -d "$brpath" ] || continue
-        br=$(basename "$(dirname "$brpath")")
+        br=${brpath%/bridge}
+        br=${br##*/}
         {
             for p in /sys/class/net/"$br"/brif/*; do
                 [ -e "$p/port_no" ] || continue
-                printf 'P|%d|%s\n' "$(cat "$p/port_no")" "$(basename "$p")"
+                read -r pn < "$p/port_no" || continue
+                printf 'P|%d|%s\n' "$pn" "${p##*/}"
             done
             brctl showmacs "$br" 2>/dev/null
         } | awk '
