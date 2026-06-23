@@ -12,6 +12,13 @@ const ICON_WIFI = `
   <path d="M6.5 12.5a5 5 0 0 1 7 0" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
   <path d="M3.5 9a9 9 0 0 1 13 0" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>`;
 
+const ICON_SWITCH = `
+  <rect x="2" y="5" width="16" height="10" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/>
+  <circle cx="5" cy="10" r="1" fill="currentColor"/>
+  <circle cx="8.5" cy="10" r="1" fill="currentColor"/>
+  <circle cx="12" cy="10" r="1" fill="currentColor"/>
+  <circle cx="15.5" cy="10" r="1" fill="currentColor"/>`;
+
 const ICON_PHONE = `
   <rect x="6" y="2" width="8" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/>
   <circle cx="10" cy="14.5" r="0.9" fill="currentColor"/>
@@ -190,6 +197,7 @@ const SVG_STYLE = `
     .ntc-inet     { fill: var(--blue-color, #1976d2); }
     .ntc-gw       { fill: var(--teal-color, #009688); }
     .ntc-ap       { fill: var(--indigo-color, #3f51b5); }
+    .ntc-switch   { fill: var(--cyan-color, #00acc1); }
     .ntc-wire     { fill: var(--blue-grey-color, #607d8b); }
     .ntc-wg-peer  { fill: var(--red-color, #88171a); }
     .ntc-wg-icon  { color: #fff; }
@@ -333,6 +341,10 @@ class NetworkTopologyCard extends HTMLElement {
     const gatewayMac = String(attr.gateway_mac ?? "").toLowerCase();
     const partial = attr.partial ?? false;
     const gatewayLabel = this._config.gateway_label;
+    const configuredAps = attr.ap_hosts ?? [];
+    const configuredSwitches = attr.switch_hosts ?? [];
+    const hostStats = attr.host_stats ?? {};
+    const hasGateway = !!(gatewayMac || wanIp || wanIp6);
 
     const devices = this._config.show_offline
       ? allDevices
@@ -350,22 +362,51 @@ class NetworkTopologyCard extends HTMLElement {
     for (const d of allDevices) {
       if (d.ap) apHostnames.add(d.ap);
     }
+    for (const host of configuredAps) {
+      if (host) apHostnames.add(String(host));
+      const stats = hostStats[host] ?? {};
+      if (stats.hostname) apHostnames.add(String(stats.hostname));
+    }
+    const switchKeys = new Set();
+    const switchNodes = configuredSwitches.map((host) => {
+      const key = String(host);
+      const stats = hostStats[key] ?? {};
+      if (key) switchKeys.add(key);
+      if (stats.hostname) switchKeys.add(String(stats.hostname));
+      return {
+        host: key,
+        hostname: stats.hostname || key,
+        model: stats.model || "",
+        ip: key,
+        online: stats.available !== false,
+      };
+    });
 
     // Prefer the authoritative gateway_mac from the scanner; fall back to
     // connection === "gateway" so partial scans (gateway_mac === "") and
     // stale sensor data still render a gateway node with real device info.
-    const gateway = allDevices.find((d) => {
-      if (gatewayMac && String(d.mac ?? "").toLowerCase() === gatewayMac) return true;
-      return d.connection === "gateway";
-    });
+    const gateway = hasGateway
+      ? allDevices.find((d) => {
+          if (gatewayMac && String(d.mac ?? "").toLowerCase() === gatewayMac) return true;
+          return d.connection === "gateway";
+        })
+      : null;
     const aps = allDevices.filter(
       (d) => apHostnames.has(d.hostname) || apHostnames.has(d.mac?.toLowerCase()),
+    );
+    const switchDevices = allDevices.filter(
+      (d) => switchKeys.has(d.ip) || switchKeys.has(d.hostname),
     );
     const wifiDevices = devices.filter(
       (d) => (d.connection === "wifi" || d.ap) && !aps.includes(d),
     );
     const wiredDevices = devices.filter(
-      (d) => d !== gateway && !aps.includes(d) && d.connection !== "wifi" && !d.ap,
+      (d) =>
+        d !== gateway &&
+        !aps.includes(d) &&
+        !switchDevices.includes(d) &&
+        d.connection !== "wifi" &&
+        !d.ap,
     );
 
     const byAp = {};
@@ -376,6 +417,22 @@ class NetworkTopologyCard extends HTMLElement {
     for (const d of wifiDevices) {
       if (d.ap && byAp[d.ap] !== undefined) byAp[d.ap].push(d);
       else unknownApDevices.push(d);
+    }
+    const bySwitch = {};
+    const switchAliases = {};
+    for (const sw of switchNodes) {
+      bySwitch[sw.host] = [];
+      if (sw.host) switchAliases[sw.host] = sw.host;
+      if (sw.hostname) switchAliases[sw.hostname] = sw.host;
+      if (sw.ip) switchAliases[sw.ip] = sw.host;
+    }
+    const directWiredDevices = [];
+    for (const d of wiredDevices) {
+      const switchHost = switchAliases[d.switch_host] ?? switchAliases[d.switch_name];
+      const fallbackHost = d.switch_port && switchNodes.length === 1 ? switchNodes[0].host : null;
+      const targetSwitch = switchHost ?? fallbackHost;
+      if (targetSwitch && bySwitch[targetSwitch] !== undefined) bySwitch[targetSwitch].push(d);
+      else directWiredDevices.push(d);
     }
 
     const NODE_R = 20,
@@ -411,9 +468,11 @@ class NetworkTopologyCard extends HTMLElement {
     const sortWireless = (arr) => [...arr].sort(cmpWireless);
 
     const columns = [];
-    const sortedWired = sortWired(wiredDevices);
+    const sortedWired = sortWired(directWiredDevices);
     for (let i = 0; i < sortedWired.length; i += MAX_COL)
       columns.push({ devices: sortedWired.slice(i, i + MAX_COL), ap: null });
+    for (const sw of switchNodes)
+      columns.push({ devices: sortWired(bySwitch[sw.host] ?? []), ap: null, switchNode: sw });
     for (const ap of aps) columns.push({ devices: sortWireless(byAp[ap.hostname]), ap });
     if (unknownApDevices.length > 0)
       columns.push({ devices: sortWireless(unknownApDevices), ap: null });
@@ -427,8 +486,8 @@ class NetworkTopologyCard extends HTMLElement {
     const wgBlockH = wgCount ? (wgRows - 1) * WG_ROW_H + WG_ROW_GAP : 0;
 
     const topMargin = 80 + wgBlockH,
-      gwY = topMargin + 90,
-      apRowY = gwY + 110,
+      gwY = hasGateway ? topMargin + 90 : topMargin,
+      apRowY = hasGateway ? gwY + 110 : topMargin + 90,
       devStartY = apRowY + 90;
     const maxDevs = Math.max(...columns.map((c) => c.devices.length), 0);
     const totalH = devStartY + Math.max(maxDevs * ROW_H + 20, 60) + 40;
@@ -448,6 +507,8 @@ class NetworkTopologyCard extends HTMLElement {
       if (d.vendor) parts.push(d.vendor);
       if (d.mac) parts.push(d.mac);
       if (d.signal != null) parts.push(`Signal: ${d.signal} dBm`);
+      if (d.switch_host) parts.push(`Switch: ${d.switch_host}`);
+      if (d.switch_port) parts.push(`Switch port: ${d.switch_port}`);
       if (d.noise != null) parts.push(`Noise: ${d.noise} dBm`);
       if (d.snr != null) parts.push(`SNR: ${d.snr} dB`);
       if (d.tx_rate != null) parts.push(`TX rate: ${d.tx_rate} Mbit/s`);
@@ -494,6 +555,18 @@ class NetworkTopologyCard extends HTMLElement {
       if (showHostnames) rows.push(d?.hostname || fallback || d?.mac || "");
       if (showIpv4 && d?.ip) rows.push(d.ip);
       if (showIpv6 && d?.ip6) rows.push(d.ip6);
+      return rows.filter(Boolean);
+    };
+
+    const switchTitle = (sw) =>
+      [sw.hostname, sw.host && sw.host !== sw.hostname ? `Host: ${sw.host}` : "", sw.model]
+        .filter(Boolean)
+        .join("\n");
+
+    const switchTextRows = (sw) => {
+      const rows = [];
+      if (showHostnames) rows.push(sw.hostname || sw.host);
+      if (showIpv4 && sw.host) rows.push(sw.host);
       return rows.filter(Boolean);
     };
 
@@ -550,13 +623,15 @@ class NetworkTopologyCard extends HTMLElement {
     const inetTooltip =
       [wanIp ? `IPv4: ${wanIp}` : "", wanIp6 ? `IPv6: ${wanIp6}` : ""].filter(Boolean).join("\n") ||
       "Internet";
-    nodes.push(`
-      <g>
-        <title>${_esc(inetTooltip)}</title>
-        <circle cx="${inetX}" cy="${inetY}" r="30" class="ntc-inet" opacity="0.95"
-                stroke="var(--card-background-color, #1c1c1c)" stroke-width="2"/>
-        <svg x="${inetX - 13}" y="${inetY - 13}" width="26" height="26" viewBox="0 0 20 20" class="ntc-inet-icon" pointer-events="none">${ICON_GLOBE}</svg>
-      </g>`);
+    if (hasGateway) {
+      nodes.push(`
+        <g>
+          <title>${_esc(inetTooltip)}</title>
+          <circle cx="${inetX}" cy="${inetY}" r="30" class="ntc-inet" opacity="0.95"
+                  stroke="var(--card-background-color, #1c1c1c)" stroke-width="2"/>
+          <svg x="${inetX - 13}" y="${inetY - 13}" width="26" height="26" viewBox="0 0 20 20" class="ntc-inet-icon" pointer-events="none">${ICON_GLOBE}</svg>
+        </g>`);
+    }
 
     if (wgEnabled && wgPeers.length) {
       const inetTopY = inetY - 30;
@@ -580,26 +655,28 @@ class NetworkTopologyCard extends HTMLElement {
       }
     }
 
-    paths.push(curve(inetX, inetY + 30, gwX, gwY - GW_R, "ntc-link-inet"));
+    if (hasGateway) {
+      paths.push(curve(inetX, inetY + 30, gwX, gwY - GW_R, "ntc-link-inet"));
 
-    const gwOp = gateway ? (gateway.online !== false ? "1" : "0.4") : "1";
-    nodes.push(`
-      <g>
-        ${publicIpRows.length ? `<text x="${gwX - GW_R - 10}" y="${gwY + 4}" text-anchor="end" font-size="11" class="ntc-label">${publicIpLabel}</text>` : ""}
-        ${publicIpRows.map((row, i) => `<text x="${gwX - GW_R - 10}" y="${gwY + 16 + i * 12}" text-anchor="end" font-size="${row.size}" class="ntc-wan"${row.opacity ? ` opacity="${row.opacity}"` : ""}>${_esc(row.value)}</text>`).join("")}
-      </g>`);
-    nodes.push(
-      svgNode(
-        gwX,
-        gwY,
-        GW_R,
-        ICON_ROUTER,
-        nodeTextRows(gateway, gatewayLabel),
-        "ntc-gw",
-        gwOp,
-        gateway ? nodeTitle(gateway) : gatewayLabel,
-      ),
-    );
+      const gwOp = gateway ? (gateway.online !== false ? "1" : "0.4") : "1";
+      nodes.push(`
+        <g>
+          ${publicIpRows.length ? `<text x="${gwX - GW_R - 10}" y="${gwY + 4}" text-anchor="end" font-size="11" class="ntc-label">${publicIpLabel}</text>` : ""}
+          ${publicIpRows.map((row, i) => `<text x="${gwX - GW_R - 10}" y="${gwY + 16 + i * 12}" text-anchor="end" font-size="${row.size}" class="ntc-wan"${row.opacity ? ` opacity="${row.opacity}"` : ""}>${_esc(row.value)}</text>`).join("")}
+        </g>`);
+      nodes.push(
+        svgNode(
+          gwX,
+          gwY,
+          GW_R,
+          ICON_ROUTER,
+          nodeTextRows(gateway, gatewayLabel),
+          "ntc-gw",
+          gwOp,
+          gateway ? nodeTitle(gateway) : gatewayLabel,
+        ),
+      );
+    }
 
     if (partial) {
       nodes.push(
@@ -610,8 +687,12 @@ class NetworkTopologyCard extends HTMLElement {
     for (let ci = 0; ci < columns.length; ci++) {
       const col = columns[ci];
       const cx = colCenters[ci];
-      const colTopY = col.ap ? apRowY : devStartY;
-      paths.push(curve(gwX, gwY + GW_R, cx, colTopY - (col.ap ? AP_R : NODE_R)));
+      const colTopY = col.ap || col.switchNode ? apRowY : devStartY;
+      if (hasGateway) {
+        paths.push(
+          curve(gwX, gwY + GW_R, cx, colTopY - (col.ap || col.switchNode ? AP_R : NODE_R)),
+        );
+      }
 
       if (col.ap) {
         const ap = col.ap;
@@ -633,13 +714,57 @@ class NetworkTopologyCard extends HTMLElement {
             svgNode(cx, dy, NODE_R, icon, nodeTextRows(d), null, devOp, nodeTitle(d), sc, unknown),
           );
         }
+      } else if (col.switchNode) {
+        const sw = col.switchNode;
+        const swOp = sw.online !== false ? "1" : "0.4";
+        nodes.push(
+          svgNode(
+            cx,
+            apRowY,
+            AP_R,
+            ICON_SWITCH,
+            switchTextRows(sw),
+            "ntc-switch",
+            swOp,
+            switchTitle(sw),
+          ),
+        );
+
+        for (let di = 0; di < col.devices.length; di++) {
+          const d = col.devices[di];
+          const dy = devStartY + di * ROW_H;
+          paths.push(line(cx, apRowY + AP_R, cx, dy - NODE_R));
+          if (!this._iconCache[d.mac]) this._iconCache[d.mac] = _deviceIcon(d);
+          const icon = this._iconCache[d.mac];
+          const unknown = !d.hostname && !d.vendor;
+          const wireOp = d.online !== false ? "1" : "0.4";
+          nodes.push(
+            svgNode(
+              cx,
+              dy,
+              NODE_R,
+              icon,
+              nodeTextRows(d),
+              "ntc-wire",
+              wireOp,
+              nodeTitle(d),
+              null,
+              unknown,
+            ),
+          );
+        }
       } else {
         for (let di = 0; di < col.devices.length; di++) {
           const d = col.devices[di];
           const dy = devStartY + di * ROW_H;
-          const prevY = di === 0 ? gwY + GW_R : devStartY + (di - 1) * ROW_H + NODE_R;
-          const prevX = di === 0 ? gwX : cx;
-          if (di === 0) paths.push(curve(prevX, prevY, cx, dy - NODE_R));
+          const prevY =
+            di === 0
+              ? hasGateway
+                ? gwY + GW_R
+                : dy - NODE_R
+              : devStartY + (di - 1) * ROW_H + NODE_R;
+          const prevX = di === 0 ? (hasGateway ? gwX : cx) : cx;
+          if (di === 0 && hasGateway) paths.push(curve(prevX, prevY, cx, dy - NODE_R));
           else paths.push(line(prevX, prevY, cx, dy - NODE_R));
           if (!this._iconCache[d.mac]) this._iconCache[d.mac] = _deviceIcon(d);
           const icon = this._iconCache[d.mac];

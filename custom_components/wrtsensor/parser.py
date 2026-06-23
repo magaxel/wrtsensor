@@ -216,7 +216,7 @@ def resolve_switch_ports(
     fdb_by_host: dict[str, dict[str, str]],
     switch_hosts: set[str] | None = None,
     uplink_threshold: int = FDB_UPLINK_MAC_THRESHOLD,
-) -> dict[str, str]:
+) -> dict[str, dict[str, str]]:
     """Resolve each MAC to the access port it is physically connected to.
 
     A MAC is learned both on its real access port and on the uplink/trunk ports
@@ -225,7 +225,7 @@ def resolve_switch_ports(
     port with the fewest MACs (the most specific access port) wins, preferring a
     designated switch host on ties.
 
-    Returns ``mac -> display_port`` (port number only).
+    Returns ``mac -> {"port": display_port, "host": switch_host}``.
     """
     switch_hosts = switch_hosts or set()
     port_macs: dict[tuple[str, str], set[str]] = {}
@@ -243,10 +243,10 @@ def resolve_switch_ports(
             candidates.setdefault(mac, []).append(
                 (len(macs), 0 if host in switch_hosts else 1, host, port)
             )
-    result: dict[str, str] = {}
+    result: dict[str, dict[str, str]] = {}
     for mac, cands in candidates.items():
-        _, _, _, port = min(cands)
-        result[mac] = _port_number(port)
+        _, _, host, port = min(cands)
+        result[mac] = {"port": _port_number(port), "host": host}
     return result
 
 

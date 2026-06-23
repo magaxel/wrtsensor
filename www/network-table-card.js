@@ -5,7 +5,7 @@ import {
   nothing,
 } from "https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js";
 
-const CARD_VERSION = "2.2.1";
+const CARD_VERSION = "2.3.0";
 const CARD_TYPE = "network-table-card";
 const EDITOR_TYPE = `${CARD_TYPE}-editor`;
 
@@ -55,7 +55,7 @@ const ALL_COLS = [
   { key: "vendor", label: "Vendor", filterable: true, filterKey: "vendor" },
   { key: "mac", label: "MAC", filterable: true, filterKey: "mac" },
   { key: "connection", label: "", filterable: false },
-  { key: "ap", label: "AP", filterable: true, filterKey: "ap" },
+  { key: "ap", label: "Port/AP", filterable: true, filterKey: "ap" },
   { key: "band", label: "Band", filterable: true, filterKey: "band" },
   { key: "tx_rate", label: "TX (Mbit/s)", filterable: false },
   { key: "signal", label: "Signal (dBm)", filterable: false },
@@ -92,7 +92,7 @@ const COL_DISPLAY_NAME = {
   vendor: "Vendor",
   mac: "MAC",
   connection: "Connection",
-  ap: "AP",
+  ap: "Port/AP",
   band: "Band",
   tx_rate: "TX (Mbit/s)",
   signal: "Signal (dBm)",
@@ -110,6 +110,23 @@ const COL_DISPLAY_NAME = {
 
 function colDisplayName(col) {
   return COL_DISPLAY_NAME[col.key] ?? col.label ?? col.key;
+}
+
+function portApValue(d) {
+  if (d.ap) return d.ap;
+  if (d.switch_port) return `Port ${d.switch_port}`;
+  return "";
+}
+
+function normalizeColumns(columns) {
+  const validKeys = new Set(ALL_COLS.map((c) => c.key));
+  const normalized = [];
+  for (const key of columns) {
+    const nextKey = key === "switch_port" ? "ap" : key;
+    if (!validKeys.has(nextKey) || normalized.includes(nextKey)) continue;
+    normalized.push(nextKey);
+  }
+  return normalized;
 }
 
 // ── card ──────────────────────────────────────────────────────────────────────
@@ -270,12 +287,12 @@ class NetworkTableCard extends LitElement {
     if (!config?.entity) throw new Error("entity required");
     let cols = DEFAULT_COLS;
     if (Array.isArray(config.columns) && config.columns.length) {
-      const validKeys = new Set(ALL_COLS.map((c) => c.key));
+      const validKeys = new Set([...ALL_COLS.map((c) => c.key), "switch_port"]);
       const unknown = config.columns.filter((k) => !validKeys.has(k));
       if (unknown.length) {
         console.warn(`[${CARD_TYPE}] Ignoring unknown column key(s): ${unknown.join(", ")}`);
       }
-      cols = config.columns.filter((k) => validKeys.has(k));
+      cols = normalizeColumns(config.columns);
     }
     this._config = {
       entity: config.entity,
@@ -506,7 +523,7 @@ class NetworkTableCard extends LitElement {
           ></ha-icon>`;
         return "—";
       case "ap":
-        return d.ap || "—";
+        return portApValue(d) || "—";
       case "band":
         return d.band || "—";
       case "tx_rate":
@@ -611,7 +628,7 @@ class NetworkTableCard extends LitElement {
       case "connection":
         return d.connection || "";
       case "ap":
-        return (d.ap || "zzz").toLowerCase();
+        return (portApValue(d) || "zzz").toLowerCase();
       case "band":
         return d.band || "";
       case "tx_rate":
@@ -680,7 +697,7 @@ class NetworkTableCard extends LitElement {
           target = d.mac || "";
           break;
         case "ap":
-          target = d.ap || "";
+          target = [d.ap, d.switch_port, portApValue(d)].filter(Boolean).join(" ");
           break;
         case "band":
           target = d.band || "";

@@ -141,6 +141,7 @@ class Device:
     connection: str = "wired"  # "wired" | "wifi"
     ap: str = ""
     switch_port: str = ""
+    switch_host: str = ""
     band: str = ""
     channel: int | None = None
     essid: str = ""
@@ -629,12 +630,12 @@ def collect_wifi(
 def resolve_switch_ports(
     fdb_by_host: dict[str, dict[str, str]],
     uplink_threshold: int = FDB_UPLINK_MAC_THRESHOLD,
-) -> dict[str, str]:
+) -> dict[str, dict[str, str]]:
     """Resolve each MAC to the access port it is physically connected to.
 
     Ports carrying more than ``uplink_threshold`` MACs are uplinks/trunks and
     ignored; the remaining port with the fewest MACs (the access port) wins.
-    Returns MAC -> port number (trailing digits of the netdev name).
+    Returns MAC -> {"port": port number, "host": switch host}.
     """
     port_macs: dict[tuple[str, str], set[str]] = {}
     for host, fdb in fdb_by_host.items():
@@ -646,11 +647,11 @@ def resolve_switch_ports(
             continue
         for mac in macs:
             candidates.setdefault(mac, []).append((len(macs), host, port))
-    result: dict[str, str] = {}
+    result: dict[str, dict[str, str]] = {}
     for mac, cands in candidates.items():
-        _, _, port = min(cands)
+        _, host, port = min(cands)
         m = re.search(r"(\d+)$", port)
-        result[mac] = m.group(1) if m else port
+        result[mac] = {"port": m.group(1) if m else port, "host": host}
     return result
 
 
@@ -1699,7 +1700,7 @@ def build_devices(
     arp_hostnames: dict[str, str] | None = None,
     prev_state: dict[str, "StateEntry"] | None = None,
     rates: dict[str, dict[str, int | None]] | None = None,
-    switch_ports: dict[str, str] | None = None,
+    switch_ports: dict[str, dict[str, str]] | None = None,
 ) -> list[Device]:
     """Merge all data sources into a unified device list."""
     # Inject gateway as a lease
@@ -1837,7 +1838,7 @@ def build_devices(
     if switch_ports:
         # Switch-only topology: surface MACs known only from the forwarding DB.
         existing = {d.mac for d in devices}
-        for mac, port in switch_ports.items():
+        for mac, switch in switch_ports.items():
             if mac in existing:
                 continue
             devices.append(
@@ -1845,7 +1846,8 @@ def build_devices(
                     mac=mac,
                     vendor=vendors.get(mac, ""),
                     connection="wired",
-                    switch_port=port,
+                    switch_port=switch.get("port", ""),
+                    switch_host=switch.get("host", ""),
                     online=True,
                 )
             )
@@ -1853,7 +1855,8 @@ def build_devices(
         # Attach the access port to every wired device learned on a switch.
         for d in devices:
             if d.connection != "wifi" and d.mac in switch_ports:
-                d.switch_port = switch_ports[d.mac]
+                d.switch_port = switch_ports[d.mac].get("port", "")
+                d.switch_host = switch_ports[d.mac].get("host", "")
 
     return devices
 
@@ -2530,6 +2533,7 @@ def main() -> None:
                 "connection": d.connection,
                 "ap": d.ap,
                 "switch_port": d.switch_port,
+                "switch_host": d.switch_host,
                 "band": d.band,
                 "channel": d.channel,
                 "essid": d.essid,
