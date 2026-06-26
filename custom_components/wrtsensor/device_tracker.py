@@ -114,6 +114,7 @@ class WrtsensorDeviceTracker(CoordinatorEntity[WrtsensorCoordinator], ScannerEnt
             "ip6": dev.get("ip6"),
             "ap": dev.get("ap"),
             "switch_port": dev.get("switch_port"),
+            "switch_host": dev.get("switch_host"),
             "signal": dev.get("signal"),
             "vendor": dev.get("vendor"),
             "rx_total": dev.get("rx_total"),

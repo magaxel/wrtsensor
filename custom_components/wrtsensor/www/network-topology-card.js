@@ -12,6 +12,13 @@ const ICON_WIFI = `
   <path d="M6.5 12.5a5 5 0 0 1 7 0" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
   <path d="M3.5 9a9 9 0 0 1 13 0" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>`;
 
+const ICON_SWITCH = `
+  <rect x="2" y="5" width="16" height="10" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/>
+  <circle cx="5" cy="10" r="1" fill="currentColor"/>
+  <circle cx="8.5" cy="10" r="1" fill="currentColor"/>
+  <circle cx="12" cy="10" r="1" fill="currentColor"/>
+  <circle cx="15.5" cy="10" r="1" fill="currentColor"/>`;
+
 const ICON_PHONE = `
   <rect x="6" y="2" width="8" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/>
   <circle cx="10" cy="14.5" r="0.9" fill="currentColor"/>
@@ -190,6 +197,7 @@ const SVG_STYLE = `
     .ntc-inet     { fill: var(--blue-color, #1976d2); }
     .ntc-gw       { fill: var(--teal-color, #009688); }
     .ntc-ap       { fill: var(--indigo-color, #3f51b5); }
+    .ntc-switch   { fill: var(--cyan-color, #00acc1); }
     .ntc-wire     { fill: var(--blue-grey-color, #607d8b); }
     .ntc-wg-peer  { fill: var(--red-color, #88171a); }
     .ntc-wg-icon  { color: #fff; }
@@ -334,6 +342,7 @@ class NetworkTopologyCard extends HTMLElement {
     const partial = attr.partial ?? false;
     const gatewayLabel = this._config.gateway_label;
     const configuredAps = attr.ap_hosts ?? [];
+    const configuredSwitches = attr.switch_hosts ?? [];
     const hostStats = attr.host_stats ?? {};
     const hasGateway = !!(gatewayMac || wanIp || wanIp6);
 
@@ -358,6 +367,24 @@ class NetworkTopologyCard extends HTMLElement {
       const stats = hostStats[host] ?? {};
       if (stats.hostname) apHostnames.add(String(stats.hostname));
     }
+    const switchKeys = new Set();
+    const switchNodes = configuredSwitches.map((host) => {
+      const key = String(host);
+      const stats = hostStats[key] ?? {};
+      if (key) switchKeys.add(key);
+      if (stats.hostname) switchKeys.add(String(stats.hostname));
+      const aliases = [key, stats.hostname].filter(Boolean);
+      const device = allDevices.find((d) => aliases.includes(d.ip) || aliases.includes(d.hostname));
+      return {
+        ...(device ?? {}),
+        host: key,
+        hostname: stats.hostname || device?.hostname || key,
+        model: stats.model || device?.model || "",
+        ip: device?.ip || key,
+        ip6: device?.ip6,
+        online: stats.available === false ? false : device?.online !== false,
+      };
+    });
 
     // Prefer the authoritative gateway_mac from the scanner; fall back to
     // connection === "gateway" so partial scans (gateway_mac === "") and
@@ -368,24 +395,85 @@ class NetworkTopologyCard extends HTMLElement {
           return d.connection === "gateway";
         })
       : null;
-    const aps = allDevices.filter(
-      (d) => apHostnames.has(d.hostname) || apHostnames.has(d.mac?.toLowerCase()),
+    const apDeviceMatches = new Set();
+    const apNodes = [];
+    const apNodeKeys = new Set();
+    const addApNode = (ap, aliases) => {
+      const key = ap.host || ap.hostname || ap.ip || aliases.find(Boolean);
+      if (!key || apNodeKeys.has(key)) return;
+      apNodeKeys.add(key);
+      apNodes.push({ ...ap, _key: key, _aliases: aliases.filter(Boolean) });
+    };
+
+    for (const host of configuredAps) {
+      const key = String(host);
+      if (!key) continue;
+      const stats = hostStats[key] ?? {};
+      const aliases = [key, stats.hostname].filter(Boolean);
+      const device = allDevices.find((d) => aliases.includes(d.ip) || aliases.includes(d.hostname));
+      if (device) apDeviceMatches.add(device);
+      addApNode(
+        {
+          ...(device ?? {}),
+          host: key,
+          hostname: stats.hostname || device?.hostname || key,
+          ip: device?.ip || key,
+          ip6: device?.ip6,
+          model: stats.model || device?.model || "",
+          online: stats.available === false ? false : device?.online !== false,
+        },
+        aliases,
+      );
+    }
+
+    for (const d of allDevices) {
+      if (!apHostnames.has(d.hostname) && !apHostnames.has(d.mac?.toLowerCase())) continue;
+      if (apDeviceMatches.has(d)) continue;
+      addApNode(d, [d.hostname, d.ip, d.mac?.toLowerCase()]);
+      apDeviceMatches.add(d);
+    }
+    const switchDevices = allDevices.filter(
+      (d) => switchKeys.has(d.ip) || switchKeys.has(d.hostname),
     );
     const wifiDevices = devices.filter(
-      (d) => (d.connection === "wifi" || d.ap) && !aps.includes(d),
+      (d) => (d.connection === "wifi" || d.ap) && !apDeviceMatches.has(d),
     );
     const wiredDevices = devices.filter(
-      (d) => d !== gateway && !aps.includes(d) && d.connection !== "wifi" && !d.ap,
+      (d) =>
+        d !== gateway &&
+        !apDeviceMatches.has(d) &&
+        !switchDevices.includes(d) &&
+        d.connection !== "wifi" &&
+        !d.ap,
     );
 
     const byAp = {};
-    for (const ap of aps) {
-      byAp[ap.hostname] = [];
+    const apAliases = {};
+    for (const ap of apNodes) {
+      byAp[ap._key] = [];
+      for (const alias of ap._aliases ?? []) apAliases[alias] = ap._key;
     }
     const unknownApDevices = [];
     for (const d of wifiDevices) {
-      if (d.ap && byAp[d.ap] !== undefined) byAp[d.ap].push(d);
+      const apKey = d.ap ? apAliases[d.ap] : null;
+      if (apKey && byAp[apKey] !== undefined) byAp[apKey].push(d);
       else unknownApDevices.push(d);
+    }
+    const bySwitch = {};
+    const switchAliases = {};
+    for (const sw of switchNodes) {
+      bySwitch[sw.host] = [];
+      if (sw.host) switchAliases[sw.host] = sw.host;
+      if (sw.hostname) switchAliases[sw.hostname] = sw.host;
+      if (sw.ip) switchAliases[sw.ip] = sw.host;
+    }
+    const directWiredDevices = [];
+    for (const d of wiredDevices) {
+      const switchHost = switchAliases[d.switch_host];
+      const fallbackHost = d.switch_port && switchNodes.length === 1 ? switchNodes[0].host : null;
+      const targetSwitch = switchHost ?? fallbackHost;
+      if (targetSwitch && bySwitch[targetSwitch] !== undefined) bySwitch[targetSwitch].push(d);
+      else directWiredDevices.push(d);
     }
 
     const NODE_R = 20,
@@ -421,10 +509,12 @@ class NetworkTopologyCard extends HTMLElement {
     const sortWireless = (arr) => [...arr].sort(cmpWireless);
 
     const columns = [];
-    const sortedWired = sortWired(wiredDevices);
+    const sortedWired = sortWired(directWiredDevices);
     for (let i = 0; i < sortedWired.length; i += MAX_COL)
       columns.push({ devices: sortedWired.slice(i, i + MAX_COL), ap: null });
-    for (const ap of aps) columns.push({ devices: sortWireless(byAp[ap.hostname]), ap });
+    for (const sw of switchNodes)
+      columns.push({ devices: sortWired(bySwitch[sw.host] ?? []), ap: null, switchNode: sw });
+    for (const ap of apNodes) columns.push({ devices: sortWireless(byAp[ap._key]), ap });
     if (unknownApDevices.length > 0)
       columns.push({ devices: sortWireless(unknownApDevices), ap: null });
 
@@ -458,6 +548,8 @@ class NetworkTopologyCard extends HTMLElement {
       if (d.vendor) parts.push(d.vendor);
       if (d.mac) parts.push(d.mac);
       if (d.signal != null) parts.push(`Signal: ${d.signal} dBm`);
+      if (d.switch_host) parts.push(`Switch: ${d.switch_host}`);
+      if (d.switch_port) parts.push(`Switch port: ${d.switch_port}`);
       if (d.noise != null) parts.push(`Noise: ${d.noise} dBm`);
       if (d.snr != null) parts.push(`SNR: ${d.snr} dB`);
       if (d.tx_rate != null) parts.push(`TX rate: ${d.tx_rate} Mbit/s`);
@@ -504,6 +596,18 @@ class NetworkTopologyCard extends HTMLElement {
       if (showHostnames) rows.push(d?.hostname || fallback || d?.mac || "");
       if (showIpv4 && d?.ip) rows.push(d.ip);
       if (showIpv6 && d?.ip6) rows.push(d.ip6);
+      return rows.filter(Boolean);
+    };
+
+    const switchTitle = (sw) =>
+      [sw.hostname, sw.host && sw.host !== sw.hostname ? `Host: ${sw.host}` : "", sw.model]
+        .filter(Boolean)
+        .join("\n");
+
+    const switchTextRows = (sw) => {
+      const rows = [];
+      if (showHostnames) rows.push(sw.hostname || sw.host);
+      if (showIpv4 && sw.host) rows.push(sw.host);
       return rows.filter(Boolean);
     };
 
@@ -624,9 +728,11 @@ class NetworkTopologyCard extends HTMLElement {
     for (let ci = 0; ci < columns.length; ci++) {
       const col = columns[ci];
       const cx = colCenters[ci];
-      const colTopY = col.ap ? apRowY : devStartY;
+      const colTopY = col.ap || col.switchNode ? apRowY : devStartY;
       if (hasGateway) {
-        paths.push(curve(gwX, gwY + GW_R, cx, colTopY - (col.ap ? AP_R : NODE_R)));
+        paths.push(
+          curve(gwX, gwY + GW_R, cx, colTopY - (col.ap || col.switchNode ? AP_R : NODE_R)),
+        );
       }
 
       if (col.ap) {
@@ -649,19 +755,53 @@ class NetworkTopologyCard extends HTMLElement {
             svgNode(cx, dy, NODE_R, icon, nodeTextRows(d), null, devOp, nodeTitle(d), sc, unknown),
           );
         }
+      } else if (col.switchNode) {
+        const sw = col.switchNode;
+        const swOp = sw.online !== false ? "1" : "0.4";
+        nodes.push(
+          svgNode(
+            cx,
+            apRowY,
+            AP_R,
+            ICON_SWITCH,
+            switchTextRows(sw),
+            "ntc-switch",
+            swOp,
+            switchTitle(sw),
+          ),
+        );
+
+        for (let di = 0; di < col.devices.length; di++) {
+          const d = col.devices[di];
+          const dy = devStartY + di * ROW_H;
+          paths.push(line(cx, apRowY + AP_R, cx, dy - NODE_R));
+          if (!this._iconCache[d.mac]) this._iconCache[d.mac] = _deviceIcon(d);
+          const icon = this._iconCache[d.mac];
+          const unknown = !d.hostname && !d.vendor;
+          const wireOp = d.online !== false ? "1" : "0.4";
+          nodes.push(
+            svgNode(
+              cx,
+              dy,
+              NODE_R,
+              icon,
+              nodeTextRows(d),
+              "ntc-wire",
+              wireOp,
+              nodeTitle(d),
+              null,
+              unknown,
+            ),
+          );
+        }
       } else {
         for (let di = 0; di < col.devices.length; di++) {
           const d = col.devices[di];
           const dy = devStartY + di * ROW_H;
-          const prevY =
-            di === 0
-              ? hasGateway
-                ? gwY + GW_R
-                : dy - NODE_R
-              : devStartY + (di - 1) * ROW_H + NODE_R;
+          const prevY = di === 0 && hasGateway ? gwY + GW_R : devStartY + (di - 1) * ROW_H + NODE_R;
           const prevX = di === 0 ? (hasGateway ? gwX : cx) : cx;
           if (di === 0 && hasGateway) paths.push(curve(prevX, prevY, cx, dy - NODE_R));
-          else paths.push(line(prevX, prevY, cx, dy - NODE_R));
+          else if (di > 0) paths.push(line(prevX, prevY, cx, dy - NODE_R));
           if (!this._iconCache[d.mac]) this._iconCache[d.mac] = _deviceIcon(d);
           const icon = this._iconCache[d.mac];
           const unknown = !d.hostname && !d.vendor;

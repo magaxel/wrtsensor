@@ -11,7 +11,7 @@ Any mix of OpenWrt roles is supported — gateway, access points, and managed sw
 - **APs only** — OpenWrt access points behind a non-OpenWrt router. Leave gateway empty; devices are discovered from each AP's `ip neigh` on `br-lan`. WAN, DNS, and conntrack-bandwidth sensors are not created in this mode.
 - **Switches** — OpenWrt managed switches (e.g. a Zyxel GS1900 on `realtek/rtl838x`). Each switch's bridge forwarding table (`bridge fdb`) is read to report **which switch port** a wired device is connected to. Works alongside any of the above, or on its own.
 
-At least one host (gateway, AP, or switch) must be configured. Switch ports are reported on the `network-table-card` (the **Port** column) and as the `switch_port` attribute on each device.
+At least one host (gateway, AP, or switch) must be configured. Switch ports are reported on the `network-table-card` in the combined **Port/AP** column and as the `switch_port` attribute on each device; `switch_host` identifies which configured switch reported the access port.
 
 ## Table of contents
 
@@ -32,7 +32,7 @@ Per scan (every 60 s) the integration produces a single JSON object. Every colle
 
 - **Network hosts** *(optional, on by default)* — MAC, IPv4, IPv6, hostname, vendor (OUI lookup), connection type, switch port (for wired clients on an OpenWrt switch), online status, plus all per-client device_trackers and presence binary sensors. Required by `network-topology-card`, `network-table-card`, and `network-events-card`. Disabling skips ARP/NDP/Wi-Fi station/conntrack collection on every host.
 - **Wi-Fi metrics** — for associated clients: AP, band, signal, noise, SNR, TX/RX PHY rates, expected throughput, per-station byte counters. Tied to Network hosts.
-- **Host stats** *(optional, on by default)* — CPU%, RAM%, root disk%, hardware model, and board name for the gateway and each AP. The hardware model (from `ubus call system board`) is shown in the HA device registry for each host's sensor cluster. Disable **Collect host metrics** in Options to skip CPU/RAM/storage collection and remove those sensors.
+- **Host stats** *(optional, on by default)* — CPU%, RAM%, root disk%, hardware model, and board name for each configured OpenWrt host. The hardware model (from `ubus call system board`) is shown in the HA device registry for each host's sensor cluster. Disable **Collect host metrics** in Options to skip CPU/RAM/storage collection and remove those sensors.
 - **WAN bandwidth** *(optional, on by default)* — gateway WAN interface RX/TX rate and cumulative byte totals. Disable **Collect WAN bandwidth** to skip the byte-counter reads and remove the WAN download/upload sensors.
 - **DNS cache** *(optional, on by default)* — dnsmasq cache hit/miss counts for 24h, 8h, 1h, and last-scan windows, per-window upstream query counts, per-upstream latency, and weighted average upstream latency. Required by `dns-stats-card`.
 - **WireGuard** *(optional, off by default)* — per-peer endpoint, allowed IPs, last-handshake age, transfer counters, live throughput, and online state. Auto-detected on the gateway and each AP every scan via secret-free `wg show` subcommands; private and preshared keys are never read into HA.
@@ -41,14 +41,14 @@ Per scan (every 60 s) the integration produces a single JSON object. Every colle
 
 Initial setup creates the full default entity set; users wanting a "DNS-only" or "WireGuard-only" install configure that via **Settings → Devices & Services → wrtsensor → Configure** after first run.
 
-All enabled blocks come from a single 20 s SSH call to the gateway plus parallel SSH calls to each AP — no redundant shell sensors.
+All enabled blocks come from a single 20 s SSH call to the gateway plus parallel SSH calls to each AP and switch — no redundant shell sensors.
 
 ## Requirements
 
 - **Home Assistant** — Python 3.11+ (built in on HA OS).
 - **HACS** — install [HACS](https://hacs.xyz/) first; it's how wrtsensor is distributed.
 - **OpenWrt** — tested on 25.12.2. Older releases may work but are untested. Stock packages are enough: `busybox`, `ip`, `iwinfo`, `dnsmasq`, `logread`.
-- **Network** — SSH from HA host to every OpenWrt box (gateway + APs). Port 22 is used by default; add the port inline for custom ports, e.g. `192.0.2.1:2222` or `[2001:db8::1]:2222`.
+- **Network** — SSH from HA host to every OpenWrt box (gateway + APs + switches). Port 22 is used by default; add the port inline for custom ports, e.g. `192.0.2.1:2222` or `[2001:db8::1]:2222`.
 
 ## Installation
 
@@ -62,14 +62,14 @@ All enabled blocks come from a single 20 s SSH call to the gateway plus parallel
 
 3. Go to **Settings → Devices & Services → Add Integration** and search for **wrtsensor**.
 
-4. Enter your gateway IP (optional), SSH key path (default `/config/ssh/id_ed25519`), and any AP IPs (comma-separated). Add `:port` for IPv4 custom SSH ports or `[IPv6]:port` for IPv6 custom SSH ports. At least one of gateway or APs must be set — leaving gateway empty enables APs-only mode.
+4. Enter your gateway IP (optional), SSH key path (default `/config/ssh/id_ed25519`), and any AP/switch IPs (comma-separated). Add `:port` for IPv4 custom SSH ports or `[IPv6]:port` for IPv6 custom SSH ports. At least one gateway, AP, or switch must be set — leaving gateway empty enables APs-only or switch-only modes.
 
 5. Done — wrtsensor creates one scanner sensor per config entry, plus dedicated WAN/DNS/host sensors where applicable. Their exact entity IDs depend on the entry title, so pick them from the entity picker in the UI rather than assuming a fixed `sensor.wrtsensor_*` name.
 
 6. Add the Lovelace resources manually in **Settings → Dashboards → Resources**:
 
-   - `/wrtsensor_static/network-table-card.js?v=1.0.0` — JavaScript Module
-   - `/wrtsensor_static/network-topology-card.js?v=1.1.1` — JavaScript Module
+   - `/wrtsensor_static/network-table-card.js?v=2.3.0` — JavaScript Module
+   - `/wrtsensor_static/network-topology-card.js?v=1.1.4` — JavaScript Module
    - `/wrtsensor_static/network-events-card.js?v=1.0.0` — JavaScript Module
    - `/wrtsensor_static/dns-stats-card.js?v=3.0.1` — JavaScript Module
    - `/wrtsensor_static/wireguard-card.js?v=1.1.0` — JavaScript Module *(only needed if you enable the WireGuard option)*
@@ -109,17 +109,16 @@ columns:
   - mac
   - connection
   - ap
-  - switch_port
   - band
   - tx_rate
   - signal
 ```
 
-The `switch_port` column shows the OpenWrt switch port number a wired device is connected to (when a switch is configured). It is filterable like the other text columns.
+The `ap` column is displayed as **Port/AP**. It shows the AP name for Wi-Fi clients and `Port <number>` for wired clients learned from a configured switch. Existing dashboards that still list `switch_port` are mapped to `ap` automatically by the card.
 
 ### `network-topology-card`
 
-SVG topology map showing the gateway, APs, and clients.
+SVG topology map showing the gateway, switches, APs, and clients. Configured APs are shown even when the AP itself is not present in DHCP/ARP device discovery.
 
 ```yaml
 type: custom:network-topology-card
@@ -200,7 +199,7 @@ Security: wrtsensor never reads WireGuard private or preshared keys. Collection 
 
 ### Firmware updates (Attended Sysupgrade)
 
-One HA `update` entity per OpenWrt host (gateway + each AP), surfaced through HA's standard **Settings → Updates** dashboard and the built-in update tile — no extra Lovelace card needed. Off by default; turn on **Check for OpenWrt firmware updates** under **Settings → Devices & Services → wrtsensor → Configure**.
+One HA `update` entity per OpenWrt host, surfaced through HA's standard **Settings → Updates** dashboard and the built-in update tile — no extra Lovelace card needed. Off by default; turn on **Check for OpenWrt firmware updates** under **Settings → Devices & Services → wrtsensor → Configure**.
 
 Each host needs the `owut` tool. It is optional on OpenWrt 24.10 and included by default on OpenWrt 25.12 images for devices with larger flash storage, but smaller devices may still need it installed manually:
 
@@ -277,7 +276,7 @@ entities:
     name: AP1 - Root
 ```
 
-In APs-only mode, only the AP rows appear.
+Without a gateway, only the configured AP and switch infrastructure rows appear.
 
 Breaking change: host CPU/RAM/Disk entities were reset to avoid duplicated host names in Home Assistant generated IDs, such as `sensor.172_16_42_22_172_16_42_22_ram`. After upgrading, update dashboards and automations to the new `sensor.wrtsensor_<host>_<metric>` IDs, or pick the current entities from Home Assistant's entity picker if you customized names manually.
 
@@ -287,7 +286,7 @@ Each toggle in Options owns a set of entities — turn the toggle off and the en
 
 | Entity ID | Owning option | What it is |
 |-----------|---------------|-----------|
-| `sensor.<entry>_network_scanner` | Track LAN/Wi-Fi clients | Device count as state; `devices` (each with a `switch_port`), `wan_ip`, `wan_ip6`, `gateway_mac`, `ap_hosts`, `switch_hosts`, `host_stats`, `partial`, `scan_duration` as attributes. Powers the topology, table, and events cards. |
+| `sensor.<entry>_network_scanner` | Track LAN/Wi-Fi clients | Device count as state; `devices` (each with `switch_port` and `switch_host` when learned from a switch), `wan_ip`, `wan_ip6`, `gateway_mac`, `ap_hosts`, `switch_hosts`, `host_stats`, `partial`, `scan_duration` as attributes. Powers the topology, table, and events cards. |
 | `device_tracker.<hostname>` | Track LAN/Wi-Fi clients | home/not_home per discovered device — **disabled by default** |
 | `binary_sensor.<entry>_presence_<mac>` | Track LAN/Wi-Fi clients | Online/offline per configured MAC (set in Options) |
 | `sensor.<entry>_wan_download` | Collect WAN bandwidth | WAN RX rate in Mbit/s |
@@ -311,7 +310,7 @@ Version 2.0.1 removes the custom **Scan interval** option to follow Home Assista
 
 Version 2.1.0 unifies connection editing into the **Configure** dialog. The separate **Reconfigure** menu entry is gone; gateway, SSH key path, and AP hosts are now editable from the same Configure form as every other option. Existing config entries continue to work without migration. The stored `ap_hosts` value is canonicalised on save (whitespace stripped, joined with single commas) — `"a, b"` becomes `"a,b"`.
 
-The compat `sensor.<entry>_network_scanner` no longer carries the full god-blob of every feature. After upgrading, it keeps network-host data (`devices`, `wan_ip`, `wan_ip6`, `gateway_mac`, `ap_hosts`, `switch_hosts`, `partial`, `scan_duration`) plus `host_stats` for the per-host metric entities. Other per-feature data lives on the dedicated sensors:
+The compat `sensor.<entry>_network_scanner` no longer carries the full god-blob of every feature. After upgrading, it keeps network-host data (`devices`, including switch port/host attribution where available, `wan_ip`, `wan_ip6`, `gateway_mac`, `ap_hosts`, `switch_hosts`, `partial`, `scan_duration`) plus `host_stats` for the per-host metric entities. Other per-feature data lives on the dedicated sensors:
 
 - `dns_stats` is now on `sensor.<entry>_dns_cache_hit_pct` (consumed by `dns-stats-card`).
 - `wireguard` is on `sensor.<entry>_wireguard` (consumed by `wireguard-card`).

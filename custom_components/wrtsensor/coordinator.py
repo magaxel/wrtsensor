@@ -115,6 +115,7 @@ class Device:
     connection: str = "wired"
     ap: str = ""
     switch_port: str = ""
+    switch_host: str = ""
     band: str = ""
     channel: int | None = None
     essid: str = ""
@@ -172,7 +173,7 @@ def build_devices(
     prev_state: dict[str, StateEntry] | None = None,
     rates: dict[str, dict[str, int | None]] | None = None,
     active_ap_names: set[str] | None = None,
-    switch_ports: dict[str, str] | None = None,
+    switch_ports: dict[str, dict[str, str]] | None = None,
 ) -> list[Device]:
     ndp = dict(ndp or {})
     active_ap_names = active_ap_names or set()
@@ -295,7 +296,7 @@ def build_devices(
     if switch_ports:
         # Switch-only topology: surface MACs known only from the forwarding DB.
         existing = {d.mac for d in devices}
-        for mac, port in switch_ports.items():
+        for mac, switch in switch_ports.items():
             if mac in existing:
                 continue
             devices.append(
@@ -303,7 +304,8 @@ def build_devices(
                     mac=mac,
                     vendor=vendors.get(mac, ""),
                     connection="wired",
-                    switch_port=port,
+                    switch_port=switch.get("port", ""),
+                    switch_host=switch.get("host", ""),
                     online=True,
                 )
             )
@@ -311,7 +313,8 @@ def build_devices(
         # Attach the access port to every wired device learned on a switch.
         for d in devices:
             if d.connection != "wifi" and d.mac in switch_ports:
-                d.switch_port = switch_ports[d.mac]
+                d.switch_port = switch_ports[d.mac].get("port", "")
+                d.switch_host = switch_ports[d.mac].get("host", "")
     return devices
 
 
@@ -1955,7 +1958,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if hoststat:
                     ap_hoststats[host] = hoststat
 
-        switch_ports: dict[str, str] = {}
+        switch_ports: dict[str, dict[str, str]] = {}
         if self._enable_network_hosts and fdb_by_host:
             switch_ports = resolve_switch_ports(
                 fdb_by_host, switch_hosts=set(self._switch_hosts)

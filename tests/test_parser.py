@@ -823,7 +823,7 @@ class TestParseFdb:
 class TestResolveSwitchPorts:
     def test_single_host_single_device(self):
         ports = resolve_switch_ports({"sw": {"AA:BB:CC:DD:EE:01": "lan5"}})
-        assert ports == {"AA:BB:CC:DD:EE:01": "5"}
+        assert ports == {"AA:BB:CC:DD:EE:01": {"port": "5", "host": "sw"}}
 
     def test_uplink_port_excluded(self):
         # A router uplink port carrying many MACs must not win over the switch's
@@ -834,21 +834,21 @@ class TestResolveSwitchPorts:
         ports = resolve_switch_ports(
             {"switch": switch, "router": uplink}, uplink_threshold=4
         )
-        assert ports["AA:BB:CC:DD:EE:01"] == "5"
+        assert ports["AA:BB:CC:DD:EE:01"] == {"port": "5", "host": "switch"}
 
     def test_fewest_macs_wins_on_tie(self):
         # Same MAC on two access-like ports: the less-populated one is the edge.
         a = {"AA:BB:CC:DD:EE:01": "lan2", "AA:BB:CC:DD:EE:09": "lan2"}
         b = {"AA:BB:CC:DD:EE:01": "lan3"}
         ports = resolve_switch_ports({"hostA": a, "hostB": b})
-        assert ports["AA:BB:CC:DD:EE:01"] == "3"
+        assert ports["AA:BB:CC:DD:EE:01"] == {"port": "3", "host": "hostB"}
 
     def test_switch_host_preferred_on_count_tie(self):
         a = {"AA:BB:CC:DD:EE:01": "lan2"}  # on a plain host
         b = {"AA:BB:CC:DD:EE:01": "lan8"}  # on the designated switch
         ports = resolve_switch_ports({"plain": a, "sw": b}, switch_hosts={"sw"})
-        assert ports["AA:BB:CC:DD:EE:01"] == "8"
+        assert ports["AA:BB:CC:DD:EE:01"] == {"port": "8", "host": "sw"}
 
     def test_non_numeric_port_falls_back_to_raw(self):
         ports = resolve_switch_ports({"sw": {"AA:BB:CC:DD:EE:01": "wan"}})
-        assert ports == {"AA:BB:CC:DD:EE:01": "wan"}
+        assert ports == {"AA:BB:CC:DD:EE:01": {"port": "wan", "host": "sw"}}

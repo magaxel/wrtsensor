@@ -147,7 +147,7 @@ def test_coordinator_parses_switch_endpoints():
 
 def test_update_attaches_switch_port_from_gateway_fdb():
     """A wired lease device learned on a switch port surfaces switch_port."""
-    c = _make_coordinator()
+    c = _make_coordinator(gateway_host="192.0.2.1")
     gw_data = {
         **_MINIMAL_GW,
         "leases": ["1700000000 11:22:33:44:55:66 192.0.2.50 nas *"],
@@ -176,6 +176,7 @@ def test_update_attaches_switch_port_from_gateway_fdb():
     assert result["switch_hosts"] == []
     by_mac = {d["mac"]: d for d in result["devices"]}
     assert by_mac["11:22:33:44:55:66"]["switch_port"] == "5"
+    assert by_mac["11:22:33:44:55:66"]["switch_host"] == "192.0.2.1"
 
 
 def test_update_resolves_vendor_for_fdb_only_switch_device():
@@ -198,6 +199,7 @@ def test_update_resolves_vendor_for_fdb_only_switch_device():
 
     by_mac = {d["mac"]: d for d in result["devices"]}
     assert by_mac["11:22:33:44:55:66"]["switch_port"] == "12"
+    assert by_mac["11:22:33:44:55:66"]["switch_host"] == "192.0.2.24"
     assert by_mac["11:22:33:44:55:66"]["vendor"] == "Acme Devices"
 
 
@@ -387,10 +389,11 @@ def test_build_devices_assigns_switch_port_to_wired_lease_device():
         gw_ip="",
         gw_hostname="",
         alive_ap_ips=[],
-        switch_ports={"11:22:33:44:55:66": "5"},
+        switch_ports={"11:22:33:44:55:66": {"port": "5", "host": "sw1"}},
     )
     assert devices[0].connection == "wired"
     assert devices[0].switch_port == "5"
+    assert devices[0].switch_host == "sw1"
 
 
 def test_build_devices_does_not_label_wifi_device_with_switch_port():
@@ -413,10 +416,11 @@ def test_build_devices_does_not_label_wifi_device_with_switch_port():
         gw_ip="",
         gw_hostname="",
         alive_ap_ips=[],
-        switch_ports={"AA:BB:CC:DD:EE:01": "8"},
+        switch_ports={"AA:BB:CC:DD:EE:01": {"port": "8", "host": "sw1"}},
     )
     assert devices[0].connection == "wifi"
     assert devices[0].switch_port == ""
+    assert devices[0].switch_host == ""
 
 
 def test_build_devices_creates_fdb_only_device_switch_only_topology():
@@ -432,12 +436,13 @@ def test_build_devices_creates_fdb_only_device_switch_only_topology():
         gw_ip="",
         gw_hostname="",
         alive_ap_ips=[],
-        switch_ports={"AA:BB:CC:DD:EE:01": "12"},
+        switch_ports={"AA:BB:CC:DD:EE:01": {"port": "12", "host": "sw1"}},
     )
     assert len(devices) == 1
     assert devices[0].mac == "AA:BB:CC:DD:EE:01"
     assert devices[0].connection == "wired"
     assert devices[0].switch_port == "12"
+    assert devices[0].switch_host == "sw1"
     assert devices[0].vendor == "Acme"
     assert devices[0].online is True
 
