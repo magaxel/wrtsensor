@@ -1,345 +1,170 @@
 # wrtsensor
 
-> ⚠️ **Under heavy development.** Config schema, entity IDs, and behaviour may change without notice. Pin to a specific commit or tag if you need stability.
+> 🤖 **100% vibe coded.** Every line of this project was written by an LLM.
+> Still under heavy development — config schema and entity IDs may change without
+> notice; pin a commit or tag if you need stability.
 
-A lightweight Home Assistant network monitor for a home LAN running OpenWrt. A single Python integration SSHes into the router (and any access points) once per minute, collects the complete picture of the network, and exposes it to Home Assistant as sensors, binary sensors, and device trackers. Lovelace custom cards render device lists, topology maps, event logs, and dnsmasq DNS statistics.
+A lightweight Home Assistant network monitor for a home LAN running OpenWrt. One
+Python integration SSHes into the router (and any APs/switches) once per minute,
+collects the full picture of the network, and exposes it to Home Assistant as
+sensors, binary sensors, and device trackers. Bundled Lovelace cards render device
+lists, topology maps, event logs, and dnsmasq DNS stats.
 
-Any mix of OpenWrt roles is supported — gateway, access points, and managed switches — and each role is optional on its own:
+Any mix of OpenWrt roles works; each is optional on its own, but at least one host
+must be configured:
 
-- **Gateway + APs** — the full picture: DHCP leases, ARP/NDP, WAN, dnsmasq stats, Wi-Fi associations, per-host stats.
-- **Gateway only** — one OpenWrt box that routes and does Wi-Fi. Enter its IP in the gateway field; it counts as both gateway *and* AP for Wi-Fi collection.
-- **APs only** — OpenWrt access points behind a non-OpenWrt router. Leave gateway empty; devices are discovered from each AP's `ip neigh` on `br-lan`. WAN, DNS, and conntrack-bandwidth sensors are not created in this mode.
-- **Switches** — OpenWrt managed switches (e.g. a Zyxel GS1900 on `realtek/rtl838x`). Each switch's bridge forwarding table (`bridge fdb`) is read to report **which switch port** a wired device is connected to. Works alongside any of the above, or on its own.
+- **Gateway + APs** — the full picture: DHCP leases, ARP/NDP, WAN, dnsmasq stats,
+  Wi-Fi associations, per-host stats.
+- **Gateway only** — one box that routes *and* does Wi-Fi; it counts as gateway *and*
+  AP for Wi-Fi collection.
+- **APs only** — OpenWrt APs behind a non-OpenWrt router. Devices come from each AP's
+  `ip neigh` on `br-lan`; WAN/DNS/conntrack sensors are not created.
+- **Switches** — OpenWrt managed switches (e.g. a Zyxel GS1900). Each switch's bridge
+  forwarding table (`bridge fdb`) reports **which switch port** a wired device is on.
 
-At least one host (gateway, AP, or switch) must be configured. Switch ports are reported on the `network-table-card` in the combined **Port/AP** column and as the `switch_port` attribute on each device; `switch_host` identifies which configured switch reported the access port.
-
-## Table of contents
-
-- [What it collects](#what-it-collects)
-- [Requirements](#requirements)
-- [Installation](#installation)
-- [Card configuration](#card-configuration)
-- [Entities](#entities)
-- [Network assumptions](#network-assumptions)
-- [Recorder & logbook exclusion](#recorder--logbook-exclusion)
-- [Troubleshooting](#troubleshooting)
-- [Additional docs](#additional-docs)
-- [License](#license)
+Switch ports show in the `network-table-card` **Port/AP** column and as the
+`switch_port` attribute on each device; `switch_host` identifies which switch
+reported the access port.
 
 ## What it collects
 
-Per scan (every 60 s) the integration produces a single JSON object. Every collection block can be toggled independently in **Settings → Devices & Services → wrtsensor → Configure** — disable a feature and its SSH-side commands and HA entities both disappear:
+Per scan (every 60 s) the integration produces one JSON object. Every block can be
+toggled in **Settings → Devices & Services → wrtsensor → Configure** — disabling a
+feature drops both its SSH-side commands and its HA entities. Initial setup creates
+the full default set; a "DNS-only" or "WireGuard-only" install is just a matter of
+toggling the rest off after first run.
 
-- **Network hosts** *(optional, on by default)* — MAC, IPv4, IPv6, hostname, vendor (OUI lookup), connection type, switch port (for wired clients on an OpenWrt switch), online status, plus all per-client device_trackers and presence binary sensors. Required by `network-topology-card`, `network-table-card`, and `network-events-card`. Disabling skips ARP/NDP/Wi-Fi station/conntrack collection on every host.
-- **Wi-Fi metrics** — for associated clients: AP, band, signal, noise, SNR, TX/RX PHY rates, expected throughput, per-station byte counters. Tied to Network hosts.
-- **Host stats** *(optional, on by default)* — CPU%, RAM%, root disk%, hardware model, and board name for each configured OpenWrt host. The hardware model (from `ubus call system board`) is shown in the HA device registry for each host's sensor cluster. Disable **Collect host metrics** in Options to skip CPU/RAM/storage collection and remove those sensors.
-- **WAN bandwidth** *(optional, on by default)* — gateway WAN interface RX/TX rate and cumulative byte totals. Disable **Collect WAN bandwidth** to skip the byte-counter reads and remove the WAN download/upload sensors.
-- **DNS cache** *(optional, on by default)* — dnsmasq cache hit/miss counts for 24h, 8h, 1h, and last-scan windows, per-window upstream query counts, per-upstream latency, and weighted average upstream latency. Required by `dns-stats-card`.
-- **WireGuard** *(optional, off by default)* — per-peer endpoint, allowed IPs, last-handshake age, transfer counters, live throughput, and online state. Auto-detected on the gateway and each AP every scan via secret-free `wg show` subcommands; private and preshared keys are never read into HA.
-- **Firmware updates** *(optional, off by default)* — one HA `update` entity per OpenWrt host, backed by the device's `owut` tool. Each entity reports the installed and latest available OpenWrt version; clicking the entity exposes a link to that host's LuCI Attended Sysupgrade page where you can apply the update. Probes `https://sysupgrade.openwrt.org` from each device every 6 h by default.
-- **Event log** — HACS integration keeps the most recent 500 events in memory only (cleared on HA restart/reload). Tied to Network hosts (the events feed lives on the network scanner sensor). The manual `command_line` install keeps its separate JSONL event file.
+- **Network hosts** *(default on)* — MAC, IPv4/IPv6, hostname, vendor (OUI), connection
+  type, switch port, online status, plus per-client device_trackers and presence
+  binary sensors. Required by the topology, table, and events cards.
+- **Wi-Fi metrics** — AP, band, signal, noise, SNR, TX/RX PHY rates, expected
+  throughput, per-station byte counters. Tied to Network hosts.
+- **Host stats** *(default on)* — CPU%, RAM%, root disk%, hardware model, board name
+  per configured host.
+- **WAN bandwidth** *(default on)* — gateway WAN RX/TX rate and byte totals.
+- **DNS cache** *(default on)* — dnsmasq hit/miss counts over 24h/8h/1h/last-scan,
+  per-window upstream query counts and latency. Powers `dns-stats-card`.
+- **WireGuard** *(default off)* — per-peer endpoint, allowed IPs, last-handshake age,
+  transfer counters, live throughput, online state. Private/preshared keys are never
+  read.
+- **Firmware updates** *(default off)* — one HA `update` entity per host backed by
+  `owut`, reporting installed vs. latest OpenWrt version with a LuCI upgrade link.
+- **Event log** — most recent 500 events in memory (cleared on restart/reload). Tied
+  to Network hosts.
 
-Initial setup creates the full default entity set; users wanting a "DNS-only" or "WireGuard-only" install configure that via **Settings → Devices & Services → wrtsensor → Configure** after first run.
-
-All enabled blocks come from a single 20 s SSH call to the gateway plus parallel SSH calls to each AP and switch — no redundant shell sensors.
+All enabled blocks come from a single SSH call to the gateway plus parallel calls to
+each AP and switch — no redundant shell sensors.
 
 ## Requirements
 
 - **Home Assistant** — Python 3.11+ (built in on HA OS).
 - **HACS** — install [HACS](https://hacs.xyz/) first; it's how wrtsensor is distributed.
-- **OpenWrt** — tested on 25.12.2. Older releases may work but are untested. Stock packages are enough: `busybox`, `ip`, `iwinfo`, `dnsmasq`, `logread`.
-- **Network** — SSH from HA host to every OpenWrt box (gateway + APs + switches). Port 22 is used by default; add the port inline for custom ports, e.g. `192.0.2.1:2222` or `[2001:db8::1]:2222`.
+- **OpenWrt** — tested on 25.12.2. Stock packages are enough: `busybox`, `ip`,
+  `iwinfo`, `dnsmasq`, `logread`.
+- **Network** — SSH (key-based) from HA to every OpenWrt box. Port 22 by default; add
+  the port inline for custom ports, e.g. `192.0.2.1:2222` or `[2001:db8::1]:2222`.
 
 ## Installation
 
-1. In Home Assistant, open **HACS → Integrations → ⋮ → Custom repositories** and add:
-   ```
-   https://github.com/magaxel/wrtsensor
-   ```
-   Category: **Integration**
+1. In Home Assistant, open **HACS → Integrations → ⋮ → Custom repositories** and add
+   `https://github.com/magaxel/wrtsensor` with category **Integration**.
 
 2. Install **wrtsensor** from HACS and restart Home Assistant.
 
 3. Go to **Settings → Devices & Services → Add Integration** and search for **wrtsensor**.
 
-4. Enter your gateway IP (optional), SSH key path (default `/config/ssh/id_ed25519`), and any AP/switch IPs (comma-separated). Add `:port` for IPv4 custom SSH ports or `[IPv6]:port` for IPv6 custom SSH ports. At least one gateway, AP, or switch must be set — leaving gateway empty enables APs-only or switch-only modes.
+4. Enter your gateway IP (optional), SSH key path (default `/config/ssh/id_ed25519`),
+   and any AP/switch IPs (comma-separated). At least one gateway, AP, or switch must
+   be set — leaving gateway empty enables APs-only or switch-only mode.
 
-5. Done — wrtsensor creates one scanner sensor per config entry, plus dedicated WAN/DNS/host sensors where applicable. Their exact entity IDs depend on the entry title, so pick them from the entity picker in the UI rather than assuming a fixed `sensor.wrtsensor_*` name.
+5. wrtsensor creates one scanner sensor per config entry, plus dedicated
+   WAN/DNS/host sensors where applicable. Entity IDs depend on the entry title, so
+   pick them from the entity picker rather than assuming a fixed name.
 
-6. Add the Lovelace resources manually in **Settings → Dashboards → Resources**:
+6. Add the Lovelace resources in **Settings → Dashboards → Resources** (all
+   JavaScript Modules):
 
-   - `/wrtsensor_static/network-table-card.js?v=2.3.0` — JavaScript Module
-   - `/wrtsensor_static/network-topology-card.js?v=1.1.4` — JavaScript Module
-   - `/wrtsensor_static/network-events-card.js?v=1.0.0` — JavaScript Module
-   - `/wrtsensor_static/dns-stats-card.js?v=3.0.1` — JavaScript Module
-   - `/wrtsensor_static/wireguard-card.js?v=1.1.0` — JavaScript Module *(only needed if you enable the WireGuard option)*
+   - `/wrtsensor_static/network-table-card.js?v=2.3.0`
+   - `/wrtsensor_static/network-topology-card.js?v=1.1.4`
+   - `/wrtsensor_static/network-events-card.js?v=1.1.2`
+   - `/wrtsensor_static/dns-stats-card.js?v=3.0.1`
+   - `/wrtsensor_static/wireguard-card.js?v=1.1.0` *(only if WireGuard is enabled)*
 
-> If key authentication isn't set up yet, the config flow will ask for a password once and provision the public key into `/etc/dropbear/authorized_keys` on each OpenWrt box for you. The password is never stored.
+> If key auth isn't set up yet, the config flow asks for a password once and
+> provisions the public key into `/etc/dropbear/authorized_keys` on each box. The
+> password is never stored.
 
-Prefer not to use HACS? See [docs/manual-install.md](docs/manual-install.md) for the `command_line` sensor path.
+Prefer not to use HACS? See [docs/manual-install.md](docs/manual-install.md) for the
+`command_line` sensor path.
 
-### Changing gateway, APs, or switches
+**Changing hosts:** open **Configure** to edit the gateway, APs, switches, SSH key,
+or any option in place. Every host is re-probed; removing a host prunes its sensors
+on the next reload. The public key is left in `authorized_keys` on a removed
+device — delete it there manually if you no longer trust the host.
 
-Open **Settings → Devices & Services → wrtsensor → Configure** to change the gateway, APs, switches, SSH key path, or any other option in place. Every host is re-probed; if authentication fails, the flow prompts for a password and re-provisions the key, same as initial setup. Removing a host prunes its CPU/RAM/Disk sensors automatically on the next reload and stops carrying its old Wi-Fi associations into the topology map after the next scan. Turning off **Collect host metrics** also removes those per-host metric sensors on reload. The public SSH key stays in `/etc/dropbear/authorized_keys` on the removed device — delete it manually there if you no longer trust the host.
+**Removing the entry:** deleting the last wrtsensor entry unloads its entities and
+clears the runtime cache in `/dev/shm` and `/tmp/netscan`. The OUI vendor database is
+kept in the HA config dir so re-adding doesn't re-download it.
 
-### Removing the integration entry
+## Cards
 
-Deleting the wrtsensor config entry from **Settings → Devices & Services** unloads the entities and, when it is the last wrtsensor entry, removes the HACS integration's local runtime cache files from `/dev/shm` and `/tmp/netscan`. This is lifecycle cleanup toward Home Assistant's higher quality-scale expectations; it is not required for Bronze.
+Bundled Lovelace cards — full YAML examples and options in
+[docs/cards.md](docs/cards.md):
 
-The downloaded OUI vendor database is retained in the Home Assistant config directory so re-adding the integration does not need a fresh multi-megabyte download. The temporary `/tmp/wrtsensor_collector.sh` helper on each OpenWrt host is also left alone and normally disappears on the next router reboot. Home Assistant recorder/history rows age out through HA's normal purge behavior.
-
-## Card configuration
-
-Each wrtsensor config entry creates its own scanner entity. Use the entity picker in the card editor, or replace the example IDs below with the entity IDs created for your entry. Drop these snippets into a dashboard via **Raw configuration editor** or the **+ ADD CARD → Manual** editor.
-
-### `network-table-card`
-
-Wider tabular variant — better for widescreen dashboards.
-
-```yaml
-type: custom:network-table-card
-entity: sensor.my_router_network_scanner
-title: Network
-show_offline: false
-columns:
-  - ip
-  - ip6_enabled
-  - hostname
-  - vendor
-  - mac
-  - connection
-  - ap
-  - band
-  - tx_rate
-  - signal
-```
-
-The `ap` column is displayed as **Port/AP**. It shows the AP name for Wi-Fi clients and `Port <number>` for wired clients learned from a configured switch. Existing dashboards that still list `switch_port` are mapped to `ap` automatically by the card.
-
-### `network-topology-card`
-
-SVG topology map showing the gateway, switches, APs, and clients. Configured APs are shown even when the AP itself is not present in DHCP/ARP device discovery.
-
-```yaml
-type: custom:network-topology-card
-entity: sensor.my_router_network_scanner
-title: Network Map
-gateway_label: gw        # fallback label shown when gateway device is missing
-column_width: 200        # px between AP columns
-show_offline: false
-show_hostnames: true          # show device hostnames; false leaves only selected address rows
-show_ipv4: true               # show IPv4 address rows and public IPv4 beside the gateway
-show_ipv6: false              # show IPv6 address rows and public IPv6 beside the gateway
-sort_wireless_by_signal: false   # true = order wireless clients by signal (strongest under the AP) instead of hostname
-show_wireguard_peers: false      # true = draw WireGuard peers above Internet
-show_offline_wireguard: true     # include offline WireGuard peers dimmed
-wireguard_entity: null           # optional sensor override if auto-detect is wrong
-```
-
-WireGuard peers are auto-detected from a sibling `sensor.*_wireguard` entity on the same wrtsensor device. If auto-detect cannot choose a sensor, set `wireguard_entity` explicitly. The editor shows the WireGuard controls when a sensor is discoverable or an override is configured; if the sensor reports `available: false`, peers appear after the next successful WireGuard scan.
-
-Breaking change in v2.x: `gateway_hostname` was renamed to `gateway_label`, `col_width` was renamed to `column_width`, and `show_bandwidth` was removed (per-device throughput is still visible in the node tooltip). The separate SSH port option was also removed; use inline host ports instead, e.g. `192.0.2.1:2222` or `[2001:db8::1]:2222`.
-
-### `network-events-card`
-
-Filterable event log. Groups events by date, shows per-day count, live search, type-filter buttons.
-
-```yaml
-type: custom:network-events-card
-entity: sensor.my_router_network_scanner
-title: Network Events
-max_height: 560
-show_search: true        # hide search bar by setting false
-show_filters: true       # hide type-filter pill row by setting false
-shown_types:             # optional — limit to specific event types; [] shows none
-  - connect
-  - disconnect
-  - roam
-  - ip_change
-```
-
-### `dns-stats-card`
-
-dnsmasq cache statistics. The main hit/miss bar defaults to the last 24 hours. If wrtsensor does not have enough history for the selected period yet, the card shows the available clean collection window instead, such as `collected for 3h`. Upstream server rows use the first available per-server counter baseline inside that same clean window, so they can appear even when older hit/miss history predates server tracking.
-
-The "Upstream latency" value and the per-upstream `· N ms` next to each server follow the configured `period:` — they are means of the per-sample dnsmasq latency reports across the window. `last_scan` shows the latest sample only.
-
-Requires the **Collect DNS stats** option (on by default). When the option is off, or when no gateway is configured, the card displays a short message pointing back at the integration options instead of a chart.
-
-Breaking change: `lifetime` is no longer a selectable or displayed DNS card period. Existing cards with `period: lifetime` fall back to `last_24h`; re-save the card config to update it. Upstream query counts now follow the selected period instead of showing dnsmasq lifetime totals. `last_scan` rates are intentionally hidden and display as `—` because one-scan rates are noisy.
-
-```yaml
-type: custom:dns-stats-card
-entity: sensor.my_router_network_scanner
-title: DNS Cache
-period: last_24h     # last_24h, last_8h, last_1h, or last_scan
-show_ipv6: false     # hide IPv6 upstream rows by default
-max_servers: 8
-```
-
-Breaking change: DNS period values are now exposed under `dns_stats.last_24h`, `dns_stats.last_8h`, `dns_stats.last_1h`, and `dns_stats.last_scan`; `dns_stats.lifetime` is no longer emitted.
-
-Breaking change: top-level `dns_stats.latency_ms` and `dns_stats.servers` are no longer emitted. Read the period equivalents instead — e.g. `dns_stats.last_1h.latency_ms` and `dns_stats.last_24h.servers`. The `sensor.<entry>_dns_latency` entity now reports the `last_scan` window. After upgrade, DNS history is reset (samples without latency data are discarded on first load), so the card briefly shows "collected for Xm" until the new window fills in.
-
-### `wireguard-card`
-
-Per-peer WireGuard tunnel status. Requires the **Show WireGuard connections** option (off by default; turn it on under **Settings → Devices & Services → wrtsensor → Configure**). The card reads from the `sensor.<entry>_wireguard` entity that the integration creates when the option is on. Each peer renders as a collapsible row showing a green/grey status dot and its name (from the UCI `option description` if set, else the first 8 chars of the public key); tapping or pressing Enter expands the row to show endpoint, allowed IPs, last-handshake age, RX/TX totals, and live rate. Stale peers (no handshake within the configured idle timeout, default 180 s) are greyed out.
-
-Set `max_peers` (default `0` = unlimited) to cap how many peers are shown at once. When the total peer count across all interfaces exceeds the limit, prev/next arrows appear at the bottom of the card and you can also swipe left/right on touch devices to page. Pagination is global across interfaces — when an interface's peers cross a page boundary they are split between pages, so the page boundaries follow the global peer order rather than per-interface counts.
-
-```yaml
-type: custom:wireguard-card
-entity: sensor.my_router_wireguard
-max_peers: 0
-```
-
-Each peer also gets its own `device_tracker` entity with a stable `unique_id` of `<entry_id>_wgpeer_<sha1[:16]>`. State is `home` when the peer's last handshake is within the idle timeout, `not_home` otherwise — useful for presence automations driven by VPN state. HA picks the slugified entity_id; pick the entity from the picker rather than guessing the slug.
-
-Security: wrtsensor never reads WireGuard private or preshared keys. Collection uses `wg show <iface> <subcommand>` queries (`public-key`, `listen-port`, `peers`, `endpoints`, `allowed-ips`, `latest-handshakes`, `transfer`, `persistent-keepalive`) and an awk-filtered `uci -q show network` that drops every option name except `description`, `public_key`, `allowed_ips`, `endpoint_host`, `endpoint_port`. `wg show all dump`, `wg-quick`, `cat /etc/config/network`, and `cat /etc/wireguard/*` are never executed.
-
-### Firmware updates (Attended Sysupgrade)
-
-One HA `update` entity per OpenWrt host, surfaced through HA's standard **Settings → Updates** dashboard and the built-in update tile — no extra Lovelace card needed. Off by default; turn on **Check for OpenWrt firmware updates** under **Settings → Devices & Services → wrtsensor → Configure**.
-
-Each host needs the `owut` tool. It is optional on OpenWrt 24.10 and included by default on OpenWrt 25.12 images for devices with larger flash storage, but smaller devices may still need it installed manually:
-
-```sh
-# OpenWrt 24.10
-opkg update && opkg install owut
-
-# OpenWrt 25.12 / main
-apk -U add owut
-```
-
-When enabled, a background task per HA instance probes one host at a time on a slow rotation (default every 6 h, configurable from 1 h to 24 h via the **Firmware check interval** option). The probe runs `owut check` on the device, which round-trips to `https://sysupgrade.openwrt.org` and takes 5–20 s — it does not block the 60 s scan tick.
-
-Each entity exposes:
-
-- `installed_version` and `latest_version` — normalised OpenWrt version strings including revision (e.g. `24.10.1 r28597`). The build hash suffix (`-6df6e6c8a4`) is dropped so two builds of the same revision compare equal, but the revision number is kept so same-release revision upgrades surface as available.
-- `release_url` and the `luci_url` attribute — both point at `http://<host>/cgi-bin/luci/admin/system/attendedsysupgrade/overview` on that device. Click the link in the entity's More Info dialog to perform the actual upgrade through LuCI; LuCI auto-redirects through its login page if you are not authenticated.
-- `release_summary` — the headline status from `owut`, e.g. `It is safe to proceed with an upgrade` or `no changes, upgrade not necessary`.
-- Attributes: `tool` (`owut` / `none` / `unknown`), `error` (set when owut is missing or the ASU server returned errors), `installed_version_raw` (the full `OpenWrt 24.10.1 r28597-...` string).
-
-Hosts without `owut` installed stay unavailable until the package is added; a single INFO log per host describes the install command. The integration never installs packages on the device.
-
-### `history-graph` — CPU
-
-Per-host CPU % over time using HA's built-in graph card. Requires the **Collect host metrics** option (on by default). New host metric entities use the suggested ID pattern `sensor.wrtsensor_<ip_with_underscores>_cpu`.
-
-```yaml
-type: history-graph
-title: CPU
-hours_to_show: 8
-min_y_axis: 0            # lock axis to 0–100 so hosts are comparable
-max_y_axis: 100
-entities:
-  - entity: sensor.wrtsensor_192_0_2_1_cpu
-    name: Gateway
-  - entity: sensor.wrtsensor_192_0_2_22_cpu
-    name: AP1
-  - entity: sensor.wrtsensor_192_0_2_23_cpu
-    name: AP2
-```
-
-### `history-graph` — RAM
-
-Same pattern as CPU, with `_ram` sensors. Requires the **Collect host metrics** option.
-
-```yaml
-type: history-graph
-title: RAM
-hours_to_show: 8
-min_y_axis: 0
-max_y_axis: 100
-entities:
-  - entity: sensor.wrtsensor_192_0_2_1_ram
-    name: Gateway
-  - entity: sensor.wrtsensor_192_0_2_22_ram
-    name: AP1
-  - entity: sensor.wrtsensor_192_0_2_23_ram
-    name: AP2
-```
-
-### `entities` — Storage
-
-Disk use per host as a static list. Requires the **Collect host metrics** option. New host metric entities use the suggested ID pattern `sensor.wrtsensor_<ip_with_underscores>_disk`.
-
-```yaml
-type: entities
-title: Storage
-entities:
-  - entity: sensor.wrtsensor_192_0_2_1_disk
-    icon: mdi:harddisk
-    name: Gateway - Root
-  - entity: sensor.wrtsensor_192_0_2_22_disk
-    icon: mdi:harddisk
-    name: AP1 - Root
-```
-
-Without a gateway, only the configured AP and switch infrastructure rows appear.
-
-Breaking change: host CPU/RAM/Disk entities were reset to avoid duplicated host names in Home Assistant generated IDs, such as `sensor.172_16_42_22_172_16_42_22_ram`. After upgrading, update dashboards and automations to the new `sensor.wrtsensor_<host>_<metric>` IDs, or pick the current entities from Home Assistant's entity picker if you customized names manually.
+- **`network-table-card`** — wide tabular device list with filterable columns.
+- **`network-topology-card`** — SVG map of gateway, switches, APs, and clients.
+- **`network-events-card`** — filterable connect/disconnect/roam/ip_change log.
+- **`dns-stats-card`** — dnsmasq cache hit/miss and upstream latency.
+- **`wireguard-card`** — per-peer WireGuard tunnel status.
+- **Host metrics & firmware** — `history-graph` (CPU/RAM) and `entities` (storage)
+  snippets, plus the built-in `update` tiles for firmware. See
+  [docs/cards.md](docs/cards.md).
 
 ## Entities
 
-Each toggle in Options owns a set of entities — turn the toggle off and the entities are removed from the registry on reload.
+Each toggle in Options owns a set of entities — turn the toggle off and they're
+removed from the registry on reload.
 
 | Entity ID | Owning option | What it is |
 |-----------|---------------|-----------|
-| `sensor.<entry>_network_scanner` | Track LAN/Wi-Fi clients | Device count as state; `devices` (each with `switch_port` and `switch_host` when learned from a switch), `wan_ip`, `wan_ip6`, `gateway_mac`, `ap_hosts`, `switch_hosts`, `host_stats`, `partial`, `scan_duration` as attributes. Powers the topology, table, and events cards. |
+| `sensor.<entry>_network_scanner` | Track LAN/Wi-Fi clients | Device count as state; `devices` (with `switch_port`/`switch_host`), `wan_ip`, `wan_ip6`, `gateway_mac`, `ap_hosts`, `switch_hosts`, `host_stats`, `partial`, `scan_duration` as attributes. Powers the topology, table, and events cards. |
 | `device_tracker.<hostname>` | Track LAN/Wi-Fi clients | home/not_home per discovered device — **disabled by default** |
-| `binary_sensor.<entry>_presence_<mac>` | Track LAN/Wi-Fi clients | Online/offline per configured MAC (set in Options) |
-| `sensor.<entry>_wan_download` | Collect WAN bandwidth | WAN RX rate in Mbit/s |
-| `sensor.<entry>_wan_upload` | Collect WAN bandwidth | WAN TX rate in Mbit/s |
-| `sensor.<entry>_dns_cache_hit_pct` | Collect DNS stats | DNS cache hit %; `dns_stats` blob in attributes — powers `dns-stats-card`. |
+| `binary_sensor.<entry>_presence_<mac>` | Track LAN/Wi-Fi clients | Online/offline per configured MAC |
+| `sensor.<entry>_wan_download` / `_wan_upload` | Collect WAN bandwidth | WAN RX / TX rate in Mbit/s |
+| `sensor.<entry>_dns_cache_hit_pct` | Collect DNS stats | DNS cache hit %; `dns_stats` blob powers `dns-stats-card` |
 | `sensor.<entry>_dns_latency` | Collect DNS stats | Weighted upstream DNS latency in ms |
-| `sensor.wrtsensor_<host>_cpu` | Collect host metrics | CPU % per host, e.g. `sensor.wrtsensor_192_0_2_1_cpu` |
-| `sensor.wrtsensor_<host>_ram` | Collect host metrics | RAM % per host |
-| `sensor.wrtsensor_<host>_disk` | Collect host metrics | Disk % per host |
-| `sensor.<entry>_wireguard` | Show WireGuard connections | Live peer count; `wireguard` blob in attributes — powers `wireguard-card`. |
+| `sensor.wrtsensor_<host>_cpu` / `_ram` / `_disk` | Collect host metrics | CPU / RAM / disk % per host |
+| `sensor.<entry>_wireguard` | Show WireGuard connections | Live peer count; `wireguard` blob powers `wireguard-card` |
 | `device_tracker.<entry>_wgpeer_<id>` | Show WireGuard connections | home/not_home per WG peer |
-| `update.<entry>_<host>_firmware` | Check for OpenWrt firmware updates | Per-host firmware update entity backed by `owut check` |
+| `update.<entry>_<host>_firmware` | Check for OpenWrt firmware updates | Per-host firmware update backed by `owut check` |
 
-Device tracker entities are named after the device hostname (e.g. `device_tracker.my_phone`) and are disabled by default. HA's scanner entity base class does this to avoid flooding the registry when dozens of devices are discovered. To use a tracker for Person presence, go to **Settings → Entities**, enable "Show disabled entities", find the device, and enable it. The entity can then be added to a Person.
-
-### Upgrading from earlier versions — dashboard migration
-
-Version 2.0.0 changes the **Firmware check interval** option from seconds to hours. Existing `asu_interval_s` option values are ignored; use **Configure** to save the desired 1-24 hour interval.
-
-Version 2.0.1 removes the custom **Scan interval** option to follow Home Assistant integration quality guidance. wrtsensor now always polls every 60 seconds. Existing stored scan interval values are ignored and disappear the next time you save Options.
-
-Version 2.1.0 unifies connection editing into the **Configure** dialog. The separate **Reconfigure** menu entry is gone; gateway, SSH key path, and AP hosts are now editable from the same Configure form as every other option. Existing config entries continue to work without migration. The stored `ap_hosts` value is canonicalised on save (whitespace stripped, joined with single commas) — `"a, b"` becomes `"a,b"`.
-
-The compat `sensor.<entry>_network_scanner` no longer carries the full god-blob of every feature. After upgrading, it keeps network-host data (`devices`, including switch port/host attribution where available, `wan_ip`, `wan_ip6`, `gateway_mac`, `ap_hosts`, `switch_hosts`, `partial`, `scan_duration`) plus `host_stats` for the per-host metric entities. Other per-feature data lives on the dedicated sensors:
-
-- `dns_stats` is now on `sensor.<entry>_dns_cache_hit_pct` (consumed by `dns-stats-card`).
-- `wireguard` is on `sensor.<entry>_wireguard` (consumed by `wireguard-card`).
-- `wan_rx_rate` / `wan_tx_rate` are on the WAN download/upload sensors.
-
-If you have an existing `dns-stats-card` configured with `entity: sensor.<entry>_network_scanner`, edit the card and change the `entity:` field to `sensor.<entry>_dns_cache_hit_pct` — or remove and re-add the card to pick up the new default. Until you do, the card displays "DNS stats unavailable…" since the attribute it expects is no longer on the network scanner sensor. Same applies to any custom dashboards or templates reading `wireguard` / `wan_rx_rate` / `wan_tx_rate` from the network scanner — those keys are gone; data is on the dedicated entities.
+Device trackers are named after the device hostname (e.g. `device_tracker.my_phone`)
+and are disabled by default. To use one for Person presence, enable it via **Settings
+→ Entities → Show disabled entities**.
 
 ## Network assumptions
 
-The integration expects at least one OpenWrt host reachable over SSH (key-based auth). Gateway, APs, and switches are all optional on their own — but at least one must be set.
+At least one OpenWrt host must be reachable over SSH (key-based auth). Gateway, APs,
+and switches are each optional. A single box that routes *and* does Wi-Fi counts as a
+gateway — enter its IP in the gateway field and leave the AP list empty.
 
 | Role | Address (example) |
 |------|-------------------|
 | Gateway — optional | `192.0.2.1` |
-| AP — optional | `192.0.2.10` |
-| AP — optional (more as needed) | `192.0.2.11`, `192.0.2.12`, … |
-| Switch — optional (more as needed) | `192.0.2.24`, … |
+| AP — optional | `192.0.2.10`, `192.0.2.11`, … |
+| Switch — optional | `192.0.2.24`, … |
 | LAN bridge | `br-lan` |
 | WAN interface | `eth0` |
 
-A single OpenWrt box that routes *and* does Wi-Fi counts as a gateway — enter its IP in the gateway field and leave the AP list empty.
-
-WAN bandwidth, DNS cache, and conntrack-derived per-device bandwidth are only collected when a gateway is configured. In APs-only mode, devices are discovered via each AP's own `ip -4/-6 neigh show dev br-lan` output; DHCP hostnames are not available since the non-OpenWrt router holds them.
-
-Replace the example addresses with whatever your LAN uses. The HACS integration multiplexes connections with asyncssh in-process; the standalone `diagnose.py` script uses `ControlMaster=auto / ControlPersist=60`.
+WAN bandwidth, DNS cache, and conntrack-derived per-device bandwidth are only
+collected with a gateway configured. In APs-only mode, devices are discovered via
+each AP's `ip -4/-6 neigh show dev br-lan`; DHCP hostnames are unavailable since the
+non-OpenWrt router holds them.
 
 ## Recorder & logbook exclusion
 
-The per-entry `*_network_scanner` entity carries a large JSON blob as attributes and changes every scan (every 60 s). Exclude the specific entity created for your entry in `configuration.yaml` to keep the database and logbook trim:
+The `*_network_scanner` entity carries a large JSON blob and changes every 60 s.
+Exclude it to keep the database and logbook trim:
 
 ```yaml
 recorder:
@@ -355,19 +180,25 @@ logbook:
 
 ## Troubleshooting
 
-**Integration shows "Failed to connect"** — SSH key path is wrong or unreadable by HA, or the key isn't in OpenWrt's `authorized_keys`. The config flow offers a password-provisioning step; otherwise set the key up manually (see [manual install — SSH key](docs/manual-install.md#1-ssh-key--ha--openwrt)).
+**"Failed to connect"** — SSH key path is wrong/unreadable by HA, or the key isn't in
+OpenWrt's `authorized_keys`. Use the config flow's password-provisioning step, or set
+the key up manually (see [manual install — SSH key](docs/manual-install.md#1-ssh-key--ha--openwrt)).
 
-**All APs in log as "unreachable"** — APs must be reachable from HA over SSH with the same key as the gateway. Port 22 is used by default; for custom ports, enter the AP as `192.0.2.10:2222` or `[2001:db8::10]:2222`. Check with `ssh -i /config/ssh/id_ed25519 -p <port> root@<ap-ip> uptime` on the HA host.
+**APs logged as "unreachable"** — APs must be reachable from HA over SSH with the same
+key. For custom ports enter `192.0.2.10:2222` or `[2001:db8::10]:2222`. Test with
+`ssh -i /config/ssh/id_ed25519 -p <port> root@<ap-ip> uptime`.
 
-**Card is missing from the picker or shows "Custom element doesn't exist"** — the card's JavaScript resource is not loaded by Lovelace. For HACS installs, wrtsensor serves card files under `/wrtsensor_static/`, but each card URL still needs to be present in **Settings → Dashboards → Resources**. If WireGuard is enabled, add `/wrtsensor_static/wireguard-card.js?v=1.1.0` as a JavaScript Module. Bump the `?v=` query to bust the companion app's JS cache after updates.
+**Card missing / "Custom element doesn't exist"** — the card's JS resource isn't
+loaded. Add each card URL under **Settings → Dashboards → Resources**, and bump the
+`?v=` query to bust the app's JS cache after updates.
 
-**A device tracker won't show up** — trackers are disabled by default. Enable via **Settings → Entities → Show disabled entities**.
-
-For manual-install specific troubleshooting (diagnose.py, `command_line.yaml`, `json_attributes` allowlist) see [docs/manual-install.md#troubleshooting](docs/manual-install.md#troubleshooting).
+For manual-install specifics see
+[docs/manual-install.md#troubleshooting](docs/manual-install.md#troubleshooting).
 
 ## Additional docs
 
-- [Manual installation](docs/manual-install.md) — command_line sensor path for users without HACS.
+- [Cards & dashboards](docs/cards.md) — full YAML for every bundled card.
+- [Manual installation](docs/manual-install.md) — command_line sensor path without HACS.
 - [Development](docs/development.md) — lint/test commands, repository layout, CI.
 
 ## License
