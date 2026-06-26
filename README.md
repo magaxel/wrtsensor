@@ -69,7 +69,7 @@ All enabled blocks come from a single 20 s SSH call to the gateway plus parallel
 6. Add the Lovelace resources manually in **Settings → Dashboards → Resources**:
 
    - `/wrtsensor_static/network-table-card.js?v=2.3.0` — JavaScript Module
-   - `/wrtsensor_static/network-topology-card.js?v=1.1.3` — JavaScript Module
+   - `/wrtsensor_static/network-topology-card.js?v=1.1.4` — JavaScript Module
    - `/wrtsensor_static/network-events-card.js?v=1.0.0` — JavaScript Module
    - `/wrtsensor_static/dns-stats-card.js?v=3.0.1` — JavaScript Module
    - `/wrtsensor_static/wireguard-card.js?v=1.1.0` — JavaScript Module *(only needed if you enable the WireGuard option)*
@@ -118,7 +118,7 @@ The `ap` column is displayed as **Port/AP**. It shows the AP name for Wi-Fi clie
 
 ### `network-topology-card`
 
-SVG topology map showing the gateway, switches, APs, and clients.
+SVG topology map showing the gateway, switches, APs, and clients. Configured APs are shown even when the AP itself is not present in DHCP/ARP device discovery.
 
 ```yaml
 type: custom:network-topology-card

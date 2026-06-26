@@ -391,31 +391,68 @@ class NetworkTopologyCard extends HTMLElement {
           return d.connection === "gateway";
         })
       : null;
-    const aps = allDevices.filter(
-      (d) => apHostnames.has(d.hostname) || apHostnames.has(d.mac?.toLowerCase()),
-    );
+    const apDeviceMatches = new Set();
+    const apNodes = [];
+    const apNodeKeys = new Set();
+    const addApNode = (ap, aliases) => {
+      const key = ap.host || ap.hostname || ap.ip || aliases.find(Boolean);
+      if (!key || apNodeKeys.has(key)) return;
+      apNodeKeys.add(key);
+      apNodes.push({ ...ap, _key: key, _aliases: aliases.filter(Boolean) });
+    };
+
+    for (const host of configuredAps) {
+      const key = String(host);
+      if (!key) continue;
+      const stats = hostStats[key] ?? {};
+      const aliases = [key, stats.hostname].filter(Boolean);
+      const device = allDevices.find((d) => aliases.includes(d.ip) || aliases.includes(d.hostname));
+      if (device) apDeviceMatches.add(device);
+      addApNode(
+        {
+          ...(device ?? {}),
+          host: key,
+          hostname: stats.hostname || device?.hostname || key,
+          ip: device?.ip || key,
+          ip6: device?.ip6,
+          model: stats.model || device?.model || "",
+          online: stats.available === false ? false : device?.online !== false,
+        },
+        aliases,
+      );
+    }
+
+    for (const d of allDevices) {
+      if (!apHostnames.has(d.hostname) && !apHostnames.has(d.mac?.toLowerCase())) continue;
+      if (apDeviceMatches.has(d)) continue;
+      addApNode(d, [d.hostname, d.ip, d.mac?.toLowerCase()]);
+      apDeviceMatches.add(d);
+    }
     const switchDevices = allDevices.filter(
       (d) => switchKeys.has(d.ip) || switchKeys.has(d.hostname),
     );
     const wifiDevices = devices.filter(
-      (d) => (d.connection === "wifi" || d.ap) && !aps.includes(d),
+      (d) => (d.connection === "wifi" || d.ap) && !apDeviceMatches.has(d),
     );
     const wiredDevices = devices.filter(
       (d) =>
         d !== gateway &&
-        !aps.includes(d) &&
+        !apDeviceMatches.has(d) &&
         !switchDevices.includes(d) &&
         d.connection !== "wifi" &&
         !d.ap,
     );
 
     const byAp = {};
-    for (const ap of aps) {
-      byAp[ap.hostname] = [];
+    const apAliases = {};
+    for (const ap of apNodes) {
+      byAp[ap._key] = [];
+      for (const alias of ap._aliases ?? []) apAliases[alias] = ap._key;
     }
     const unknownApDevices = [];
     for (const d of wifiDevices) {
-      if (d.ap && byAp[d.ap] !== undefined) byAp[d.ap].push(d);
+      const apKey = d.ap ? apAliases[d.ap] : null;
+      if (apKey && byAp[apKey] !== undefined) byAp[apKey].push(d);
       else unknownApDevices.push(d);
     }
     const bySwitch = {};
@@ -473,7 +510,7 @@ class NetworkTopologyCard extends HTMLElement {
       columns.push({ devices: sortedWired.slice(i, i + MAX_COL), ap: null });
     for (const sw of switchNodes)
       columns.push({ devices: sortWired(bySwitch[sw.host] ?? []), ap: null, switchNode: sw });
-    for (const ap of aps) columns.push({ devices: sortWireless(byAp[ap.hostname]), ap });
+    for (const ap of apNodes) columns.push({ devices: sortWireless(byAp[ap._key]), ap });
     if (unknownApDevices.length > 0)
       columns.push({ devices: sortWireless(unknownApDevices), ap: null });
 
