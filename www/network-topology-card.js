@@ -373,12 +373,16 @@ class NetworkTopologyCard extends HTMLElement {
       const stats = hostStats[key] ?? {};
       if (key) switchKeys.add(key);
       if (stats.hostname) switchKeys.add(String(stats.hostname));
+      const aliases = [key, stats.hostname].filter(Boolean);
+      const device = allDevices.find((d) => aliases.includes(d.ip) || aliases.includes(d.hostname));
       return {
+        ...(device ?? {}),
         host: key,
-        hostname: stats.hostname || key,
-        model: stats.model || "",
-        ip: key,
-        online: stats.available !== false,
+        hostname: stats.hostname || device?.hostname || key,
+        model: stats.model || device?.model || "",
+        ip: device?.ip || key,
+        ip6: device?.ip6,
+        online: stats.available === false ? false : device?.online !== false,
       };
     });
 
@@ -465,7 +469,7 @@ class NetworkTopologyCard extends HTMLElement {
     }
     const directWiredDevices = [];
     for (const d of wiredDevices) {
-      const switchHost = switchAliases[d.switch_host] ?? switchAliases[d.switch_name];
+      const switchHost = switchAliases[d.switch_host];
       const fallbackHost = d.switch_port && switchNodes.length === 1 ? switchNodes[0].host : null;
       const targetSwitch = switchHost ?? fallbackHost;
       if (targetSwitch && bySwitch[targetSwitch] !== undefined) bySwitch[targetSwitch].push(d);
@@ -794,15 +798,10 @@ class NetworkTopologyCard extends HTMLElement {
         for (let di = 0; di < col.devices.length; di++) {
           const d = col.devices[di];
           const dy = devStartY + di * ROW_H;
-          const prevY =
-            di === 0
-              ? hasGateway
-                ? gwY + GW_R
-                : dy - NODE_R
-              : devStartY + (di - 1) * ROW_H + NODE_R;
+          const prevY = di === 0 && hasGateway ? gwY + GW_R : devStartY + (di - 1) * ROW_H + NODE_R;
           const prevX = di === 0 ? (hasGateway ? gwX : cx) : cx;
           if (di === 0 && hasGateway) paths.push(curve(prevX, prevY, cx, dy - NODE_R));
-          else paths.push(line(prevX, prevY, cx, dy - NODE_R));
+          else if (di > 0) paths.push(line(prevX, prevY, cx, dy - NODE_R));
           if (!this._iconCache[d.mac]) this._iconCache[d.mac] = _deviceIcon(d);
           const icon = this._iconCache[d.mac];
           const unknown = !d.hostname && !d.vendor;
