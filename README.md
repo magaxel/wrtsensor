@@ -10,21 +10,28 @@ collects the full picture of the network, and exposes it to Home Assistant as
 sensors, binary sensors, and device trackers. Bundled Lovelace cards render device
 lists, topology maps, event logs, and dnsmasq DNS stats.
 
-Any mix of OpenWrt roles works; each is optional on its own, but at least one host
-must be configured:
+You give it a single comma-separated list of OpenWrt device IPs; it **autodetects each
+device's role** — gateway, access point, or managed switch — on every reload, so you
+never sort them yourself. Detection is hardware-independent: the gateway is the box with
+the internet uplink (an `up` `wan` interface, corroborated by every other box routing its
+default traffic through it), access points are non-gateway boxes with Wi-Fi, and switches
+are the wired-only rest. The gateway's LAN bridge and WAN interface are autodetected too.
+Any mix works; each role is optional on its own, but at least one host must be configured:
 
 - **Gateway + APs** — the full picture: DHCP leases, ARP/NDP, WAN, dnsmasq stats,
   Wi-Fi associations, per-host stats.
-- **Gateway only** — one box that routes *and* does Wi-Fi; it counts as gateway *and*
-  AP for Wi-Fi collection.
-- **APs only** — OpenWrt APs behind a non-OpenWrt router. Devices come from each AP's
-  `ip neigh` on `br-lan`; WAN/DNS/conntrack sensors are not created.
+- **Gateway only** — one box that routes *and* does Wi-Fi; detected as the gateway and
+  counts as gateway *and* AP for Wi-Fi collection.
+- **APs only** — OpenWrt APs behind a non-OpenWrt router. With no OpenWrt gateway in the
+  list, none is detected as gateway; devices come from each AP's `ip neigh` on `br-lan`;
+  WAN/DNS/conntrack sensors are not created.
 - **Switches** — OpenWrt managed switches (e.g. a Zyxel GS1900). Each switch's bridge
   forwarding table (`bridge fdb`) reports **which switch port** a wired device is on.
 
-Switch ports show in the `network-table-card` **Port/AP** column and as the
-`switch_port` attribute on each device; `switch_host` identifies which switch
-reported the access port.
+If autodetection ever picks the wrong role, append `=gateway`, `=ap`, or `=switch` to that
+IP (e.g. `192.0.2.5=switch`). Switch ports show in the `network-table-card` **Port/AP**
+column and as the `switch_port` attribute on each device; `switch_host` identifies which
+detected switch reported the access port.
 
 ## What it collects
 
@@ -73,9 +80,12 @@ each AP and switch — no redundant shell sensors.
 
 3. Go to **Settings → Devices & Services → Add Integration** and search for **wrtsensor**.
 
-4. Enter your gateway IP (optional), SSH key path (default `/config/ssh/id_ed25519`),
-   and any AP/switch IPs (comma-separated). At least one gateway, AP, or switch must
-   be set — leaving gateway empty enables APs-only or switch-only mode.
+4. Enter a comma-separated list of every OpenWrt device IP in the single **OpenWrt
+   device IPs** field, plus the SSH key path (default `/config/ssh/id_ed25519`). Roles
+   are detected automatically; the next screen shows the detected roles to confirm.
+   Append `:port` for a custom SSH port and `=gateway`/`=ap`/`=switch` to override a
+   detected role. At least one host must be set; with no OpenWrt gateway in the list the
+   integration runs in APs-only / switch-only mode.
 
 5. wrtsensor creates one scanner sensor per config entry, plus dedicated
    WAN/DNS/host sensors where applicable. Entity IDs depend on the entry title, so
@@ -97,10 +107,12 @@ each AP and switch — no redundant shell sensors.
 Prefer not to use HACS? See [docs/manual-install.md](docs/manual-install.md) for the
 `command_line` sensor path.
 
-**Changing hosts:** open **Configure** to edit the gateway, APs, switches, SSH key,
-or any option in place. Every host is re-probed; removing a host prunes its sensors
-on the next reload. The public key is left in `authorized_keys` on a removed
-device — delete it there manually if you no longer trust the host.
+**Changing hosts:** open **Configure** to edit the single **OpenWrt device IPs** field
+(plus the SSH key or any option) in place. Roles are re-detected on save; append
+`=gateway`/`=ap`/`=switch` to an IP to override a detected role. Every host is
+re-probed; removing a host prunes its sensors on the next reload. The public key is
+left in `authorized_keys` on a removed device — delete it there manually if you no
+longer trust the host.
 
 **Removing the entry:** deleting the last wrtsensor entry unloads its entities and
 clears the runtime cache in `/dev/shm` and `/tmp/netscan`. The OUI vendor database is
@@ -144,20 +156,20 @@ and are disabled by default. To use one for Person presence, enable it via **Set
 
 ## Network assumptions
 
-At least one OpenWrt host must be reachable over SSH (key-based auth). Gateway, APs,
-and switches are each optional. A single box that routes *and* does Wi-Fi counts as a
-gateway — enter its IP in the gateway field and leave the AP list empty.
+At least one OpenWrt host must be reachable over SSH (key-based auth). Roles are
+autodetected, so you just list IPs. A single box that routes *and* does Wi-Fi is
+detected as the gateway and also collects its own Wi-Fi.
 
-| Role | Address (example) |
+| Field | Value (example) |
 |------|-------------------|
-| Gateway — optional | `192.0.2.1` |
-| AP — optional | `192.0.2.10`, `192.0.2.11`, … |
-| Switch — optional | `192.0.2.24`, … |
-| LAN bridge | `br-lan` |
-| WAN interface | `eth0` |
+| OpenWrt device IPs | `192.0.2.1,192.0.2.10,192.0.2.11,192.0.2.24` |
+| Optional role override | `192.0.2.24=switch` |
+| LAN bridge | autodetected (e.g. `br-lan`) |
+| WAN interface | autodetected (e.g. `eth0`) |
 
-WAN bandwidth, DNS cache, and conntrack-derived per-device bandwidth are only
-collected with a gateway configured. In APs-only mode, devices are discovered via
+The LAN bridge and WAN interface are autodetected from the gateway; leave the matching
+options blank unless you need to override them. WAN bandwidth, DNS cache, and
+conntrack-derived per-device bandwidth are only collected when a gateway is detected. In APs-only mode, devices are discovered via
 each AP's `ip -4/-6 neigh show dev br-lan`; DHCP hostnames are unavailable since the
 non-OpenWrt router holds them. Configured OpenWrt gateway, AP, and switch devices
 use their own `ubus call system board` hostname when available, including

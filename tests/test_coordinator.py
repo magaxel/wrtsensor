@@ -1,7 +1,6 @@
-"""Tests for WrtsensorCoordinator._async_update_data and config migration."""
+"""Tests for WrtsensorCoordinator._async_update_data and role detection."""
 
 import asyncio
-import importlib.util
 import json
 import sys
 import types
@@ -24,22 +23,6 @@ UpdateFailed = sys.modules["homeassistant.helpers.update_coordinator"].UpdateFai
 _ROOT = Path(__file__).parent.parent
 _WRT = _ROOT / "custom_components" / "wrtsensor"
 
-# ── Load __init__.py for migration tests ──────────────────────────────────────
-
-# Extend the config_entries stub so async_update_entry is callable
-_ce = sys.modules["homeassistant.config_entries"]
-if not hasattr(_ce, "async_update_entry"):
-    _ce.async_update_entry = lambda *a, **kw: None
-
-_init_name = "custom_components.wrtsensor.__init_test__"
-_spec = importlib.util.spec_from_file_location(_init_name, _WRT / "__init__.py")
-_init_mod = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
-_init_mod.__package__ = "custom_components.wrtsensor"
-sys.modules[_init_name] = _init_mod
-_spec.loader.exec_module(_init_mod)  # type: ignore[union-attr]
-
-async_migrate_entry = _init_mod.async_migrate_entry
-
 
 # ── Test infrastructure ────────────────────────────────────────────────────────
 
@@ -48,10 +31,12 @@ class _FakeConfigEntries:
     def __init__(self):
         self.updates: list[dict] = []
 
-    def async_update_entry(self, entry, *, data=None, version=None):
-        self.updates.append({"data": data, "version": version})
+    def async_update_entry(self, entry, *, data=None, options=None, version=None):
+        self.updates.append({"data": data, "options": options, "version": version})
         if data is not None:
             entry.data = data
+        if options is not None:
+            entry.options = options
         if version is not None:
             entry.version = version
 
@@ -69,17 +54,34 @@ class _FakeHass:
 
 
 class _FakeEntry:
-    version = 2
+    version = 1
     entry_id = "test-entry"
 
     def __init__(self, data: dict | None = None, options: dict | None = None):
         self.data = data or {
-            "gateway_host": "192.0.2.1",
+            "hosts": "192.0.2.1",
             "ssh_key_path": "/tmp/test_key",
-            "ap_hosts": "",
+            "detected_roles": {"192.0.2.1": "gateway"},
             "disconnect_threshold_s": 120,
         }
         self.options = options or {}
+
+
+def _hosts_and_roles(gateway_host, ap_hosts, switch_hosts):
+    """Build a (hosts CSV, detected_roles cache) pair like the config flow stores."""
+    from custom_components.wrtsensor.hosts import parse_host_endpoint
+
+    aps = [h.strip() for h in ap_hosts.split(",") if h.strip()]
+    switches = [h.strip() for h in switch_hosts.split(",") if h.strip()]
+    parts = ([gateway_host] if gateway_host else []) + aps + switches
+    roles: dict[str, str] = {}
+    if gateway_host:
+        roles[parse_host_endpoint(gateway_host).host] = "gateway"
+    for h in aps:
+        roles[parse_host_endpoint(h).host] = "ap"
+    for h in switches:
+        roles[parse_host_endpoint(h).host] = "switch"
+    return ",".join(parts), roles
 
 
 def _make_coordinator(
@@ -90,12 +92,12 @@ def _make_coordinator(
     options: dict | None = None,
 ) -> WrtsensorCoordinator:
     hass = _FakeHass()
+    hosts, roles = _hosts_and_roles(gateway_host, ap_hosts, switch_hosts)
     entry = _FakeEntry(
         data={
-            "gateway_host": gateway_host,
+            "hosts": hosts,
             "ssh_key_path": "/tmp/test_key",
-            "ap_hosts": ap_hosts,
-            "switch_hosts": switch_hosts,
+            "detected_roles": roles,
             "disconnect_threshold_s": 120,
         }
     )
@@ -144,6 +146,48 @@ def test_coordinator_parses_switch_endpoints():
     assert c._switch_hosts == ["192.0.2.24", "2001:db8::24"]
     assert c._endpoint_ports["192.0.2.24"] == 2222
     assert c._endpoint_ports["2001:db8::24"] == 22
+
+
+def test_assign_roles_no_wan_topology_stays_gatewayless():
+    """A live probe with no wan signal must not promote any host to gateway via
+    next-hop votes — the entry stays gateway-less (no WAN/DNS/WG entities)."""
+    from custom_components.wrtsensor.detect import RoleSignals
+
+    c = _make_coordinator(
+        gateway_host="", ap_hosts="192.0.2.22", switch_hosts="192.0.2.24"
+    )
+    sigs = {
+        # both route to a non-configured external router; neither reports wan
+        "192.0.2.22": RoleSignals(wan=False, next_hop="192.0.2.99", wifi=2),
+        "192.0.2.24": RoleSignals(wan=False, next_hop="192.0.2.99", wifi=0),
+    }
+    with patch.object(
+        coord_mod,
+        "probe_role",
+        new=AsyncMock(side_effect=lambda host, key, port=22: sigs[host]),
+    ):
+        asyncio.run(c._assign_roles())
+
+    assert c._gateway_host is None
+    assert c._ap_hosts == ["192.0.2.22"]
+    assert c._switch_hosts == ["192.0.2.24"]
+
+
+def test_assign_roles_no_wan_gateway_via_override():
+    """An explicit =gateway override still designates a gateway with no wan."""
+    from custom_components.wrtsensor.detect import RoleSignals
+
+    c = _make_coordinator(gateway_host="", ap_hosts="192.0.2.22")
+    c._role_overrides = {"192.0.2.22": "gateway"}
+    sigs = {"192.0.2.22": RoleSignals(wan=False, next_hop="192.0.2.99", wifi=2)}
+    with patch.object(
+        coord_mod,
+        "probe_role",
+        new=AsyncMock(side_effect=lambda host, key, port=22: sigs[host]),
+    ):
+        asyncio.run(c._assign_roles())
+
+    assert c._gateway_host == "192.0.2.22"
 
 
 def test_update_attaches_switch_port_from_gateway_fdb():
@@ -209,9 +253,9 @@ def test_coordinator_ignores_legacy_ssh_port():
         _FakeHass(),
         _FakeEntry(
             data={
-                "gateway_host": "192.0.2.1",
+                "hosts": "192.0.2.1,192.0.2.22",
                 "ssh_key_path": "/tmp/test_key",
-                "ap_hosts": "192.0.2.22",
+                "detected_roles": {"192.0.2.1": "gateway", "192.0.2.22": "ap"},
                 "ssh_port": 2222,
                 "disconnect_threshold_s": 120,
             }
@@ -270,55 +314,6 @@ def test_load_caches_creates_oui_cache_dir(tmp_path):
 
     assert c._oui_cache_dir.is_dir()
     assert c._needs_oui_download is True
-
-
-# ── Migration: v1 → v2 ────────────────────────────────────────────────────────
-
-
-def test_migrate_v1_does_not_add_ssh_port():
-    hass = _FakeHass()
-    entry = _FakeEntry(data={"gateway_host": "192.0.2.1"})
-    entry.version = 1
-    asyncio.run(async_migrate_entry(hass, entry))
-    assert const_mod.CONF_SSH_PORT not in entry.data
-
-
-def test_migrate_v1_adds_disconnect_threshold():
-    hass = _FakeHass()
-    entry = _FakeEntry(data={"gateway_host": "192.0.2.1"})
-    entry.version = 1
-    asyncio.run(async_migrate_entry(hass, entry))
-    assert const_mod.CONF_DISCONNECT_THRESHOLD in entry.data
-    assert (
-        entry.data[const_mod.CONF_DISCONNECT_THRESHOLD]
-        == const_mod.DEFAULT_DISCONNECT_THRESHOLD
-    )
-
-
-def test_migrate_v1_leaves_existing_ssh_port_untouched():
-    hass = _FakeHass()
-    entry = _FakeEntry(
-        data={"gateway_host": "192.0.2.1", const_mod.CONF_SSH_PORT: 2222}
-    )
-    entry.version = 1
-    asyncio.run(async_migrate_entry(hass, entry))
-    assert entry.data[const_mod.CONF_SSH_PORT] == 2222
-
-
-def test_migrate_v2_is_noop():
-    hass = _FakeHass()
-    entry = _FakeEntry(data={"gateway_host": "192.0.2.1"})
-    entry.version = 2
-    asyncio.run(async_migrate_entry(hass, entry))
-    assert len(hass.config_entries.updates) == 0
-
-
-def test_migrate_returns_true():
-    hass = _FakeHass()
-    entry = _FakeEntry(data={"gateway_host": "192.0.2.1"})
-    entry.version = 1
-    result = asyncio.run(async_migrate_entry(hass, entry))
-    assert result is True
 
 
 # ── Device build state carry-over ─────────────────────────────────────────────
@@ -1136,9 +1131,7 @@ def test_switch_only_update_exposes_switch_name_from_board_metadata():
     async def collect_wifi(host, ap_name):
         c._host_names[host] = "switch1"
         c._host_models[host] = ("Zyxel GS1900", "zyxel,gs1900")
-        return [], ["cpu  10 0 10 80", "1000 500", "25"], {
-            "AA:BB:CC:DD:EE:01": "lan4"
-        }
+        return [], ["cpu  10 0 10 80", "1000 500", "25"], {"AA:BB:CC:DD:EE:01": "lan4"}
 
     with ExitStack() as stack:
         stack.enter_context(
@@ -1157,7 +1150,9 @@ def test_switch_only_update_exposes_switch_name_from_board_metadata():
 
 def test_configured_openwrt_hostnames_override_device_hostnames():
     devices = [
-        coord_mod.Device(mac="AA:00:00:00:00:01", ip="192.0.2.1", hostname="router-dhcp"),
+        coord_mod.Device(
+            mac="AA:00:00:00:00:01", ip="192.0.2.1", hostname="router-dhcp"
+        ),
         coord_mod.Device(mac="AA:00:00:00:00:02", ip="192.0.2.22", hostname="ap-dns"),
         coord_mod.Device(mac="AA:00:00:00:00:03", ip="192.0.2.24", hostname="switch"),
         coord_mod.Device(mac="AA:00:00:00:00:04", ip="192.0.2.50", hostname="client"),

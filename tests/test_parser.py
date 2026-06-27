@@ -420,12 +420,12 @@ STAT|cpu  1 0 1 98|128000|64000|12
         assert parse_board_model("BOARD|\n") == ("", "")
 
     def test_unclosed_board_json_stops_at_next_metadata_token(self):
-        out = "BOARD|{\n  \"hostname\": \"bad\"\nWIREGUARD|wg0|peer\n"
+        out = 'BOARD|{\n  "hostname": "bad"\nWIREGUARD|wg0|peer\n'
 
         assert parse_board_info(out) == {}
 
     def test_unclosed_board_json_is_bounded(self):
-        out = "BOARD|{\n" + "\n".join(f'  \"k{i}\": \"v\",' for i in range(80))
+        out = "BOARD|{\n" + "\n".join(f'  "k{i}": "v",' for i in range(80))
 
         assert parse_board_info(out) == {}
 
@@ -608,7 +608,7 @@ class TestParseWgShowSections:
 
     def test_endpoint_string_preserved(self):
         peer = self.interfaces[0]["peers"][0]
-        assert peer["endpoint"] == "172.16.42.130:51820"
+        assert peer["endpoint"] == "203.0.113.130:51820"
 
     def test_allowed_ips_csv_split(self):
         peer = self.interfaces[0]["peers"][1]

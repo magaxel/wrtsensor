@@ -53,7 +53,7 @@ from .const import (
     BW_MIN_ELAPSED_S,
     COLLECTOR_REMOTE_PATH,
     COLLECTOR_SCRIPT_NAME,
-    CONF_AP_HOSTS,
+    CONF_DETECTED_ROLES,
     CONF_DISCONNECT_THRESHOLD,
     CONF_ENABLE_ASU,
     CONF_ENABLE_DNS_STATS,
@@ -61,10 +61,9 @@ from .const import (
     CONF_ENABLE_NETWORK_HOSTS,
     CONF_ENABLE_WAN_BANDWIDTH,
     CONF_ENABLE_WIREGUARD,
-    CONF_GATEWAY_HOST,
+    CONF_HOSTS,
     CONF_LAN_IFACE,
     CONF_SSH_KEY_PATH,
-    CONF_SWITCH_HOSTS,
     CONF_WAN_IFACE,
     CONF_WG_STALE_THRESHOLD,
     DEFAULT_ASU_INTERVAL_H,
@@ -83,6 +82,9 @@ from .const import (
     DEFAULT_WG_STALE_THRESHOLD,
     DISCONNECT_MISS_THRESHOLD,
     DOMAIN,
+    ROLE_AP,
+    ROLE_GATEWAY,
+    ROLE_SWITCH,
     SCAN_INTERVAL,
     STATE_DIR_HA,
     STATE_DIR_LOCAL,
@@ -92,7 +94,8 @@ from .const import (
     STATE_FILE_PREV_STATE,
     STATE_MAX_AGE_DAYS,
 )
-from .hosts import HostEndpoint, parse_host_endpoint
+from .detect import Classification, classify, probe_role, roles_from_cache
+from .hosts import HostEndpoint, parse_hosts_field
 
 _LOGGER = logging.getLogger(__name__)
 DNS_HISTORY_MAX_AGE_S = 25 * 60 * 60
@@ -256,9 +259,11 @@ def build_devices(
         devices.append(
             Device(
                 mac=mac,
-                ip=(arp_ips.get(mac, "") if arp_ips else "") or (prev_entry.ip if prev_entry else ""),
+                ip=(arp_ips.get(mac, "") if arp_ips else "")
+                or (prev_entry.ip if prev_entry else ""),
                 ip6=ndp.get(mac, "") or (prev_entry.ip6 if prev_entry else ""),
-                hostname=_arp_hostnames.get(mac, "") or (prev_entry.hostname if prev_entry else ""),
+                hostname=_arp_hostnames.get(mac, "")
+                or (prev_entry.hostname if prev_entry else ""),
                 vendor=vendors.get(mac, ""),
                 connection="wifi",
                 ap=w["ap"],
@@ -816,34 +821,47 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self._entry = entry
         data = {**entry.data, **entry.options}
-        gateway_raw = data.get(CONF_GATEWAY_HOST, "") or ""
-        self._gateway_endpoint: HostEndpoint | None = (
-            parse_host_endpoint(gateway_raw) if gateway_raw else None
-        )
-        self._gateway_host: str | None = (
-            self._gateway_endpoint.host if self._gateway_endpoint else None
-        )
         self._ssh_key = data.get(CONF_SSH_KEY_PATH, DEFAULT_SSH_KEY)
-        raw_aps = data.get(CONF_AP_HOSTS, "")
-        self._ap_endpoints: list[HostEndpoint] = [
-            parse_host_endpoint(h.strip()) for h in raw_aps.split(",") if h.strip()
-        ]
-        self._ap_hosts: list[str] = [ep.host for ep in self._ap_endpoints]
-        raw_switches = data.get(CONF_SWITCH_HOSTS, "")
-        self._switch_endpoints: list[HostEndpoint] = [
-            parse_host_endpoint(h.strip()) for h in raw_switches.split(",") if h.strip()
-        ]
-        self._switch_hosts: list[str] = [ep.host for ep in self._switch_endpoints]
+        # Parse the merged "Hosts" field into endpoints + per-host role overrides.
+        self._all_endpoints: list[HostEndpoint] = []
+        self._role_overrides: dict[str, str] = {}
+        for ep, role in parse_hosts_field(data.get(CONF_HOSTS, "")):
+            self._all_endpoints.append(ep)
+            if role:
+                self._role_overrides[ep.host] = role
         self._endpoint_ports: dict[str, int] = {
-            ep.host: ep.port
-            for ep in (
-                ([self._gateway_endpoint] if self._gateway_endpoint else [])
-                + self._ap_endpoints
-                + self._switch_endpoints
-            )
+            ep.host: ep.port for ep in self._all_endpoints
         }
-        self._lan_iface = data.get(CONF_LAN_IFACE, DEFAULT_LAN_IFACE)
-        self._wan_iface = data.get(CONF_WAN_IFACE, DEFAULT_WAN_IFACE)
+        # Provisional role buckets from overrides + the stored detected-role
+        # cache; async_setup() refines them with a live probe before the first
+        # scan. A freshly created entry already carries the cache from the
+        # config-flow detection, so roles are correct from construction.
+        self._gateway_endpoint: HostEndpoint | None = None
+        self._gateway_host: str | None = None
+        self._ap_endpoints: list[HostEndpoint] = []
+        self._ap_hosts: list[str] = []
+        self._switch_endpoints: list[HostEndpoint] = []
+        self._switch_hosts: list[str] = []
+        self._apply_classification(
+            roles_from_cache(
+                [ep.host for ep in self._all_endpoints],
+                self._role_overrides,
+                data.get(CONF_DETECTED_ROLES, {}) or {},
+            )
+        )
+        # Interface names. A stored value equal to the default (or blank) is
+        # treated as "autodetect"; only a non-default value is an explicit
+        # override. Detection fills these from the gateway in _assign_roles().
+        lan_raw = (data.get(CONF_LAN_IFACE, "") or "").strip()
+        wan_raw = (data.get(CONF_WAN_IFACE, "") or "").strip()
+        self._lan_iface_override = (
+            lan_raw if lan_raw and lan_raw != DEFAULT_LAN_IFACE else ""
+        )
+        self._wan_iface_override = (
+            wan_raw if wan_raw and wan_raw != DEFAULT_WAN_IFACE else ""
+        )
+        self._lan_iface = self._lan_iface_override or DEFAULT_LAN_IFACE
+        self._wan_iface = self._wan_iface_override or DEFAULT_WAN_IFACE
         self._disconnect_threshold_s = int(
             data.get(CONF_DISCONNECT_THRESHOLD, DEFAULT_DISCONNECT_THRESHOLD)
         )
@@ -914,8 +932,65 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _config_path(hass: HomeAssistant, *parts: str) -> Path:
         return Path(hass.config.path(*parts))
 
+    def _apply_classification(self, result: Classification) -> None:
+        """Map a Classification (host strings) onto the endpoint buckets."""
+        by_host = {ep.host: ep for ep in self._all_endpoints}
+        self._gateway_endpoint = by_host.get(result.gateway) if result.gateway else None
+        self._gateway_host = (
+            self._gateway_endpoint.host if self._gateway_endpoint else None
+        )
+        self._ap_endpoints = [by_host[h] for h in result.aps]
+        self._ap_hosts = list(result.aps)
+        self._switch_endpoints = [by_host[h] for h in result.switches]
+        self._switch_hosts = list(result.switches)
+
+    async def _assign_roles(self) -> None:
+        """Autodetect device roles and populate the gateway/AP/switch buckets.
+
+        Runs before the first scan so gateway-only collection is dispatched to
+        the right host. The detected-role cache is persisted back to the config
+        entry only when it changes, to avoid churning .storage on every reload.
+        """
+        if not self._all_endpoints:
+            self._apply_classification(Classification(None, [], []))
+            return
+        cached = dict(self._entry.data.get(CONF_DETECTED_ROLES, {}) or {})
+        probe_results = await asyncio.gather(
+            *[probe_role(ep.host, self._ssh_key, ep.port) for ep in self._all_endpoints]
+        )
+        signals = {ep.host: sig for ep, sig in zip(self._all_endpoints, probe_results)}
+        result = classify(signals, self._role_overrides, cached)
+        self._apply_classification(result)
+        # Autodetect WAN/LAN interface names from the gateway, unless overridden.
+        gw_sig = signals.get(result.gateway) if result.gateway else None
+        if gw_sig is not None:
+            if not self._wan_iface_override and gw_sig.wan_iface:
+                self._wan_iface = gw_sig.wan_iface
+            if not self._lan_iface_override and gw_sig.lan_iface:
+                self._lan_iface = gw_sig.lan_iface
+        new_cache: dict[str, str] = {}
+        if result.gateway:
+            new_cache[result.gateway] = ROLE_GATEWAY
+        new_cache.update({h: ROLE_AP for h in result.aps})
+        new_cache.update({h: ROLE_SWITCH for h in result.switches})
+        if new_cache != cached:
+            self.hass.config_entries.async_update_entry(
+                self._entry,
+                data={**self._entry.data, CONF_DETECTED_ROLES: new_cache},
+            )
+        _LOGGER.debug(
+            "wrtsensor detected roles: gateway=%s aps=%s switches=%s "
+            "(lan_iface=%s wan_iface=%s)",
+            result.gateway,
+            result.aps,
+            result.switches,
+            self._lan_iface,
+            self._wan_iface,
+        )
+
     async def async_setup(self) -> None:
         """Load caches and deploy collector script. Called once from async_setup_entry."""
+        await self._assign_roles()
         await self.hass.async_add_executor_job(self._load_caches)
         if self._needs_oui_download:
             self.hass.async_create_task(self._download_oui_db())
@@ -2193,7 +2268,11 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "hostname": (
                         self._host_names.get(host)
                         or next(
-                            (d.hostname for d in devices if d.ip == host and d.hostname),
+                            (
+                                d.hostname
+                                for d in devices
+                                if d.ip == host and d.hostname
+                            ),
                             host,
                         )
                     ),
