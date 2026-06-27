@@ -12,19 +12,13 @@ from homeassistant.config_entries import ConfigEntry, ConfigFlow, OptionsFlow
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.selector import (
-    NumberSelector,
-    NumberSelectorConfig,
-    NumberSelectorMode,
     TextSelector,
     TextSelectorConfig,
     TextSelectorType,
 )
 
 from .const import (
-    ASU_INTERVAL_MAX_H,
-    ASU_INTERVAL_MIN_H,
     CONF_AP_HOSTS,
-    CONF_ASU_INTERVAL_H,
     CONF_DISCONNECT_THRESHOLD,
     CONF_ENABLE_ASU,
     CONF_ENABLE_DNS_STATS,
@@ -39,7 +33,6 @@ from .const import (
     CONF_SWITCH_HOSTS,
     CONF_WAN_IFACE,
     CONF_WG_STALE_THRESHOLD,
-    DEFAULT_ASU_INTERVAL_H,
     DEFAULT_DISCONNECT_THRESHOLD,
     DEFAULT_ENABLE_ASU,
     DEFAULT_ENABLE_DNS_STATS,
@@ -565,18 +558,6 @@ class WrtsensorOptionsFlow(OptionsFlow):
                     CONF_ENABLE_ASU,
                     default=current.get(CONF_ENABLE_ASU, DEFAULT_ENABLE_ASU),
                 ): bool,
-                vol.Optional(
-                    CONF_ASU_INTERVAL_H,
-                    default=current.get(CONF_ASU_INTERVAL_H, DEFAULT_ASU_INTERVAL_H),
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=ASU_INTERVAL_MIN_H,
-                        max=ASU_INTERVAL_MAX_H,
-                        step=1,
-                        mode=NumberSelectorMode.BOX,
-                        unit_of_measurement="h",
-                    )
-                ),
             }
         )
         return self.async_show_form(

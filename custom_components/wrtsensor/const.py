@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 DOMAIN = "wrtsensor"
-VERSION = "2.2.0"
+VERSION = "2.3.12"
 
 PLATFORMS = ["sensor", "binary_sensor", "device_tracker", "update"]
 
@@ -72,10 +72,7 @@ CONF_WG_STALE_THRESHOLD = "wg_stale_threshold_s"
 DEFAULT_WG_STALE_THRESHOLD = 180
 CONF_ENABLE_ASU = "enable_asu"
 DEFAULT_ENABLE_ASU = False
-CONF_ASU_INTERVAL_H = "asu_interval_h"
 DEFAULT_ASU_INTERVAL_H = 6
-ASU_INTERVAL_MIN_H = 1
-ASU_INTERVAL_MAX_H = 24
 ASU_PROBE_TIMEOUT_S = 45
 ASU_PROBE_GAP_S = 15
 

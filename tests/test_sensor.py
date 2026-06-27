@@ -131,7 +131,11 @@ _ALL_COMPAT_KEYS = (
     "wan_ip",
     "wan_ip6",
     "gateway_mac",
+    "host_names",
     "ap_hosts",
+    "ap_names",
+    "switch_hosts",
+    "switch_names",
     "host_stats",
     "scan_duration",
     "partial",
@@ -168,15 +172,23 @@ def test_network_scanner_attributes_partial_data():
     assert "devices" not in attrs
 
 
-def test_network_scanner_attributes_include_topology_ap_hints():
+def test_network_scanner_attributes_include_topology_host_hints():
     data = {
         "ap_hosts": ["192.0.2.22"],
+        "host_names": {"192.0.2.22": "ap1", "192.0.2.24": "switch1"},
+        "ap_names": {"192.0.2.22": "ap1"},
+        "switch_hosts": ["192.0.2.24"],
+        "switch_names": {"192.0.2.24": "switch1"},
         "host_stats": {"192.0.2.22": {"hostname": "ap1"}},
     }
 
     attrs = _make_sensor(data).extra_state_attributes
 
     assert attrs["ap_hosts"] == ["192.0.2.22"]
+    assert attrs["host_names"] == {"192.0.2.22": "ap1", "192.0.2.24": "switch1"}
+    assert attrs["ap_names"] == {"192.0.2.22": "ap1"}
+    assert attrs["switch_hosts"] == ["192.0.2.24"]
+    assert attrs["switch_names"] == {"192.0.2.24": "switch1"}
     assert attrs["host_stats"] == {"192.0.2.22": {"hostname": "ap1"}}
 
 
@@ -334,6 +346,23 @@ def test_host_sensor_entity_names_are_metric_local():
         "wrtsensor_192_0_2_22_ram",
         "wrtsensor_192_0_2_22_disk",
     ]
+
+
+def test_host_sensor_device_info_uses_discovered_hostname():
+    coordinator = _FakeCoordinator(
+        {
+            "host_stats": {
+                "192.0.2.24": {
+                    "hostname": "Switch",
+                    "model": "Zyxel GS1900-24 A1",
+                }
+            }
+        }
+    )
+    sensor = WrtsensorHostCPUSensor(coordinator, _FakeEntry(), "192.0.2.24")
+
+    assert sensor.device_info.name == "Switch"
+    assert sensor.device_info.model == "Zyxel GS1900-24 A1"
 
 
 # ── WireGuard sensor ────────────────────────────────────────────────────────

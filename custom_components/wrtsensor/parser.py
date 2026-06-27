@@ -250,16 +250,47 @@ def resolve_switch_ports(
     return result
 
 
-def parse_board_model(out: str) -> tuple[str, str]:
-    """Extract (model, board_name) from collector output containing a BOARD| line."""
+def parse_board_info(out: str) -> dict[str, str]:
+    """Extract board metadata from collector output containing a BOARD| line."""
+    board_lines: list[str] = []
+    collecting = False
+
+    def _parse_board(lines: list[str]) -> dict[str, str] | None:
+        try:
+            board = json.loads("\n".join(lines))
+        except ValueError:
+            return None
+        if not isinstance(board, dict):
+            return {}
+        return {
+            "model": board.get("model", ""),
+            "board_name": board.get("board_name", ""),
+            "hostname": board.get("hostname", ""),
+        }
+
     for line in out.splitlines():
         if line.startswith("BOARD|"):
-            try:
-                board = json.loads(line[6:])
-                return board.get("model", ""), board.get("board_name", "")
-            except (ValueError, KeyError):
-                return "", ""
-    return "", ""
+            board_lines = [line[6:]]
+            collecting = True
+            board = _parse_board(board_lines)
+            if board is not None:
+                return board
+            continue
+        if not collecting:
+            continue
+        if line.startswith(("STAT|", "FDB|")):
+            return {}
+        board_lines.append(line)
+        board = _parse_board(board_lines)
+        if board is not None:
+            return board
+    return {}
+
+
+def parse_board_model(out: str) -> tuple[str, str]:
+    """Extract (model, board_name) from collector output containing a BOARD| line."""
+    board = parse_board_info(out)
+    return board.get("model", ""), board.get("board_name", "")
 
 
 def parse_dns_stats(lines: list[str]) -> dict[str, Any] | None:

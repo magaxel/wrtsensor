@@ -664,7 +664,7 @@ def test_provision_password_uses_password_selector():
     assert password_selector.config.type == cf.TextSelectorType.PASSWORD
 
 
-def test_asu_interval_uses_number_box_selector():
+def test_options_schema_has_no_asu_interval():
     entry = types.SimpleNamespace(
         data={
             cf.CONF_GATEWAY_HOST: "192.0.2.1",
@@ -677,16 +677,7 @@ def test_asu_interval_uses_number_box_selector():
 
     result = asyncio.run(flow.async_step_init())
 
-    schema = result["data_schema"]
-    asu_selector = next(
-        value
-        for marker, value in schema.items()
-        if getattr(marker, "key", marker) == cf.CONF_ASU_INTERVAL_H
-    )
-    assert asu_selector.config.mode == cf.NumberSelectorMode.BOX
-    assert asu_selector.config.min == cf.ASU_INTERVAL_MIN_H
-    assert asu_selector.config.max == cf.ASU_INTERVAL_MAX_H
-    assert asu_selector.config.step == 1
+    assert "asu_interval_h" not in _schema_keys(result)
 
 
 def test_options_flow_accepts_host_metrics_toggle():

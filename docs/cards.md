@@ -18,6 +18,7 @@ type: custom:network-table-card
 entity: sensor.my_router_network_scanner
 title: Network
 show_offline: false
+show_unknown: true       # false = hide devices with no confirmed AP/switch path
 columns:
   - ip
   - ip6_enabled
@@ -32,13 +33,25 @@ columns:
 ```
 
 The `ap` column is displayed as **Port/AP**. It shows the AP name for Wi-Fi clients
-and `Port <number>` for wired clients learned from a configured switch. Existing
-dashboards that still list `switch_port` are mapped to `ap` automatically by the card.
+and `Port <number>` for wired clients learned from a configured switch. Devices
+with no current Wi-Fi station match and no switch-port attribution show as
+**Unknown** unless `show_unknown: false` is set. Existing dashboards that still list
+`switch_port` are mapped to `ap` automatically by the card.
 
 ## `network-topology-card`
 
 SVG topology map showing the gateway, switches, APs, and clients. Configured APs are
 shown even when the AP itself is not present in DHCP/ARP device discovery.
+When only one AP is configured, Wi-Fi clients with an unmatched AP hostname are
+attached to that AP so AP-to-client links still render if host metrics are disabled
+or temporarily unavailable. Devices without a current Wi-Fi station match and
+without switch-port attribution connect directly to the router when a gateway is
+configured. In gateway-less topologies they render under an **Unknown** node
+unless `show_unknown: false` is set. The integration exposes `host_names`,
+`ap_names`, and `switch_names` so configured infrastructure IPs can be matched to
+OpenWrt hostnames reported by the collector, including switch-only maps.
+Configured OpenWrt gateway, AP, and switch nodes prefer the hostname configured
+on that device over DHCP or DNS names seen elsewhere.
 
 ```yaml
 type: custom:network-topology-card
@@ -47,6 +60,7 @@ title: Network Map
 gateway_label: gw        # fallback label shown when gateway device is missing
 column_width: 200        # px between AP columns
 show_offline: false
+show_unknown: true            # false = hide devices with no confirmed AP/switch path
 show_hostnames: true          # show device hostnames; false leaves only selected address rows
 show_ipv4: true               # show IPv4 address rows and public IPv4 beside the gateway
 show_ipv6: false              # show IPv6 address rows and public IPv6 beside the gateway
