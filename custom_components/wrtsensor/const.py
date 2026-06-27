@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 DOMAIN = "wrtsensor"
-VERSION = "2.3.12"
+VERSION = "2.4.0"
 
 PLATFORMS = ["sensor", "binary_sensor", "device_tracker", "update"]
 
@@ -49,12 +49,21 @@ BW_MAX_RATE_BPS = 125_000_000
 # attribution. See parser.resolve_switch_ports.
 FDB_UPLINK_MAC_THRESHOLD = 4
 
+# Detected device roles (see detect.py)
+ROLE_GATEWAY = "gateway"
+ROLE_AP = "ap"
+ROLE_SWITCH = "switch"
+VALID_ROLES = frozenset({ROLE_GATEWAY, ROLE_AP, ROLE_SWITCH})
+
 # Config entry keys
-CONF_GATEWAY_HOST = "gateway_host"
+# Merged host field (autodetected roles). Single source of truth for host config.
+CONF_HOSTS = "hosts"
+# Cache of last-known detected roles, keyed by normalized HostEndpoint.host → role.
+CONF_DETECTED_ROLES = "detected_roles"
 CONF_SSH_KEY_PATH = "ssh_key_path"
+# Deprecated: inline host ports replace a global SSH port (kept only to ignore
+# any such value left in older entries).
 CONF_SSH_PORT = "ssh_port"
-CONF_AP_HOSTS = "ap_hosts"
-CONF_SWITCH_HOSTS = "switch_hosts"
 CONF_LAN_IFACE = "lan_iface"
 CONF_WAN_IFACE = "wan_iface"
 CONF_PRESENCE_MACS = "presence_macs"

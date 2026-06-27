@@ -4,17 +4,17 @@
       "user": {
         "title": "wrtsensor — Connect to OpenWrt",
         "data": {
-          "gateway_host": "Gateway IP address (optional)",
-          "ssh_key_path": "SSH private key path",
-          "ap_hosts": "Access point IPs",
-          "switch_hosts": "Switch IPs"
+          "hosts": "OpenWrt device IPs",
+          "ssh_key_path": "SSH private key path"
         },
         "data_description": {
-          "gateway_host": "IP address of the OpenWrt router that acts as your gateway. Port 22 is used by default; add :2222 for IPv4 or use [2001:db8::1]:2222 for IPv6 with a custom port.",
-          "ssh_key_path": "Absolute path to the SSH private key on the HA host used to authenticate as root. Example: /config/ssh/id_ed25519",
-          "ap_hosts": "Comma-separated IPs of OpenWrt access points. Port 22 is used by default; add :2222 for IPv4 or use [2001:db8::22]:2222 for IPv6 with a custom port. Example: 192.168.1.22,192.168.1.23:2222",
-          "switch_hosts": "Comma-separated IPs of OpenWrt managed switches. Used to report which switch port each wired device is on. Port 22 is used by default; add :2222 for IPv4 or [2001:db8::24]:2222 for IPv6. Example: 192.168.1.24"
+          "hosts": "Comma-separated IPs of every OpenWrt device. Roles (gateway, access point, switch) are detected automatically — you don't choose them. Inline SSH ports are supported: 192.168.1.1:2222, [2001:db8::1]:2222. To force a role, append =gateway, =ap, or =switch to an IP, e.g. 192.168.1.5=switch; use =gateway for an all-in-one router that also serves Wi-Fi (gateway already includes its Wi-Fi). Example: 192.168.1.1,192.168.1.22,192.168.1.24",
+          "ssh_key_path": "Absolute path to the SSH private key on the HA host used to authenticate as root. Example: /config/ssh/id_ed25519"
         }
+      },
+      "confirm_detected_roles": {
+        "title": "Detected device roles",
+        "description": "wrtsensor autodetected these roles:\n\n{detected}\n\nSubmit to finish. To change a role, go back and append =gateway, =ap, or =switch to that device's IP."
       },
       "provision_key": {
         "title": "Add SSH key to OpenWrt devices",
@@ -40,8 +40,8 @@
       "setup_failed": "Setup failed: {failures}",
       "provision_failed": "Could not add the SSH key on: {failures}",
       "auth_failed_after_provision": "Key was provisioned but some hosts still reject it: {failures}",
-      "invalid_host": "Invalid host or port: {failures}",
-      "at_least_one_host": "Enter at least a gateway, access point, or switch."
+      "invalid_host": "Invalid host, port, or role: {failures}",
+      "at_least_one_host": "Enter at least one OpenWrt device IP."
     },
     "abort": {
       "already_configured": "This host is already configured"
@@ -52,10 +52,8 @@
       "init": {
         "title": "wrtsensor options",
         "data": {
+          "hosts": "OpenWrt device IPs",
           "ssh_key_path": "SSH private key path",
-          "gateway_host": "Gateway IP address (optional)",
-          "ap_hosts": "Access point IPs",
-          "switch_hosts": "Switch IPs",
           "lan_iface": "LAN bridge interface",
           "wan_iface": "WAN interface",
           "disconnect_threshold_s": "Disconnect threshold (seconds)",
@@ -69,17 +67,15 @@
           "enable_asu": "Check for OpenWrt firmware updates"
         },
         "data_description": {
+          "hosts": "Comma-separated IPs of every OpenWrt device. Roles (gateway, access point, switch) are detected automatically and re-detected on every reload. Inline SSH ports are supported: 192.168.1.1:2222, [2001:db8::1]:2222. To force a role, append =gateway, =ap, or =switch to an IP, e.g. 192.168.1.5=switch; use =gateway for an all-in-one router that also serves Wi-Fi. Example: 192.168.1.1,192.168.1.22,192.168.1.24",
           "ssh_key_path": "Absolute path to the SSH private key on the HA host. Example: /config/ssh/id_ed25519",
-          "gateway_host": "IP address of the OpenWrt router that acts as your gateway. Leave empty for APs-only mode. Port 22 is used by default; add :2222 for IPv4 or [2001:db8::1]:2222 for IPv6.",
-          "ap_hosts": "Comma-separated IPs of OpenWrt access points to collect Wi-Fi associations and host stats from. Port 22 is used by default; add :2222 for IPv4 or [2001:db8::22]:2222 for IPv6. Example: 192.168.1.22,192.168.1.23:2222",
-          "switch_hosts": "Comma-separated IPs of OpenWrt managed switches. The integration reads each switch's bridge forwarding table to show which port a wired device is connected to. Port 22 is used by default; add :2222 for IPv4 or [2001:db8::24]:2222 for IPv6. Example: 192.168.1.24",
-          "lan_iface": "Bridge interface used for the LAN on OpenWrt. Default: br-lan. Change only if your router uses a different name.",
-          "wan_iface": "WAN-facing interface on the gateway used to read RX/TX byte counters. Default: eth0.",
+          "lan_iface": "Leave blank to autodetect from the gateway (the interface that holds its LAN IP, usually br-lan). Set a value only to override which interface device discovery reads.",
+          "wan_iface": "Leave blank to autodetect from the gateway (its default-route interface, e.g. eth0 or pppoe-wan). Set a value only to override which interface WAN byte counters are read from.",
           "disconnect_threshold_s": "How long a device must be absent before a disconnect event is recorded. Default: 120 s (2 missed scans at 60 s interval).",
           "presence_macs": "Comma-separated MAC addresses to track as presence binary sensors. Each MAC becomes a binary_sensor.wrtsensor_presence_* entity. Example: aa:bb:cc:dd:ee:ff,11:22:33:44:55:66",
           "enable_network_hosts": "Discover devices on the LAN, expose a device_tracker per client, and surface them through the network scanner sensor and presence binary sensors. Disable to skip ARP/NDP/Wi-Fi station/conntrack collection on every host. Required by the network topology, table, and events cards. Default: on.",
-          "enable_wan_bandwidth": "Read RX/TX byte counters on the gateway's WAN interface and expose WAN download/upload sensors. Requires a configured gateway. Default: on.",
-          "enable_dns_stats": "Signal dnsmasq each scan to collect cache hit-rate, latency, and per-upstream history for the DNS stats card. Disable to skip the SIGUSR1 + logread on every scan and the DNS history file I/O. Requires a configured gateway. Default: on.",
+          "enable_wan_bandwidth": "Read RX/TX byte counters on the gateway's WAN interface and expose WAN download/upload sensors. Requires a detected gateway. Default: on.",
+          "enable_dns_stats": "Signal dnsmasq each scan to collect cache hit-rate, latency, and per-upstream history for the DNS stats card. Disable to skip the SIGUSR1 + logread on every scan and the DNS history file I/O. Requires a detected gateway. Default: on.",
           "enable_host_metrics": "Collect CPU, RAM, and root storage usage for every configured OpenWrt host, then expose per-host sensors. Disable to skip those commands and remove the CPU/RAM/Disk entities on reload. Default: on.",
           "enable_wireguard": "Auto-detect WireGuard on the gateway and APs each scan, then expose per-peer device_trackers and a card with handshake age, transfer totals, and live rate. Hosts without `wg` installed are skipped silently. Private and preshared keys are never read into HA — only public keys, descriptions, endpoints, and counters. Default: off.",
           "wg_stale_threshold_s": "Peers whose last handshake is older than this go to not_home and grey out in the card. WireGuard handshakes every ~2 minutes when active. Default: 180.",
@@ -110,8 +106,8 @@
       "provision_failed": "Could not add the SSH key on: {failures}",
       "auth_failed_after_provision": "Key was provisioned but some hosts still reject it: {failures}",
       "setup_failed": "Setup failed: {failures}",
-      "invalid_host": "Invalid host or port: {failures}",
-      "at_least_one_host": "Enter at least a gateway, access point, or switch."
+      "invalid_host": "Invalid host, port, or role: {failures}",
+      "at_least_one_host": "Enter at least one OpenWrt device IP."
     }
   }
 }

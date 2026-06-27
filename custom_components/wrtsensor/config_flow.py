@@ -18,7 +18,7 @@ from homeassistant.helpers.selector import (
 )
 
 from .const import (
-    CONF_AP_HOSTS,
+    CONF_DETECTED_ROLES,
     CONF_DISCONNECT_THRESHOLD,
     CONF_ENABLE_ASU,
     CONF_ENABLE_DNS_STATS,
@@ -26,11 +26,10 @@ from .const import (
     CONF_ENABLE_NETWORK_HOSTS,
     CONF_ENABLE_WAN_BANDWIDTH,
     CONF_ENABLE_WIREGUARD,
-    CONF_GATEWAY_HOST,
+    CONF_HOSTS,
     CONF_LAN_IFACE,
     CONF_PRESENCE_MACS,
     CONF_SSH_KEY_PATH,
-    CONF_SWITCH_HOSTS,
     CONF_WAN_IFACE,
     CONF_WG_STALE_THRESHOLD,
     DEFAULT_DISCONNECT_THRESHOLD,
@@ -45,26 +44,17 @@ from .const import (
     DEFAULT_WAN_IFACE,
     DEFAULT_WG_STALE_THRESHOLD,
     DOMAIN,
+    ROLE_AP,
+    ROLE_GATEWAY,
+    ROLE_SWITCH,
 )
-from .hosts import HostEndpoint, HostEndpointError, parse_host_endpoint
+from .detect import Classification, RoleSignals, classify, probe_role
+from .hosts import HostEndpoint, HostEndpointError, parse_hosts_field
 
 _LOGGER = logging.getLogger(__name__)
 
-
-def _parse_hosts(raw: str) -> list[str]:
-    return [h.strip() for h in raw.split(",") if h.strip()]
-
-
-def _entry_title(
-    gateway_host: str, ap_hosts: list[str], switch_hosts: list[str]
-) -> str:
-    """Config-entry title: gateway wins, else APs, else switches."""
-    if gateway_host:
-        return f"wrtsensor ({gateway_host})"
-    if ap_hosts:
-        return f"wrtsensor (APs: {','.join(ap_hosts)})"
-    return f"wrtsensor (Switches: {','.join(switch_hosts)})"
-
+# Connection state lives in entry.data; everything else (toggles) in entry.options.
+_CONNECTION_KEYS = (CONF_HOSTS, CONF_SSH_KEY_PATH, CONF_DETECTED_ROLES)
 
 _ERROR_LABELS = {
     "cannot_connect": "cannot connect",
@@ -83,13 +73,24 @@ def _format_failures(pairs: list[tuple[str, str]]) -> str:
     return ", ".join(f"{h} — {_ERROR_LABELS.get(k, k)}" for h, k in pairs)
 
 
-def _parse_config_endpoints(
-    gateway_host: str, ap_hosts: list[str], switch_hosts: list[str] | None = None
-) -> list[HostEndpoint]:
-    raw_hosts = (
-        ([gateway_host] if gateway_host else []) + ap_hosts + (switch_hosts or [])
-    )
-    return [parse_host_endpoint(host) for host in raw_hosts]
+def _canonical_hosts(pairs: list[tuple[HostEndpoint, str | None]]) -> str:
+    """Canonical CSV for storage: original endpoint spec + optional =role suffix."""
+    return ",".join(ep.raw + (f"={role}" if role else "") for ep, role in pairs)
+
+
+def _roles_summary(classification: Classification) -> str:
+    lines: list[str] = []
+    if classification.gateway:
+        lines.append(f"{classification.gateway} → gateway")
+    lines += [f"{h} → access point" for h in classification.aps]
+    lines += [f"{h} → switch" for h in classification.switches]
+    return "\n".join(lines) if lines else "(none)"
+
+
+def _entry_title(classification: Classification, endpoints: list[HostEndpoint]) -> str:
+    if classification.gateway:
+        return f"wrtsensor ({classification.gateway})"
+    return f"wrtsensor ({endpoints[0].host})"
 
 
 @dataclass
@@ -97,63 +98,55 @@ class ProbeResult:
     errors: dict[str, str] = field(default_factory=dict)
     placeholders: dict[str, str] = field(default_factory=dict)
     needs_provision: bool = False
-    gateway_host: str = ""
+    hosts_raw: str = ""
     ssh_key_path: str = ""
-    ap_hosts_raw: str = ""
-    ap_hosts: list[str] = field(default_factory=list)
-    switch_hosts_raw: str = ""
-    switch_hosts: list[str] = field(default_factory=list)
+    pairs: list[tuple[HostEndpoint, str | None]] = field(default_factory=list)
+
+    @property
+    def endpoints(self) -> list[HostEndpoint]:
+        return [ep for ep, _ in self.pairs]
+
+    @property
+    def overrides(self) -> dict[str, str]:
+        return {ep.host: role for ep, role in self.pairs if role}
+
+
+def _parse_pairs(result: ProbeResult) -> bool:
+    """Parse hosts_raw into result.pairs. Returns False (and sets errors) on failure."""
+    if not result.hosts_raw.strip():
+        result.errors["base"] = "at_least_one_host"
+        return False
+    try:
+        result.pairs = parse_hosts_field(result.hosts_raw)
+    except HostEndpointError as err:
+        result.errors["base"] = "invalid_host"
+        result.placeholders["failures"] = str(err) or result.hosts_raw
+        return False
+    if not result.pairs:
+        result.errors["base"] = "at_least_one_host"
+        return False
+    return True
 
 
 async def _probe_hosts(user_input: dict[str, Any]) -> ProbeResult:
-    """Parse user input, validate, and SSH-probe all configured hosts.
+    """Parse + SSH-probe all configured hosts.
 
     Routes to provisioning only when *every* failure is auth_failed; any
-    non-auth failure (cannot_connect, no_response, ssh_key_not_found)
-    short-circuits to setup_failed so a dead host isn't misreported as a
-    provisioning failure later.
+    non-auth failure short-circuits to setup_failed so a dead host isn't
+    misreported as a provisioning failure later.
     """
     result = ProbeResult(
-        gateway_host=user_input.get(CONF_GATEWAY_HOST, "").strip(),
+        hosts_raw=user_input.get(CONF_HOSTS, ""),
         ssh_key_path=user_input[CONF_SSH_KEY_PATH].strip(),
-        ap_hosts_raw=user_input.get(CONF_AP_HOSTS, ""),
-        switch_hosts_raw=user_input.get(CONF_SWITCH_HOSTS, ""),
     )
-    result.ap_hosts = _parse_hosts(result.ap_hosts_raw)
-    result.switch_hosts = _parse_hosts(result.switch_hosts_raw)
-
-    if not result.gateway_host and not result.ap_hosts and not result.switch_hosts:
-        result.errors["base"] = "at_least_one_host"
+    if not _parse_pairs(result):
         return result
 
-    try:
-        all_endpoints = _parse_config_endpoints(
-            result.gateway_host, result.ap_hosts, result.switch_hosts
-        )
-    except HostEndpointError:
-        result.errors["base"] = "invalid_host"
-        result.placeholders["failures"] = ", ".join(
-            ([result.gateway_host] if result.gateway_host else [])
-            + result.ap_hosts
-            + result.switch_hosts
-        )
-        return result
-
+    endpoints = result.endpoints
     test_results = await asyncio.gather(
-        *[_test_ssh(ep.host, result.ssh_key_path, ep.port) for ep in all_endpoints]
+        *[_test_ssh(ep.host, result.ssh_key_path, ep.port) for ep in endpoints]
     )
-    failures = [(ep, r) for ep, r in zip(all_endpoints, test_results) if r]
-    non_auth = [(ep, r) for ep, r in failures if r != "auth_failed"]
-    auth_failed = [(ep, r) for ep, r in failures if r == "auth_failed"]
-
-    if non_auth:
-        result.errors["base"] = "setup_failed"
-        result.placeholders["failures"] = _format_failures(
-            [(ep.raw, r) for ep, r in non_auth]
-        )
-    elif auth_failed:
-        result.needs_provision = True
-
+    _route_failures(result, list(zip(endpoints, test_results)))
     return result
 
 
@@ -162,50 +155,26 @@ async def _probe_options_hosts(
 ) -> ProbeResult:
     """Validate options-flow host edits without blocking removals on old hosts."""
     result = ProbeResult(
-        gateway_host=user_input.get(CONF_GATEWAY_HOST, "").strip(),
+        hosts_raw=user_input.get(CONF_HOSTS, ""),
         ssh_key_path=user_input[CONF_SSH_KEY_PATH].strip(),
-        ap_hosts_raw=user_input.get(CONF_AP_HOSTS, ""),
-        switch_hosts_raw=user_input.get(CONF_SWITCH_HOSTS, ""),
     )
-    result.ap_hosts = _parse_hosts(result.ap_hosts_raw)
-    result.switch_hosts = _parse_hosts(result.switch_hosts_raw)
-
-    if not result.gateway_host and not result.ap_hosts and not result.switch_hosts:
-        result.errors["base"] = "at_least_one_host"
+    if not _parse_pairs(result):
         return result
 
-    try:
-        all_endpoints = _parse_config_endpoints(
-            result.gateway_host, result.ap_hosts, result.switch_hosts
-        )
-    except HostEndpointError:
-        result.errors["base"] = "invalid_host"
-        result.placeholders["failures"] = ", ".join(
-            ([result.gateway_host] if result.gateway_host else [])
-            + result.ap_hosts
-            + result.switch_hosts
-        )
-        return result
-
-    current_gateway = (current.get(CONF_GATEWAY_HOST, "") or "").strip()
-    current_aps = _parse_hosts(current.get(CONF_AP_HOSTS, "") or "")
-    current_switches = _parse_hosts(current.get(CONF_SWITCH_HOSTS, "") or "")
+    endpoints = result.endpoints
     current_key = (current.get(CONF_SSH_KEY_PATH, DEFAULT_SSH_KEY) or "").strip()
-    key_changed = result.ssh_key_path != current_key
-    if key_changed:
-        endpoints_to_probe = all_endpoints
+    if result.ssh_key_path != current_key:
+        endpoints_to_probe = endpoints
     else:
         try:
-            current_endpoint_ids = {
+            current_ids = {
                 (ep.host, ep.port)
-                for ep in _parse_config_endpoints(
-                    current_gateway, current_aps, current_switches
-                )
+                for ep, _ in parse_hosts_field(current.get(CONF_HOSTS, "") or "")
             }
         except HostEndpointError:
-            current_endpoint_ids = set()
+            current_ids = set()
         endpoints_to_probe = [
-            ep for ep in all_endpoints if (ep.host, ep.port) not in current_endpoint_ids
+            ep for ep in endpoints if (ep.host, ep.port) not in current_ids
         ]
 
     if not endpoints_to_probe:
@@ -214,10 +183,16 @@ async def _probe_options_hosts(
     test_results = await asyncio.gather(
         *[_test_ssh(ep.host, result.ssh_key_path, ep.port) for ep in endpoints_to_probe]
     )
-    failures = [(ep, r) for ep, r in zip(endpoints_to_probe, test_results) if r]
+    _route_failures(result, list(zip(endpoints_to_probe, test_results)))
+    return result
+
+
+def _route_failures(
+    result: ProbeResult, tested: list[tuple[HostEndpoint, str | None]]
+) -> None:
+    failures = [(ep, r) for ep, r in tested if r]
     non_auth = [(ep, r) for ep, r in failures if r != "auth_failed"]
     auth_failed = [(ep, r) for ep, r in failures if r == "auth_failed"]
-
     if non_auth:
         result.errors["base"] = "setup_failed"
         result.placeholders["failures"] = _format_failures(
@@ -226,16 +201,36 @@ async def _probe_options_hosts(
     elif auth_failed:
         result.needs_provision = True
 
-    return result
+
+async def _detect_roles(
+    endpoints: list[HostEndpoint],
+    overrides: dict[str, str],
+    ssh_key_path: str,
+    cached: dict[str, str] | None = None,
+) -> tuple[dict[str, str], Classification]:
+    """Probe every endpoint in parallel and classify. Returns (cache, result)."""
+    probe_results = await asyncio.gather(
+        *[probe_role(ep.host, ssh_key_path, ep.port) for ep in endpoints]
+    )
+    signals: dict[str, RoleSignals | None] = {
+        ep.host: sig for ep, sig in zip(endpoints, probe_results)
+    }
+    classification = classify(signals, overrides, cached or {})
+    cache: dict[str, str] = {}
+    if classification.gateway:
+        cache[classification.gateway] = ROLE_GATEWAY
+    cache.update({h: ROLE_AP for h in classification.aps})
+    cache.update({h: ROLE_SWITCH for h in classification.switches})
+    return cache, classification
 
 
-def _normalized_connection(result: ProbeResult) -> dict[str, str]:
-    """Connection-field overlay for storage: stripped + canonical CSV."""
+def _connection_data(
+    hosts_raw: str, ssh_key_path: str, detected_roles: dict[str, str]
+) -> dict[str, Any]:
     return {
-        CONF_GATEWAY_HOST: result.gateway_host,
-        CONF_SSH_KEY_PATH: result.ssh_key_path,
-        CONF_AP_HOSTS: ",".join(result.ap_hosts),
-        CONF_SWITCH_HOSTS: ",".join(result.switch_hosts),
+        CONF_HOSTS: hosts_raw,
+        CONF_SSH_KEY_PATH: ssh_key_path,
+        CONF_DETECTED_ROLES: detected_roles,
     }
 
 
@@ -305,20 +300,14 @@ async def _provision_ssh_key(
 
 
 async def _run_provision(
-    pending: dict[str, Any], ssh_user: str, ssh_password: str
+    endpoints: list[HostEndpoint], key_path: str, ssh_user: str, ssh_password: str
 ) -> tuple[dict[str, str], dict[str, str]]:
-    """Push the public key to every pending host, then re-probe with the key.
+    """Push the public key to every host, then re-probe with the key.
 
     Returns (errors, placeholders). Empty errors == success.
     """
     errors: dict[str, str] = {}
     placeholders: dict[str, str] = {}
-
-    key_path = pending[CONF_SSH_KEY_PATH]
-    gateway = pending.get(CONF_GATEWAY_HOST, "")
-    ap_hosts = _parse_hosts(pending.get(CONF_AP_HOSTS, ""))
-    switch_hosts = _parse_hosts(pending.get(CONF_SWITCH_HOSTS, ""))
-    endpoints = _parse_config_endpoints(gateway, ap_hosts, switch_hosts)
 
     prov_results = await asyncio.gather(
         *[
@@ -353,12 +342,29 @@ _PROVISION_SCHEMA = vol.Schema(
 )
 
 
+def _hosts_field() -> TextSelector:
+    return TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT, multiline=True))
+
+
+def _iface_suggestion(value: str | None, default: str) -> str:
+    """Show only a real override in the field; default/blank renders empty so the
+    field reads as 'autodetect'."""
+    value = (value or "").strip()
+    return value if value and value != default else ""
+
+
 class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
-    VERSION = 2
+    VERSION = 1
 
     def __init__(self) -> None:
         super().__init__()
-        self._pending: dict[str, Any] = {}
+        self._pending_endpoints: list[HostEndpoint] = []
+        self._pending_overrides: dict[str, str] = {}
+        self._pending_key: str = ""
+        self._pending_hosts: str = ""
+        self._pending_data: dict[str, Any] = {}
+        self._pending_title: str = ""
+        self._pending_summary: str = ""
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -369,39 +375,34 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             probe = await _probe_hosts(user_input)
             if probe.needs_provision:
-                self._pending = _normalized_connection(probe)
+                await self.async_set_unique_id(probe.endpoints[0].host)
+                self._abort_if_unique_id_configured()
+                self._stash_pending(probe)
                 return await self.async_step_provision_key()
             if not probe.errors:
-                first_host = (
-                    probe.gateway_host
-                    or (probe.ap_hosts[0] if probe.ap_hosts else "")
-                    or probe.switch_hosts[0]
-                )
-                await self.async_set_unique_id(parse_host_endpoint(first_host).host)
+                await self.async_set_unique_id(probe.endpoints[0].host)
                 self._abort_if_unique_id_configured()
-                title = _entry_title(
-                    probe.gateway_host, probe.ap_hosts, probe.switch_hosts
+                self._stash_pending(probe)
+                cache, classification = await _detect_roles(
+                    probe.endpoints, probe.overrides, probe.ssh_key_path
                 )
-                return self.async_create_entry(
-                    title=title,
-                    data=_normalized_connection(probe),
-                )
+                self._finalize_pending(probe, cache, classification)
+                return await self.async_step_confirm_detected_roles()
             errors = probe.errors
             placeholders = probe.placeholders
 
         schema = vol.Schema(
             {
-                vol.Optional(
-                    CONF_GATEWAY_HOST,
-                    default="",
-                    description={"suggested_value": "192.168.1.1"},
-                ): str,
+                vol.Required(
+                    CONF_HOSTS,
+                    description={"suggested_value": user_input.get(CONF_HOSTS, "")}
+                    if user_input
+                    else None,
+                ): _hosts_field(),
                 vol.Required(
                     CONF_SSH_KEY_PATH,
                     default=DEFAULT_SSH_KEY,
                 ): str,
-                vol.Optional(CONF_AP_HOSTS, default=""): str,
-                vol.Optional(CONF_SWITCH_HOSTS, default=""): str,
             }
         )
         return self.async_show_form(
@@ -411,6 +412,24 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
             description_placeholders=placeholders or None,
         )
 
+    def _stash_pending(self, probe: ProbeResult) -> None:
+        self._pending_endpoints = probe.endpoints
+        self._pending_overrides = probe.overrides
+        self._pending_key = probe.ssh_key_path
+        self._pending_hosts = _canonical_hosts(probe.pairs)
+
+    def _finalize_pending(
+        self,
+        probe: ProbeResult,
+        cache: dict[str, str],
+        classification: Classification,
+    ) -> None:
+        self._pending_data = _connection_data(
+            self._pending_hosts, self._pending_key, cache
+        )
+        self._pending_title = _entry_title(classification, probe.endpoints)
+        self._pending_summary = _roles_summary(classification)
+
     async def async_step_provision_key(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
@@ -419,23 +438,42 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             errors, placeholders = await _run_provision(
-                self._pending,
+                self._pending_endpoints,
+                self._pending_key,
                 user_input["ssh_user"].strip(),
                 user_input["ssh_password"],
             )
             if not errors:
-                title = _entry_title(
-                    self._pending.get(CONF_GATEWAY_HOST, ""),
-                    _parse_hosts(self._pending.get(CONF_AP_HOSTS, "")),
-                    _parse_hosts(self._pending.get(CONF_SWITCH_HOSTS, "")),
+                cache, classification = await _detect_roles(
+                    self._pending_endpoints, self._pending_overrides, self._pending_key
                 )
-                return self.async_create_entry(title=title, data=self._pending)
+                self._pending_data = _connection_data(
+                    self._pending_hosts, self._pending_key, cache
+                )
+                self._pending_title = _entry_title(
+                    classification, self._pending_endpoints
+                )
+                self._pending_summary = _roles_summary(classification)
+                return await self.async_step_confirm_detected_roles()
 
         return self.async_show_form(
             step_id="provision_key",
             data_schema=_PROVISION_SCHEMA,
             errors=errors,
             description_placeholders=placeholders or None,
+        )
+
+    async def async_step_confirm_detected_roles(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        if user_input is not None:
+            return self.async_create_entry(
+                title=self._pending_title, data=self._pending_data
+            )
+        return self.async_show_form(
+            step_id="confirm_detected_roles",
+            data_schema=vol.Schema({}),
+            description_placeholders={"detected": self._pending_summary},
         )
 
     @staticmethod
@@ -447,9 +485,13 @@ class WrtsensorConfigFlow(ConfigFlow, domain=DOMAIN):
 class WrtsensorOptionsFlow(OptionsFlow):
     def __init__(self, config_entry: ConfigEntry) -> None:
         self._config_entry = config_entry
-        self._pending: dict[str, Any] = {}
+        self._pending_endpoints: list[HostEndpoint] = []
+        self._pending_overrides: dict[str, str] = {}
+        self._pending_key: str = ""
+        self._pending_hosts: str = ""
+        self._pending_options: dict[str, Any] = {}
 
-    def _update_connection_data(self, connection: dict[str, str]) -> None:
+    def _update_connection_data(self, connection: dict[str, Any]) -> None:
         """Persist connection fields in ConfigEntry.data, not options."""
         new_data = {**self._config_entry.data, **connection}
         hass = getattr(self, "hass", None)
@@ -459,6 +501,9 @@ class WrtsensorOptionsFlow(OptionsFlow):
             self._config_entry.data = new_data
             return
         hass.config_entries.async_update_entry(self._config_entry, data=new_data)
+
+    def _options_only(self, user_input: dict[str, Any]) -> dict[str, Any]:
+        return {k: v for k, v in user_input.items() if k not in _CONNECTION_KEYS}
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -470,14 +515,26 @@ class WrtsensorOptionsFlow(OptionsFlow):
         if user_input is not None:
             probe = await _probe_options_hosts(user_input, current)
             if probe.needs_provision:
-                self._pending = {**user_input, **_normalized_connection(probe)}
+                self._pending_endpoints = probe.endpoints
+                self._pending_overrides = probe.overrides
+                self._pending_key = probe.ssh_key_path
+                self._pending_hosts = _canonical_hosts(probe.pairs)
+                self._pending_options = self._options_only(user_input)
                 return await self.async_step_provision_key()
             if not probe.errors:
-                connection = _normalized_connection(probe)
-                self._update_connection_data(connection)
+                cache, _classification = await _detect_roles(
+                    probe.endpoints,
+                    probe.overrides,
+                    probe.ssh_key_path,
+                    current.get(CONF_DETECTED_ROLES, {}),
+                )
+                self._update_connection_data(
+                    _connection_data(
+                        _canonical_hosts(probe.pairs), probe.ssh_key_path, cache
+                    )
+                )
                 return self.async_create_entry(
-                    title="",
-                    data={**user_input, **connection},
+                    title="", data=self._options_only(user_input)
                 )
             errors = probe.errors
             placeholders = probe.placeholders
@@ -485,28 +542,28 @@ class WrtsensorOptionsFlow(OptionsFlow):
         schema = vol.Schema(
             {
                 vol.Required(
+                    CONF_HOSTS,
+                    description={"suggested_value": current.get(CONF_HOSTS, "")},
+                ): _hosts_field(),
+                vol.Required(
                     CONF_SSH_KEY_PATH,
                     default=current.get(CONF_SSH_KEY_PATH, DEFAULT_SSH_KEY),
                 ): str,
                 vol.Optional(
-                    CONF_GATEWAY_HOST,
-                    description={"suggested_value": current.get(CONF_GATEWAY_HOST, "")},
-                ): str,
-                vol.Optional(
-                    CONF_AP_HOSTS,
-                    description={"suggested_value": current.get(CONF_AP_HOSTS, "")},
-                ): str,
-                vol.Optional(
-                    CONF_SWITCH_HOSTS,
-                    description={"suggested_value": current.get(CONF_SWITCH_HOSTS, "")},
-                ): str,
-                vol.Optional(
                     CONF_LAN_IFACE,
-                    default=current.get(CONF_LAN_IFACE, DEFAULT_LAN_IFACE),
+                    description={
+                        "suggested_value": _iface_suggestion(
+                            current.get(CONF_LAN_IFACE), DEFAULT_LAN_IFACE
+                        )
+                    },
                 ): str,
                 vol.Optional(
                     CONF_WAN_IFACE,
-                    default=current.get(CONF_WAN_IFACE, DEFAULT_WAN_IFACE),
+                    description={
+                        "suggested_value": _iface_suggestion(
+                            current.get(CONF_WAN_IFACE), DEFAULT_WAN_IFACE
+                        )
+                    },
                 ): str,
                 vol.Optional(
                     CONF_DISCONNECT_THRESHOLD,
@@ -575,20 +632,23 @@ class WrtsensorOptionsFlow(OptionsFlow):
 
         if user_input is not None:
             errors, placeholders = await _run_provision(
-                self._pending,
+                self._pending_endpoints,
+                self._pending_key,
                 user_input["ssh_user"].strip(),
                 user_input["ssh_password"],
             )
             if not errors:
-                self._update_connection_data(
-                    {
-                        CONF_GATEWAY_HOST: self._pending.get(CONF_GATEWAY_HOST, ""),
-                        CONF_SSH_KEY_PATH: self._pending[CONF_SSH_KEY_PATH],
-                        CONF_AP_HOSTS: self._pending.get(CONF_AP_HOSTS, ""),
-                        CONF_SWITCH_HOSTS: self._pending.get(CONF_SWITCH_HOSTS, ""),
-                    }
+                current = {**self._config_entry.data, **self._config_entry.options}
+                cache, _classification = await _detect_roles(
+                    self._pending_endpoints,
+                    self._pending_overrides,
+                    self._pending_key,
+                    current.get(CONF_DETECTED_ROLES, {}),
                 )
-                return self.async_create_entry(title="", data=self._pending)
+                self._update_connection_data(
+                    _connection_data(self._pending_hosts, self._pending_key, cache)
+                )
+                return self.async_create_entry(title="", data=self._pending_options)
 
         return self.async_show_form(
             step_id="provision_key",
