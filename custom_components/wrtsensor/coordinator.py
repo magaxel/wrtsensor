@@ -593,6 +593,7 @@ def apply_configured_host_names(
     if not host_names:
         return devices
     for device in devices:
+        # Configured hosts are normalized to IP addresses during config flow parsing.
         hostname = host_names.get(device.ip)
         if hostname:
             device.hostname = hostname

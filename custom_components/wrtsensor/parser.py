@@ -15,6 +15,8 @@ from typing import Any
 from .const import FDB_UPLINK_MAC_THRESHOLD
 
 _IP_RE = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$")
+_COLLECTOR_META_RE = re.compile(r"^[A-Z][A-Z0-9_]*\|")
+_BOARD_MAX_LINES = 64
 
 
 def _valid_ipv4(ip: str) -> bool:
@@ -278,7 +280,7 @@ def parse_board_info(out: str) -> dict[str, str]:
             continue
         if not collecting:
             continue
-        if line.startswith(("STAT|", "FDB|")):
+        if _COLLECTOR_META_RE.match(line) or len(board_lines) >= _BOARD_MAX_LINES:
             return {}
         board_lines.append(line)
         board = _parse_board(board_lines)

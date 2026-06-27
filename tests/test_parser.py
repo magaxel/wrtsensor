@@ -419,6 +419,16 @@ STAT|cpu  1 0 1 98|128000|64000|12
     def test_empty_payload(self):
         assert parse_board_model("BOARD|\n") == ("", "")
 
+    def test_unclosed_board_json_stops_at_next_metadata_token(self):
+        out = "BOARD|{\n  \"hostname\": \"bad\"\nWIREGUARD|wg0|peer\n"
+
+        assert parse_board_info(out) == {}
+
+    def test_unclosed_board_json_is_bounded(self):
+        out = "BOARD|{\n" + "\n".join(f'  \"k{i}\": \"v\",' for i in range(80))
+
+        assert parse_board_info(out) == {}
+
     def test_parse_unaffected_by_board_line(self):
         # Adding a BOARD line must not produce a spurious WiFi entry
         out = _collector_output("unifiac-pro")

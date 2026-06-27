@@ -443,7 +443,7 @@ class NetworkTopologyCard extends HTMLElement {
       const stats = hostStats[key] ?? {};
       const aliases = [key, hostNames[key], apNames[key], stats.hostname].filter(Boolean);
       const device = allDevices.find((d) => aliases.includes(d.ip) || aliases.includes(d.hostname));
-      const apName = hostNames[key] || stats.hostname || apNames[key] || device?.hostname || key;
+      const apName = hostNames[key] || apNames[key] || stats.hostname || device?.hostname || key;
       if (device) apDeviceMatches.add(device);
       addApNode(
         {
@@ -810,7 +810,7 @@ class NetworkTopologyCard extends HTMLElement {
         }
       } else if (col.switchNode || col.unknownNode) {
         const sw = col.switchNode;
-        const swOp = col.unknownNode || sw.online !== false ? "1" : "0.4";
+        const swOp = col.unknownNode ? "1" : sw.online !== false ? "1" : "0.4";
         nodes.push(
           svgNode(
             cx,
