@@ -67,6 +67,11 @@ const ICON_GLOBE = `
   <ellipse cx="10" cy="10" rx="3.2" ry="7.5" fill="none" stroke="currentColor" stroke-width="1.5"/>
   <path d="M2.8 10h14.4M4.2 6.5h11.6M4.2 13.5h11.6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>`;
 
+const ICON_UNKNOWN = `
+  <circle cx="10" cy="10" r="7.5" fill="none" stroke="currentColor" stroke-width="1.5"/>
+  <path d="M8.2 7.7a2 2 0 0 1 3.6 1.2c0 1.9-1.8 1.8-1.8 3.2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+  <circle cx="10" cy="15" r="0.9" fill="currentColor"/>`;
+
 // Hostname-based patterns — checked against "hostname vendor" combined hint
 const HOSTNAME_PATTERNS = [
   [/phone|mobile|iphone|android|pixel|galaxy|oneplus|xiaomi|huawei|cmf|sm-|redmi/, ICON_PHONE],
@@ -102,6 +107,20 @@ function _deviceIcon(d) {
   }
   if (d.connection === "wifi" || d.ap) return ICON_PHONE;
   return ICON_DESKTOP;
+}
+
+function _isConfirmedWifi(d) {
+  return (
+    d.connection === "wifi" &&
+    (d.signal != null || d.tx_rate != null || d.rx_rate != null || d.exp_tput != null)
+  );
+}
+
+function _isUnknownPath(d) {
+  if (d.connection === "gateway") return false;
+  if (d.switch_port || d.switch_host) return false;
+  if (_isConfirmedWifi(d)) return false;
+  return d.connection === "wifi" || d.connection === "wired" || !!d.ap;
 }
 
 function _esc(s) {
@@ -198,6 +217,7 @@ const SVG_STYLE = `
     .ntc-gw       { fill: var(--teal-color, #009688); }
     .ntc-ap       { fill: var(--indigo-color, #3f51b5); }
     .ntc-switch   { fill: var(--cyan-color, #00acc1); }
+    .ntc-unknown-hub { fill: var(--grey-color, #757575); }
     .ntc-wire     { fill: var(--blue-grey-color, #607d8b); }
     .ntc-wg-peer  { fill: var(--red-color, #88171a); }
     .ntc-wg-icon  { color: #fff; }
@@ -232,6 +252,7 @@ class NetworkTopologyCard extends HTMLElement {
       gateway_label: config.gateway_label ?? config.gateway_hostname ?? "gw",
       column_width: config.column_width ?? config.col_width ?? 200,
       show_offline: config.show_offline ?? false,
+      show_unknown: config.show_unknown ?? true,
       show_hostnames: config.show_hostnames ?? true,
       show_ipv4: config.show_ipv4 ?? true,
       show_ipv6: config.show_ipv6 ?? false,
@@ -288,6 +309,7 @@ class NetworkTopologyCard extends HTMLElement {
       wgState?.last_updated ?? "",
       this._config.show_wireguard_peers ? 1 : 0,
       this._config.show_offline_wireguard ? 1 : 0,
+      this._config.show_unknown ? 1 : 0,
       this._config.show_hostnames ? 1 : 0,
       this._config.show_ipv4 ? 1 : 0,
       this._config.show_ipv6 ? 1 : 0,
@@ -342,13 +364,19 @@ class NetworkTopologyCard extends HTMLElement {
     const partial = attr.partial ?? false;
     const gatewayLabel = this._config.gateway_label;
     const configuredAps = attr.ap_hosts ?? [];
+    const apNames = attr.ap_names ?? {};
     const configuredSwitches = attr.switch_hosts ?? [];
+    const hostNames = attr.host_names ?? {};
+    const switchNames = attr.switch_names ?? {};
     const hostStats = attr.host_stats ?? {};
     const hasGateway = !!(gatewayMac || wanIp || wanIp6);
 
     const devices = this._config.show_offline
       ? allDevices
       : allDevices.filter((d) => d.online !== false);
+    const visibleDevices = this._config.show_unknown
+      ? devices
+      : devices.filter((d) => !_isUnknownPath(d));
     const wgEnabled = this._config.show_wireguard_peers && wgState != null;
     const wgIfaces = wgEnabled ? (wgState.attributes?.wireguard?.interfaces ?? []) : [];
     const allWgPeers = wgIfaces.flatMap((iface) =>
@@ -364,6 +392,8 @@ class NetworkTopologyCard extends HTMLElement {
     }
     for (const host of configuredAps) {
       if (host) apHostnames.add(String(host));
+      if (hostNames[host]) apHostnames.add(String(hostNames[host]));
+      if (apNames[host]) apHostnames.add(String(apNames[host]));
       const stats = hostStats[host] ?? {};
       if (stats.hostname) apHostnames.add(String(stats.hostname));
     }
@@ -371,14 +401,16 @@ class NetworkTopologyCard extends HTMLElement {
     const switchNodes = configuredSwitches.map((host) => {
       const key = String(host);
       const stats = hostStats[key] ?? {};
-      if (key) switchKeys.add(key);
-      if (stats.hostname) switchKeys.add(String(stats.hostname));
-      const aliases = [key, stats.hostname].filter(Boolean);
+      const aliases = [key, switchNames[key], hostNames[key], stats.hostname].filter(Boolean);
       const device = allDevices.find((d) => aliases.includes(d.ip) || aliases.includes(d.hostname));
+      const switchName =
+        switchNames[key] || hostNames[key] || stats.hostname || device?.hostname || "";
+      if (key) switchKeys.add(key);
+      if (switchName) switchKeys.add(String(switchName));
       return {
         ...(device ?? {}),
         host: key,
-        hostname: stats.hostname || device?.hostname || key,
+        hostname: switchName || key,
         model: stats.model || device?.model || "",
         ip: device?.ip || key,
         ip6: device?.ip6,
@@ -409,14 +441,15 @@ class NetworkTopologyCard extends HTMLElement {
       const key = String(host);
       if (!key) continue;
       const stats = hostStats[key] ?? {};
-      const aliases = [key, stats.hostname].filter(Boolean);
+      const aliases = [key, hostNames[key], apNames[key], stats.hostname].filter(Boolean);
       const device = allDevices.find((d) => aliases.includes(d.ip) || aliases.includes(d.hostname));
+      const apName = hostNames[key] || apNames[key] || stats.hostname || device?.hostname || key;
       if (device) apDeviceMatches.add(device);
       addApNode(
         {
           ...(device ?? {}),
           host: key,
-          hostname: stats.hostname || device?.hostname || key,
+          hostname: apName,
           ip: device?.ip || key,
           ip6: device?.ip6,
           model: stats.model || device?.model || "",
@@ -435,14 +468,22 @@ class NetworkTopologyCard extends HTMLElement {
     const switchDevices = allDevices.filter(
       (d) => switchKeys.has(d.ip) || switchKeys.has(d.hostname),
     );
-    const wifiDevices = devices.filter(
-      (d) => (d.connection === "wifi" || d.ap) && !apDeviceMatches.has(d),
+    const wifiDevices = visibleDevices.filter(
+      (d) => _isConfirmedWifi(d) && !apDeviceMatches.has(d),
     );
-    const wiredDevices = devices.filter(
+    const unassignedPathDevices = visibleDevices.filter(
+      (d) =>
+        d !== gateway && !apDeviceMatches.has(d) && !switchDevices.includes(d) && _isUnknownPath(d),
+    );
+    const routerPathDevices = hasGateway ? unassignedPathDevices : [];
+    const unknownPathDevices = hasGateway ? [] : unassignedPathDevices;
+    const wiredDevices = visibleDevices.filter(
       (d) =>
         d !== gateway &&
         !apDeviceMatches.has(d) &&
         !switchDevices.includes(d) &&
+        !routerPathDevices.includes(d) &&
+        !unknownPathDevices.includes(d) &&
         d.connection !== "wifi" &&
         !d.ap,
     );
@@ -456,7 +497,9 @@ class NetworkTopologyCard extends HTMLElement {
     const unknownApDevices = [];
     for (const d of wifiDevices) {
       const apKey = d.ap ? apAliases[d.ap] : null;
-      if (apKey && byAp[apKey] !== undefined) byAp[apKey].push(d);
+      const fallbackApKey = !apKey && d.ap && apNodes.length === 1 ? apNodes[0]._key : null;
+      const targetApKey = apKey ?? fallbackApKey;
+      if (targetApKey && byAp[targetApKey] !== undefined) byAp[targetApKey].push(d);
       else unknownApDevices.push(d);
     }
     const bySwitch = {};
@@ -475,6 +518,7 @@ class NetworkTopologyCard extends HTMLElement {
       if (targetSwitch && bySwitch[targetSwitch] !== undefined) bySwitch[targetSwitch].push(d);
       else directWiredDevices.push(d);
     }
+    directWiredDevices.push(...routerPathDevices);
 
     const NODE_R = 20,
       GW_R = 26,
@@ -517,6 +561,8 @@ class NetworkTopologyCard extends HTMLElement {
     for (const ap of apNodes) columns.push({ devices: sortWireless(byAp[ap._key]), ap });
     if (unknownApDevices.length > 0)
       columns.push({ devices: sortWireless(unknownApDevices), ap: null });
+    if (unknownPathDevices.length > 0)
+      columns.push({ devices: sortWired(unknownPathDevices), ap: null, unknownNode: true });
 
     // Dynamic width — each column gets a fixed minimum, no shrinking on mobile
     const W = Math.max(columns.length * COL_WIDTH + COL_PAD * 2, 600);
@@ -550,6 +596,7 @@ class NetworkTopologyCard extends HTMLElement {
       if (d.signal != null) parts.push(`Signal: ${d.signal} dBm`);
       if (d.switch_host) parts.push(`Switch: ${d.switch_host}`);
       if (d.switch_port) parts.push(`Switch port: ${d.switch_port}`);
+      if (_isUnknownPath(d)) parts.push("Path: Unknown");
       if (d.noise != null) parts.push(`Noise: ${d.noise} dBm`);
       if (d.snr != null) parts.push(`SNR: ${d.snr} dB`);
       if (d.tx_rate != null) parts.push(`TX rate: ${d.tx_rate} Mbit/s`);
@@ -610,6 +657,7 @@ class NetworkTopologyCard extends HTMLElement {
       if (showIpv4 && sw.host) rows.push(sw.host);
       return rows.filter(Boolean);
     };
+    const unknownTextRows = () => (showHostnames ? ["Unknown"] : []);
 
     const svgNode = (
       x,
@@ -728,10 +776,15 @@ class NetworkTopologyCard extends HTMLElement {
     for (let ci = 0; ci < columns.length; ci++) {
       const col = columns[ci];
       const cx = colCenters[ci];
-      const colTopY = col.ap || col.switchNode ? apRowY : devStartY;
+      const colTopY = col.ap || col.switchNode || col.unknownNode ? apRowY : devStartY;
       if (hasGateway) {
         paths.push(
-          curve(gwX, gwY + GW_R, cx, colTopY - (col.ap || col.switchNode ? AP_R : NODE_R)),
+          curve(
+            gwX,
+            gwY + GW_R,
+            cx,
+            colTopY - (col.ap || col.switchNode || col.unknownNode ? AP_R : NODE_R),
+          ),
         );
       }
 
@@ -755,19 +808,19 @@ class NetworkTopologyCard extends HTMLElement {
             svgNode(cx, dy, NODE_R, icon, nodeTextRows(d), null, devOp, nodeTitle(d), sc, unknown),
           );
         }
-      } else if (col.switchNode) {
+      } else if (col.switchNode || col.unknownNode) {
         const sw = col.switchNode;
-        const swOp = sw.online !== false ? "1" : "0.4";
+        const swOp = col.unknownNode ? "1" : sw.online !== false ? "1" : "0.4";
         nodes.push(
           svgNode(
             cx,
             apRowY,
             AP_R,
-            ICON_SWITCH,
-            switchTextRows(sw),
-            "ntc-switch",
+            col.unknownNode ? ICON_UNKNOWN : ICON_SWITCH,
+            col.unknownNode ? unknownTextRows() : switchTextRows(sw),
+            col.unknownNode ? "ntc-unknown-hub" : "ntc-switch",
             swOp,
-            switchTitle(sw),
+            col.unknownNode ? "Unknown connection path" : switchTitle(sw),
           ),
         );
 
@@ -1355,6 +1408,10 @@ class NetworkTopologyCardEditor extends HTMLElement {
           <span>Show offline devices (dimmed)</span>
         </label>
         <label class="cb-row">
+          <ha-checkbox id="show_unknown"></ha-checkbox>
+          <span>Show unknown-path devices</span>
+        </label>
+        <label class="cb-row">
           <ha-checkbox id="show_hostnames"></ha-checkbox>
           <span>Show hostnames</span>
         </label>
@@ -1407,6 +1464,12 @@ class NetworkTopologyCardEditor extends HTMLElement {
     offlineCb.checked = c.show_offline ?? false;
     offlineCb.addEventListener("change", () => {
       this._fire({ ...this._config, show_offline: offlineCb.checked });
+    });
+
+    const unknownCb = this.shadowRoot.querySelector("#show_unknown");
+    unknownCb.checked = c.show_unknown ?? true;
+    unknownCb.addEventListener("change", () => {
+      this._fire({ ...this._config, show_unknown: unknownCb.checked });
     });
 
     const hostnamesCb = this.shadowRoot.querySelector("#show_hostnames");

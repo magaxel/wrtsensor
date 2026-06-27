@@ -1,0 +1,55 @@
+rules:
+  action-setup:
+    status: exempt
+    comment: This integration does not register service actions.
+  appropriate-polling:
+    status: done
+    comment: The main coordinator uses a fixed 60-second polling interval. Firmware update checks use a fixed internal interval and are not user-configurable.
+  brands:
+    status: done
+    comment: Branding assets are included in the integration package.
+  common-modules:
+    status: done
+    comment: Shared constants, host parsing, parser helpers, and device metadata live in common modules.
+  config-flow-test-coverage:
+    status: done
+    comment: Config flow setup, options, validation, duplicate entries, and provisioning paths are covered by tests.
+  config-flow:
+    status: done
+    comment: The integration is configured through the UI with field descriptions and separate data/options storage.
+  dependency-transparency:
+    status: done
+    comment: Runtime dependencies are declared in manifest.json.
+  docs-actions:
+    status: exempt
+    comment: This integration does not provide service actions.
+  docs-high-level-description:
+    status: done
+    comment: README.md describes the integration and what it monitors.
+  docs-installation-instructions:
+    status: done
+    comment: README.md and docs/manual-install.md describe installation.
+  docs-removal-instructions:
+    status: todo
+    comment: Add explicit removal instructions to the public documentation.
+  entity-event-setup:
+    status: done
+    comment: Coordinator listeners are registered through entry.async_on_unload.
+  entity-unique-id:
+    status: done
+    comment: All integration entities define stable unique IDs.
+  has-entity-name:
+    status: todo
+    comment: The compatibility network scanner sensor intentionally opts out of has_entity_name; document or remove that exception before claiming Bronze.
+  runtime-data:
+    status: todo
+    comment: Coordinator storage still uses hass.data; migrate to ConfigEntry.runtime_data before claiming Bronze.
+  test-before-configure:
+    status: done
+    comment: The config flow validates SSH connectivity before creating an entry.
+  test-before-setup:
+    status: done
+    comment: The coordinator performs the first refresh during setup and fails setup on update failure.
+  unique-config-entry:
+    status: done
+    comment: The config flow sets a unique ID from the first configured host and aborts duplicates.

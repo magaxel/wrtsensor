@@ -18,6 +18,7 @@ const_mod = sys.modules["custom_components.wrtsensor.const"]
 WrtsensorCoordinator = coord_mod.WrtsensorCoordinator
 StateEntry = coord_mod.StateEntry
 build_devices = coord_mod.build_devices
+apply_configured_host_names = coord_mod.apply_configured_host_names
 UpdateFailed = sys.modules["homeassistant.helpers.update_coordinator"].UpdateFailed
 
 _ROOT = Path(__file__).parent.parent
@@ -235,6 +236,19 @@ def test_coordinator_ignores_stale_scan_interval_option():
     assert c._disconnect_threshold_miss == 3
 
 
+def test_coordinator_ignores_legacy_asu_interval_option():
+    c = WrtsensorCoordinator(
+        _FakeHass(),
+        _FakeEntry(
+            options={
+                "asu_interval_h": 1,
+            }
+        ),
+    )
+
+    assert c._asu_interval_s == const_mod.DEFAULT_ASU_INTERVAL_H * 3600
+
+
 def test_oui_cache_paths_use_persistent_config_dir(tmp_path):
     hass = _FakeHass()
     hass.config = types.SimpleNamespace(path=lambda *p: str(tmp_path.joinpath(*p)))
@@ -421,6 +435,72 @@ def test_build_devices_does_not_label_wifi_device_with_switch_port():
     assert devices[0].connection == "wifi"
     assert devices[0].switch_port == ""
     assert devices[0].switch_host == ""
+
+
+def test_build_devices_merges_arp_ip_into_wifi_only_device():
+    devices = build_devices(
+        leases={},
+        arp_states={"AA:BB:CC:DD:EE:01": "REACHABLE"},
+        stale=set(),
+        wifi=[
+            {
+                "mac": "AA:BB:CC:DD:EE:01",
+                "ap": "AP1",
+                "band": "5GHz",
+                "essid": "Net",
+                "signal": -50,
+                "tx_rate": 100.0,
+            }
+        ],
+        vendors={},
+        gw_mac="",
+        gw_ip="",
+        gw_hostname="",
+        alive_ap_ips=[],
+        arp_ips={"AA:BB:CC:DD:EE:01": "192.0.2.50"},
+        arp_hostnames={"AA:BB:CC:DD:EE:01": "phone"},
+    )
+
+    assert devices[0].connection == "wifi"
+    assert devices[0].ip == "192.0.2.50"
+    assert devices[0].hostname == "phone"
+    assert len(devices) == 1
+
+
+def test_build_devices_keeps_previous_ip_for_quiet_wifi_device():
+    devices = build_devices(
+        leases={},
+        arp_states={},
+        stale=set(),
+        wifi=[
+            {
+                "mac": "AA:BB:CC:DD:EE:01",
+                "ap": "AP1",
+                "band": "5GHz",
+                "essid": "Net",
+                "signal": -50,
+                "tx_rate": 100.0,
+            }
+        ],
+        vendors={},
+        gw_mac="",
+        gw_ip="",
+        gw_hostname="",
+        alive_ap_ips=[],
+        prev_state={
+            "AA:BB:CC:DD:EE:01": StateEntry(
+                mac="AA:BB:CC:DD:EE:01",
+                ip="192.0.2.50",
+                ip6="2001:db8::50",
+                hostname="phone",
+            )
+        },
+    )
+
+    assert devices[0].connection == "wifi"
+    assert devices[0].ip == "192.0.2.50"
+    assert devices[0].ip6 == "2001:db8::50"
+    assert devices[0].hostname == "phone"
 
 
 def test_build_devices_creates_fdb_only_device_switch_only_topology():
@@ -1028,6 +1108,76 @@ def test_collect_wifi_passes_no_host_metrics_flag_when_disabled():
     assert (
         ssh_run.await_args.args[1] == "sh /tmp/wrtsensor_collector.sh --no-host-metrics"
     )
+
+
+def test_collect_wifi_caches_hostname_from_board_metadata():
+    c = _make_coordinator(gateway_host="", switch_hosts="192.0.2.24")
+    out = (
+        'BOARD|{"model":"Zyxel GS1900","board_name":"zyxel,gs1900",'
+        '"hostname":"switch1"}\n'
+        "STAT|cpu  10 0 10 80|1000|500|25\n"
+        "FDB|AA:BB:CC:DD:EE:01|lan4\n"
+    )
+    with patch.object(c, "_ssh_run", new=AsyncMock(return_value=out)):
+        entries, hoststat, fdb = asyncio.run(
+            c._collect_wifi("192.0.2.24", "192.0.2.24")
+        )
+
+    assert entries == []
+    assert hoststat == ["cpu  10 0 10 80", "1000 500", "25"]
+    assert fdb == {"AA:BB:CC:DD:EE:01": "lan4"}
+    assert c._host_names["192.0.2.24"] == "switch1"
+    assert c._host_models["192.0.2.24"] == ("Zyxel GS1900", "zyxel,gs1900")
+
+
+def test_switch_only_update_exposes_switch_name_from_board_metadata():
+    c = _make_coordinator(gateway_host="", switch_hosts="192.0.2.24")
+
+    async def collect_wifi(host, ap_name):
+        c._host_names[host] = "switch1"
+        c._host_models[host] = ("Zyxel GS1900", "zyxel,gs1900")
+        return [], ["cpu  10 0 10 80", "1000 500", "25"], {
+            "AA:BB:CC:DD:EE:01": "lan4"
+        }
+
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch.object(c, "_collect_wifi", new=AsyncMock(side_effect=collect_wifi))
+        )
+        stack.enter_context(
+            patch.object(c, "_resolve_hostnames", new=AsyncMock(return_value={}))
+        )
+        result = asyncio.run(c._async_update_data())
+
+    assert result["switch_hosts"] == ["192.0.2.24"]
+    assert result["host_names"] == {"192.0.2.24": "switch1"}
+    assert result["switch_names"] == {"192.0.2.24": "switch1"}
+    assert result["host_stats"]["192.0.2.24"]["hostname"] == "switch1"
+
+
+def test_configured_openwrt_hostnames_override_device_hostnames():
+    devices = [
+        coord_mod.Device(mac="AA:00:00:00:00:01", ip="192.0.2.1", hostname="router-dhcp"),
+        coord_mod.Device(mac="AA:00:00:00:00:02", ip="192.0.2.22", hostname="ap-dns"),
+        coord_mod.Device(mac="AA:00:00:00:00:03", ip="192.0.2.24", hostname="switch"),
+        coord_mod.Device(mac="AA:00:00:00:00:04", ip="192.0.2.50", hostname="client"),
+    ]
+
+    apply_configured_host_names(
+        devices,
+        {
+            "192.0.2.1": "Gateway",
+            "192.0.2.22": "LivingRoomAP",
+            "192.0.2.24": "CoreSwitch",
+        },
+    )
+
+    assert [d.hostname for d in devices] == [
+        "Gateway",
+        "LivingRoomAP",
+        "CoreSwitch",
+        "client",
+    ]
 
 
 def test_dns_only_update_skips_ap_info_and_wifi_collection():

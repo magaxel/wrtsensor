@@ -15,6 +15,7 @@ parse_arp = coord.parse_arp
 parse_ndp = coord.parse_ndp
 parse_hoststat = coord.parse_hoststat
 parse_dns_stats = coord.parse_dns_stats
+parse_board_info = parser.parse_board_info
 parse_board_model = parser.parse_board_model
 parse_fdb = parser.parse_fdb
 resolve_switch_ports = parser.resolve_switch_ports
@@ -372,6 +373,31 @@ def test_is_random_mac_bad_input():
 
 
 class TestParseBoardModel:
+    def test_board_info_includes_hostname(self):
+        out = _collector_output("unifiac-pro")
+        assert parse_board_info(out) == {
+            "model": "Ubiquiti UniFi AP Pro",
+            "board_name": "ubnt,unifiac-pro",
+            "hostname": "ap1",
+        }
+
+    def test_board_info_multiline_openwrt_output(self):
+        out = """BOARD|{
+        "kernel": "6.12.87",
+        "hostname": "Switch",
+        "model": "Zyxel GS1900-24 A1",
+        "board_name": "zyxel,gs1900-24-a1"
+}
+STAT|cpu  1 0 1 98|128000|64000|12
+"""
+
+        assert parse_board_info(out) == {
+            "model": "Zyxel GS1900-24 A1",
+            "board_name": "zyxel,gs1900-24-a1",
+            "hostname": "Switch",
+        }
+        assert parse_board_model(out) == ("Zyxel GS1900-24 A1", "zyxel,gs1900-24-a1")
+
     def test_unifiac_pro_fixture(self):
         out = _collector_output("unifiac-pro")
         model, board_name = parse_board_model(out)
@@ -392,6 +418,16 @@ class TestParseBoardModel:
 
     def test_empty_payload(self):
         assert parse_board_model("BOARD|\n") == ("", "")
+
+    def test_unclosed_board_json_stops_at_next_metadata_token(self):
+        out = "BOARD|{\n  \"hostname\": \"bad\"\nWIREGUARD|wg0|peer\n"
+
+        assert parse_board_info(out) == {}
+
+    def test_unclosed_board_json_is_bounded(self):
+        out = "BOARD|{\n" + "\n".join(f'  \"k{i}\": \"v\",' for i in range(80))
+
+        assert parse_board_info(out) == {}
 
     def test_parse_unaffected_by_board_line(self):
         # Adding a BOARD line must not produce a spurious WiFi entry

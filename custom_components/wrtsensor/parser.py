@@ -15,6 +15,8 @@ from typing import Any
 from .const import FDB_UPLINK_MAC_THRESHOLD
 
 _IP_RE = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$")
+_COLLECTOR_META_RE = re.compile(r"^[A-Z][A-Z0-9_]*\|")
+_BOARD_MAX_LINES = 64
 
 
 def _valid_ipv4(ip: str) -> bool:
@@ -250,16 +252,47 @@ def resolve_switch_ports(
     return result
 
 
-def parse_board_model(out: str) -> tuple[str, str]:
-    """Extract (model, board_name) from collector output containing a BOARD| line."""
+def parse_board_info(out: str) -> dict[str, str]:
+    """Extract board metadata from collector output containing a BOARD| line."""
+    board_lines: list[str] = []
+    collecting = False
+
+    def _parse_board(lines: list[str]) -> dict[str, str] | None:
+        try:
+            board = json.loads("\n".join(lines))
+        except ValueError:
+            return None
+        if not isinstance(board, dict):
+            return {}
+        return {
+            "model": board.get("model", ""),
+            "board_name": board.get("board_name", ""),
+            "hostname": board.get("hostname", ""),
+        }
+
     for line in out.splitlines():
         if line.startswith("BOARD|"):
-            try:
-                board = json.loads(line[6:])
-                return board.get("model", ""), board.get("board_name", "")
-            except (ValueError, KeyError):
-                return "", ""
-    return "", ""
+            board_lines = [line[6:]]
+            collecting = True
+            board = _parse_board(board_lines)
+            if board is not None:
+                return board
+            continue
+        if not collecting:
+            continue
+        if _COLLECTOR_META_RE.match(line) or len(board_lines) >= _BOARD_MAX_LINES:
+            return {}
+        board_lines.append(line)
+        board = _parse_board(board_lines)
+        if board is not None:
+            return board
+    return {}
+
+
+def parse_board_model(out: str) -> tuple[str, str]:
+    """Extract (model, board_name) from collector output containing a BOARD| line."""
+    board = parse_board_info(out)
+    return board.get("model", ""), board.get("board_name", "")
 
 
 def parse_dns_stats(lines: list[str]) -> dict[str, Any] | None:

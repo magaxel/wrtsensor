@@ -84,8 +84,8 @@ each AP and switch — no redundant shell sensors.
 6. Add the Lovelace resources in **Settings → Dashboards → Resources** (all
    JavaScript Modules):
 
-   - `/wrtsensor_static/network-table-card.js?v=2.3.0`
-   - `/wrtsensor_static/network-topology-card.js?v=1.1.4`
+   - `/wrtsensor_static/network-table-card.js?v=2.4.0`
+   - `/wrtsensor_static/network-topology-card.js?v=1.1.11`
    - `/wrtsensor_static/network-events-card.js?v=1.1.2`
    - `/wrtsensor_static/dns-stats-card.js?v=3.0.1`
    - `/wrtsensor_static/wireguard-card.js?v=1.1.0` *(only if WireGuard is enabled)*
@@ -127,7 +127,7 @@ removed from the registry on reload.
 
 | Entity ID | Owning option | What it is |
 |-----------|---------------|-----------|
-| `sensor.<entry>_network_scanner` | Track LAN/Wi-Fi clients | Device count as state; `devices` (with `switch_port`/`switch_host`), `wan_ip`, `wan_ip6`, `gateway_mac`, `ap_hosts`, `switch_hosts`, `host_stats`, `partial`, `scan_duration` as attributes. Powers the topology, table, and events cards. |
+| `sensor.<entry>_network_scanner` | Track LAN/Wi-Fi clients | Device count as state; `devices` (with `switch_port`/`switch_host`), `wan_ip`, `wan_ip6`, `gateway_mac`, `host_names`, `ap_hosts`, `ap_names`, `switch_hosts`, `switch_names`, `host_stats`, `partial`, `scan_duration` as attributes. Powers the topology, table, and events cards. |
 | `device_tracker.<hostname>` | Track LAN/Wi-Fi clients | home/not_home per discovered device — **disabled by default** |
 | `binary_sensor.<entry>_presence_<mac>` | Track LAN/Wi-Fi clients | Online/offline per configured MAC |
 | `sensor.<entry>_wan_download` / `_wan_upload` | Collect WAN bandwidth | WAN RX / TX rate in Mbit/s |
@@ -159,7 +159,9 @@ gateway — enter its IP in the gateway field and leave the AP list empty.
 WAN bandwidth, DNS cache, and conntrack-derived per-device bandwidth are only
 collected with a gateway configured. In APs-only mode, devices are discovered via
 each AP's `ip -4/-6 neigh show dev br-lan`; DHCP hostnames are unavailable since the
-non-OpenWrt router holds them.
+non-OpenWrt router holds them. Configured OpenWrt gateway, AP, and switch devices
+use their own `ubus call system board` hostname when available, including
+switch-only topologies.
 
 ## Recorder & logbook exclusion
 

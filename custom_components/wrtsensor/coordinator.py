@@ -33,7 +33,7 @@ from .parser import (
     parse_arp,
     parse_asu_output,
     parse_asu_sections,
-    parse_board_model,
+    parse_board_info,
     parse_conntrack,
     parse_dns_stats,
     parse_fdb,
@@ -54,7 +54,6 @@ from .const import (
     COLLECTOR_REMOTE_PATH,
     COLLECTOR_SCRIPT_NAME,
     CONF_AP_HOSTS,
-    CONF_ASU_INTERVAL_H,
     CONF_DISCONNECT_THRESHOLD,
     CONF_ENABLE_ASU,
     CONF_ENABLE_DNS_STATS,
@@ -252,10 +251,14 @@ def build_devices(
         if mac in seen:
             continue
         r = rates.get(mac) if rates else None
+        _arp_hostnames = arp_hostnames or {}
+        prev_entry = prev_state.get(mac) if prev_state else None
         devices.append(
             Device(
                 mac=mac,
-                ip6=ndp.get(mac, ""),
+                ip=(arp_ips.get(mac, "") if arp_ips else "") or (prev_entry.ip if prev_entry else ""),
+                ip6=ndp.get(mac, "") or (prev_entry.ip6 if prev_entry else ""),
+                hostname=_arp_hostnames.get(mac, "") or (prev_entry.hostname if prev_entry else ""),
                 vendor=vendors.get(mac, ""),
                 connection="wifi",
                 ap=w["ap"],
@@ -583,6 +586,20 @@ def remap_random_macs(
     return result
 
 
+def apply_configured_host_names(
+    devices: list[Device], host_names: dict[str, str]
+) -> list[Device]:
+    """Prefer each configured OpenWrt host's own hostname for its device row."""
+    if not host_names:
+        return devices
+    for device in devices:
+        # Configured hosts are normalized to IP addresses during config flow parsing.
+        hostname = host_names.get(device.ip)
+        if hostname:
+            device.hostname = hostname
+    return devices
+
+
 def prune_old_state(state: dict[str, StateEntry]) -> dict[str, StateEntry]:
     cutoff = time.time() - STATE_MAX_AGE_DAYS * 86400
     return {mac: e for mac, e in state.items() if e.online or e.last_seen >= cutoff}
@@ -849,9 +866,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             data.get(CONF_WG_STALE_THRESHOLD, DEFAULT_WG_STALE_THRESHOLD)
         )
         self._enable_asu = bool(data.get(CONF_ENABLE_ASU, DEFAULT_ENABLE_ASU))
-        self._asu_interval_s = (
-            int(data.get(CONF_ASU_INTERVAL_H, DEFAULT_ASU_INTERVAL_H)) * 3600
-        )
+        self._asu_interval_s = DEFAULT_ASU_INTERVAL_H * 3600
         self._asu_cache: dict[str, dict[str, Any]] = {}  # host → {info, ts}
         self._asu_task: asyncio.Task | None = None
         self._asu_missing_tool_logged: set[str] = set()
@@ -877,6 +892,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._wan_event_state: dict[str, str] = {}
         self._prev_state: dict[str, StateEntry] = {}
         self._ap_name_cache: dict[str, str] = {}
+        self._host_names: dict[str, str] = {}
         self._host_models: dict[str, tuple[str, str]] = {}  # ip → (model, board_name)
         self._event_buffer: deque[dict[str, Any]] = deque(maxlen=self.EVENT_BUFFER_SIZE)
 
@@ -1216,9 +1232,14 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         out = await self._ssh_run(
             host, f"sh {COLLECTOR_REMOTE_PATH}{metrics_arg}", timeout=12
         )
-        model, board_name = parse_board_model(out)
+        board = parse_board_info(out)
+        model = board.get("model", "")
+        board_name = board.get("board_name", "")
+        hostname = board.get("hostname", "")
         if model:
             self._host_models[host] = (model, board_name)
+        if hostname:
+            self._host_names[host] = hostname
         entries, hoststat = parse_wifi_output(out, ap_name)
         return entries, hoststat, parse_fdb(out)
 
@@ -1821,9 +1842,13 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 ndp = parse_ndp(gw_data.get("ndp", []))
             gw_board_json = gw_data.get("gw_board", "")
             if gw_board_json and self._gateway_host:
-                gw_model, gw_board_name = parse_board_model("BOARD|" + gw_board_json)
+                gw_board = parse_board_info("BOARD|" + gw_board_json)
+                gw_model = gw_board.get("model", "")
+                gw_board_name = gw_board.get("board_name", "")
                 if gw_model:
                     self._host_models[self._gateway_host] = (gw_model, gw_board_name)
+                if gw_board.get("hostname"):
+                    self._host_names[self._gateway_host] = gw_board["hostname"]
 
         arp_hostnames: dict[str, str] = {}
         if self._enable_network_hosts:
@@ -1881,6 +1906,8 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 hostname, ip6, ap_arp_lines, ap_ndp_lines = result
                 name_map[host] = hostname or host
                 self._ap_name_cache[host] = name_map[host]
+                if hostname:
+                    self._host_names[host] = hostname
                 if ip6:
                     ap_ip6_map[host] = ip6
                 # Gateway-less mode: union per-AP neigh tables into master maps.
@@ -2073,6 +2100,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             devices = remap_random_macs(
                 devices, self._prev_state, self._disconnect_threshold_miss
             )
+            devices = apply_configured_host_names(devices, self._host_names)
 
             # Aggregate AP bandwidth; inject WAN onto gateway
             ap_rx: dict[str, int] = {}
@@ -2162,9 +2190,12 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if stats:
                 ap_model_info = self._host_models.get(host, ("", ""))
                 host_stats[host] = {
-                    "hostname": next(
-                        (d.hostname for d in devices if d.ip == host and d.hostname),
-                        host,
+                    "hostname": (
+                        self._host_names.get(host)
+                        or next(
+                            (d.hostname for d in devices if d.ip == host and d.hostname),
+                            host,
+                        )
                     ),
                     "model": ap_model_info[0],
                     "board_name": ap_model_info[1],
@@ -2197,7 +2228,27 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             result["gateway_mac"] = gw_mac
             result["ap_hosts"] = list(self._ap_hosts)
+            result["ap_names"] = {
+                host: name_map[host]
+                for host in self._ap_hosts
+                if name_map.get(host) and name_map[host] != host
+            }
             result["switch_hosts"] = list(self._switch_hosts)
+            configured_hosts = [
+                host
+                for host in [self._gateway_host, *self._ap_hosts, *self._switch_hosts]
+                if host
+            ]
+            result["host_names"] = {
+                host: self._host_names[host]
+                for host in configured_hosts
+                if self._host_names.get(host) and self._host_names[host] != host
+            }
+            result["switch_names"] = {
+                host: self._host_names[host]
+                for host in self._switch_hosts
+                if self._host_names.get(host) and self._host_names[host] != host
+            }
             result["devices"] = [asdict(d) for d in devices]
         if self._enable_wan_bandwidth:
             result["wan_rx_rate"] = rx_rate

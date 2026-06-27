@@ -5,7 +5,7 @@ import {
   nothing,
 } from "https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js";
 
-const CARD_VERSION = "2.3.0";
+const CARD_VERSION = "2.4.0";
 const CARD_TYPE = "network-table-card";
 const EDITOR_TYPE = `${CARD_TYPE}-editor`;
 
@@ -113,9 +113,24 @@ function colDisplayName(col) {
 }
 
 function portApValue(d) {
-  if (d.ap) return d.ap;
+  if (isUnknownPath(d)) return "Unknown";
+  if (isConfirmedWifi(d) && d.ap) return d.ap;
   if (d.switch_port) return `Port ${d.switch_port}`;
   return "";
+}
+
+function isConfirmedWifi(d) {
+  return (
+    d.connection === "wifi" &&
+    (d.signal != null || d.tx_rate != null || d.rx_rate != null || d.exp_tput != null)
+  );
+}
+
+function isUnknownPath(d) {
+  if (d.connection === "gateway") return false;
+  if (d.switch_port || d.switch_host) return false;
+  if (isConfirmedWifi(d)) return false;
+  return d.connection === "wifi" || d.connection === "wired" || !!d.ap;
 }
 
 function normalizeColumns(columns) {
@@ -298,6 +313,7 @@ class NetworkTableCard extends LitElement {
       entity: config.entity,
       title: config.title ?? "Network",
       show_offline: config.show_offline ?? false,
+      show_unknown: config.show_unknown ?? true,
       columns: cols,
     };
   }
@@ -348,7 +364,11 @@ class NetworkTableCard extends LitElement {
     }
 
     const all = state.attributes?.devices ?? [];
-    const visible = this._config.show_offline ? all : all.filter((d) => d.online !== false);
+    const visible = all.filter(
+      (d) =>
+        (this._config.show_offline || d.online !== false) &&
+        (this._config.show_unknown || !isUnknownPath(d)),
+    );
     const cols = ALL_COLS.filter((c) => this._config.columns.includes(c.key));
     const sorted = this._sortDevices(visible);
     const filtered = sorted.filter((d) => this._matchesFilters(d));
@@ -513,7 +533,14 @@ class NetworkTableCard extends LitElement {
       case "mac":
         return d.mac || "—";
       case "connection":
-        if (d.connection === "wifi") return this._signalIcon(d.signal);
+        if (isConfirmedWifi(d)) return this._signalIcon(d.signal);
+        if (isUnknownPath(d))
+          return html`<ha-icon
+            icon="mdi:help-network"
+            title="Unknown connection path"
+            role="img"
+            aria-label="Unknown connection path"
+          ></ha-icon>`;
         if (d.connection === "wired")
           return html`<ha-icon
             icon="mdi:ethernet"
@@ -749,6 +776,7 @@ class NetworkTableCardEditor extends LitElement {
       },
       { name: "title", selector: { text: {} } },
       { name: "show_offline", selector: { boolean: {} } },
+      { name: "show_unknown", selector: { boolean: {} } },
       {
         name: "columns",
         selector: {
@@ -770,6 +798,7 @@ class NetworkTableCardEditor extends LitElement {
       entity: "Entity",
       title: "Title",
       show_offline: "Show offline devices (dimmed)",
+      show_unknown: "Show unknown-path devices",
       columns: "Columns",
     };
     return labels[s.name] ?? s.name;
@@ -791,6 +820,7 @@ class NetworkTableCardEditor extends LitElement {
       entity: this._config.entity ?? "",
       title: this._config.title ?? "Network",
       show_offline: this._config.show_offline ?? false,
+      show_unknown: this._config.show_unknown ?? true,
       columns: this._config.columns?.length ? this._config.columns : DEFAULT_COLS,
     };
     return html`
