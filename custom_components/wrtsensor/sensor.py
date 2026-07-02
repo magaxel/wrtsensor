@@ -132,6 +132,7 @@ class WrtsensorNetworkScannerSensor(_WrtsensorBase):
         "switch_hosts",
         "switch_names",
         "host_stats",
+        "host_topology",
         "scan_duration",
         "partial",
     )

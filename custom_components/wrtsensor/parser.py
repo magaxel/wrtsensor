@@ -252,6 +252,87 @@ def resolve_switch_ports(
     return result
 
 
+def parse_self_mac(out: str) -> str:
+    """Extract a host's own LAN bridge MAC from a collector ``SELFMAC|`` line.
+
+    Empty string when absent — a host running an older collector script that
+    doesn't emit it yet. Callers must treat that as "topology unknown", not
+    an error.
+    """
+    for line in out.splitlines():
+        if line.startswith("SELFMAC|"):
+            return line[len("SELFMAC|") :].strip().upper()
+    return ""
+
+
+def resolve_infra_parents(
+    fdb_by_host: dict[str, dict[str, str]],
+    self_macs: dict[str, str],
+    switch_hosts: set[str] | None = None,
+) -> dict[str, dict[str, str]]:
+    """Resolve each infra host's uplink parent from other hosts' FDB tables.
+
+    A host's own MAC never appears in its own FDB dump (filtered as a "self"
+    entry by the collector) but shows up as a normal learned entry in
+    whichever OTHER host's FDB table sees it arrive on the wire — that's the
+    physical uplink. Deliberately does NOT apply the upper uplink-MAC-count
+    threshold like ``resolve_switch_ports`` does: a real AP-to-switch or
+    switch-to-switch port is expected to carry many relayed client MACs,
+    which is exactly the signature that identifies it here, not noise to
+    discard.
+
+    It DOES exclude any candidate port that also carries another known infra
+    host's own MAC. A leaf AP has only one wired port, so that port
+    necessarily aggregates traffic from the ENTIRE rest of the LAN — every
+    other device's MAC eventually gets learned there too, since that's the
+    AP's only path to anything beyond its own radios. That makes a leaf
+    device's FDB useless as a *source* of "who's plugged into me" evidence;
+    only a real switch's per-port table has genuine per-neighbor
+    specificity (each physical port's learning table is isolated). A port
+    carrying two or more known infra identities at once is exactly that
+    kind of shared/trunk link, not a dedicated one, and is excluded outright
+    regardless of MAC count. Confirmed against a live fleet: without this
+    filter, a switch's own MAC — naturally relayed onto an AP's single
+    uplink port along with a dozen other devices' MACs — was incorrectly
+    resolved as "the switch is downstream of the AP." Tie-break among
+    remaining candidates mirrors ``resolve_switch_ports`` for consistency:
+    the port with the fewest total MACs wins (closest to a dedicated link),
+    preferring a designated switch host on ties.
+
+    Returns ``host -> {"host": parent_host, "port": display_port}`` only for
+    hosts with a known, non-empty self-MAC that was actually seen, on a
+    plausibly-dedicated port, on some other host's FDB. A host absent from
+    the result has no resolvable parent — the root of the tree, a host only
+    ever seen on shared/trunk ports, or a host still running an older
+    collector script with no self-MAC. Callers must treat absence as "no
+    resolvable parent," not an error.
+    """
+    switch_hosts = switch_hosts or set()
+    all_self_macs = {mac for mac in self_macs.values() if mac}
+    port_macs: dict[tuple[str, str], set[str]] = {}
+    for host, fdb in fdb_by_host.items():
+        for mac, port in fdb.items():
+            port_macs.setdefault((host, port), set()).add(mac)
+
+    result: dict[str, dict[str, str]] = {}
+    for host, self_mac in self_macs.items():
+        if not self_mac:
+            continue
+        candidates: list[tuple[int, int, str, str]] = []
+        for (parent_host, port), macs in port_macs.items():
+            if parent_host == host or self_mac not in macs:
+                continue
+            if (all_self_macs & macs) - {self_mac}:
+                continue  # shared/trunk port — carries another infra identity too
+            candidates.append(
+                (len(macs), 0 if parent_host in switch_hosts else 1, parent_host, port)
+            )
+        if candidates:
+            _, _, parent_host, port = min(candidates)
+            result[host] = {"host": parent_host, "port": _port_number(port)}
+    return result
+
+
 def parse_board_info(out: str) -> dict[str, str]:
     """Extract board metadata from collector output containing a BOARD| line."""
     board_lines: list[str] = []

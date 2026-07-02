@@ -18,7 +18,9 @@ parse_dns_stats = coord.parse_dns_stats
 parse_board_info = parser.parse_board_info
 parse_board_model = parser.parse_board_model
 parse_fdb = parser.parse_fdb
+parse_self_mac = parser.parse_self_mac
 resolve_switch_ports = parser.resolve_switch_ports
+resolve_infra_parents = parser.resolve_infra_parents
 _is_random_mac = parser._is_random_mac
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -888,3 +890,109 @@ class TestResolveSwitchPorts:
     def test_non_numeric_port_falls_back_to_raw(self):
         ports = resolve_switch_ports({"sw": {"AA:BB:CC:DD:EE:01": "wan"}})
         assert ports == {"AA:BB:CC:DD:EE:01": {"port": "wan", "host": "sw"}}
+
+
+class TestParseSelfMac:
+    def test_extracts_self_mac(self):
+        out = "BOARD|{}\nSTAT|cpu 1 2 3 4|1000|500|10\nSELFMAC|aa:bb:cc:dd:ee:01\n"
+        assert parse_self_mac(out) == "AA:BB:CC:DD:EE:01"
+
+    def test_missing_line_returns_empty(self):
+        out = "BOARD|{}\nSTAT|cpu 1 2 3 4|1000|500|10\n"
+        assert parse_self_mac(out) == ""
+
+    def test_wifi_parser_skips_selfmac_lines(self):
+        # A SELFMAC| line must never be mistaken for a Wi-Fi station entry.
+        entries, _ = parse_wifi_output("SELFMAC|AA:BB:CC:DD:EE:01\n", "AP1")
+        assert entries == []
+
+
+class TestResolveInfraParents:
+    def test_uplink_found_on_switch_port(self):
+        # AP's own MAC learned on the switch's port, alongside several client
+        # MACs relayed through the same physical uplink port.
+        ap_mac = "AA:BB:CC:DD:EE:01"
+        switch_fdb = {
+            ap_mac: "lan5",
+            "11:11:11:11:11:11": "lan5",
+            "22:22:22:22:22:22": "lan5",
+        }
+        parents = resolve_infra_parents({"switch": switch_fdb}, {"ap": ap_mac})
+        assert parents == {"ap": {"host": "switch", "port": "5"}}
+
+    def test_no_uplink_threshold_applied(self):
+        # A real AP uplink port legitimately carries MANY relayed client MACs
+        # — that's the signature identifying it, not noise to discard. This
+        # is the key behavioral divergence from resolve_switch_ports, which
+        # would drop this exact port for exceeding FDB_UPLINK_MAC_THRESHOLD.
+        ap_mac = "AA:BB:CC:DD:EE:01"
+        switch_fdb = {ap_mac: "lan5"}
+        for i in range(20):
+            switch_fdb[f"33:33:33:33:33:{i:02x}"] = "lan5"
+        parents = resolve_infra_parents({"switch": switch_fdb}, {"ap": ap_mac})
+        assert parents == {"ap": {"host": "switch", "port": "5"}}
+
+    def test_fewest_macs_wins_on_tie(self):
+        ap_mac = "AA:BB:CC:DD:EE:01"
+        a = {
+            ap_mac: "lan2",
+            "11:11:11:11:11:11": "lan2",
+            "22:22:22:22:22:22": "lan2",
+        }
+        b = {ap_mac: "lan3", "11:11:11:11:11:11": "lan3"}
+        parents = resolve_infra_parents({"hostA": a, "hostB": b}, {"ap": ap_mac})
+        assert parents["ap"] == {"host": "hostB", "port": "3"}
+
+    def test_shared_uplink_port_not_treated_as_dedicated_link(self):
+        # A leaf AP's single wired port aggregates traffic from the ENTIRE
+        # rest of the LAN — it eventually sees every other infra device's
+        # MAC, not just whichever one is "closest." A port carrying two or
+        # more known infra identities at once is exactly that kind of
+        # shared/trunk link and must be excluded outright, regardless of MAC
+        # count. Regression test for a real bug found against a live fleet:
+        # a switch's own MAC was relayed onto an AP's single uplink port
+        # alongside another AP's MAC and incorrectly resolved as "the switch
+        # is downstream of the AP."
+        switch_mac = "AA:BB:CC:DD:EE:01"
+        other_ap_mac = "AA:BB:CC:DD:EE:02"
+        leaf_ap_uplink = {
+            switch_mac: "eth0",
+            other_ap_mac: "eth0",
+            "11:11:11:11:11:11": "eth0",
+        }
+        parents = resolve_infra_parents(
+            {"leaf_ap": leaf_ap_uplink},
+            {"switch": switch_mac, "other_ap": other_ap_mac},
+        )
+        assert parents == {}
+
+    def test_switch_host_preferred_on_count_tie(self):
+        ap_mac = "AA:BB:CC:DD:EE:01"
+        a = {ap_mac: "lan2", "11:11:11:11:11:11": "lan2"}  # a plain AP relaying it
+        b = {ap_mac: "lan8", "11:11:11:11:11:11": "lan8"}  # the designated switch
+        parents = resolve_infra_parents(
+            {"plain": a, "sw": b}, {"ap": ap_mac}, switch_hosts={"sw"}
+        )
+        assert parents["ap"] == {"host": "sw", "port": "8"}
+
+    def test_own_hosts_fdb_table_excluded(self):
+        # A host's own MAC never appears in its own FDB dump by construction
+        # (the collector filters "self" entries), but assert the resolver
+        # explicitly guards against it too, as defense in depth.
+        ap_mac = "AA:BB:CC:DD:EE:01"
+        parents = resolve_infra_parents({"ap": {ap_mac: "lan5"}}, {"ap": ap_mac})
+        assert parents == {}
+
+    def test_missing_self_mac_omitted(self):
+        # A host still running an older collector script with no SELFMAC|
+        # line produces no entry, not a crash.
+        parents = resolve_infra_parents({"switch": {"XX": "lan5"}}, {"ap": ""})
+        assert parents == {}
+
+    def test_root_host_has_no_entry(self):
+        # Self-mac never found in any other host's FDB — the physical root.
+        parents = resolve_infra_parents(
+            {"switch": {"11:11:11:11:11:11": "lan5"}},
+            {"switch_top": "AA:BB:CC:DD:EE:01"},
+        )
+        assert parents == {}

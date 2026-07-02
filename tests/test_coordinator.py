@@ -206,7 +206,7 @@ def test_update_attaches_switch_port_from_gateway_fdb():
             patch.object(
                 c,
                 "_collect_wifi",
-                new=AsyncMock(return_value=([], [], {"11:22:33:44:55:66": "lan5"})),
+                new=AsyncMock(return_value=([], [], {"11:22:33:44:55:66": "lan5"}, "")),
             )
         )
         stack.enter_context(
@@ -236,7 +236,9 @@ def test_update_resolves_vendor_for_fdb_only_switch_device():
             patch.object(
                 c,
                 "_collect_wifi",
-                new=AsyncMock(return_value=([], [], {"11:22:33:44:55:66": "lan12"})),
+                new=AsyncMock(
+                    return_value=([], [], {"11:22:33:44:55:66": "lan12"}, "")
+                ),
             )
         )
         stack.enter_context(patch.object(c, "_detect_wan_events", return_value=[]))
@@ -925,7 +927,7 @@ def test_ap_unreachable_result_not_partial():
                 "_collect_wifi",
                 new=AsyncMock(
                     side_effect=[
-                        ([], [], {}),  # gateway WiFi OK
+                        ([], [], {}, ""),  # gateway WiFi OK
                         Exception("SSH timeout"),  # AP WiFi fails
                     ]
                 ),
@@ -965,7 +967,7 @@ def test_ap_unreachable_gateway_device_still_present():
                 "_collect_wifi",
                 new=AsyncMock(
                     side_effect=[
-                        ([], [], {}),
+                        ([], [], {}, ""),
                         Exception("SSH timeout"),
                     ]
                 ),
@@ -1003,7 +1005,7 @@ def test_ap_unreachable_marked_unavailable_in_host_stats():
                 "_collect_wifi",
                 new=AsyncMock(
                     side_effect=[
-                        ([], [], {}),  # gateway WiFi OK
+                        ([], [], {}, ""),  # gateway WiFi OK
                         Exception("SSH timeout"),  # AP WiFi fails
                     ]
                 ),
@@ -1053,7 +1055,9 @@ def test_aps_only_update_builds_from_ap_neigh():
             patch.object(c, "_collect_gateway", new=AsyncMock(return_value={}))
         )
         stack.enter_context(
-            patch.object(c, "_collect_wifi", new=AsyncMock(return_value=([], [], {})))
+            patch.object(
+                c, "_collect_wifi", new=AsyncMock(return_value=([], [], {}, ""))
+            )
         )
         stack.enter_context(
             patch.object(
@@ -1077,7 +1081,9 @@ def test_aps_only_no_prev_no_raise():
     c._prev_state = {}
     with ExitStack() as stack:
         stack.enter_context(
-            patch.object(c, "_collect_wifi", new=AsyncMock(return_value=([], [], {})))
+            patch.object(
+                c, "_collect_wifi", new=AsyncMock(return_value=([], [], {}, ""))
+            )
         )
         stack.enter_context(
             patch.object(
@@ -1110,7 +1116,7 @@ def test_host_metrics_disabled_omits_host_stats_from_update():
                 c,
                 "_collect_wifi",
                 new=AsyncMock(
-                    return_value=([], ["cpu  10 0 10 80", "1000 500", "25"], {})
+                    return_value=([], ["cpu  10 0 10 80", "1000 500", "25"], {}, "")
                 ),
             )
         )
@@ -1138,7 +1144,7 @@ def test_collect_wifi_passes_no_host_metrics_flag_when_disabled():
     with patch.object(c, "_ssh_run", new=AsyncMock(return_value="")) as ssh_run:
         result = asyncio.run(c._collect_wifi("192.0.2.22", "AP1"))
 
-    assert result == ([], [], {})
+    assert result == ([], [], {}, "")
     assert (
         ssh_run.await_args.args[1] == "sh /tmp/wrtsensor_collector.sh --no-host-metrics"
     )
@@ -1153,13 +1159,14 @@ def test_collect_wifi_caches_hostname_from_board_metadata():
         "FDB|AA:BB:CC:DD:EE:01|lan4\n"
     )
     with patch.object(c, "_ssh_run", new=AsyncMock(return_value=out)):
-        entries, hoststat, fdb = asyncio.run(
+        entries, hoststat, fdb, self_mac = asyncio.run(
             c._collect_wifi("192.0.2.24", "192.0.2.24")
         )
 
     assert entries == []
     assert hoststat == ["cpu  10 0 10 80", "1000 500", "25"]
     assert fdb == {"AA:BB:CC:DD:EE:01": "lan4"}
+    assert self_mac == ""
     assert c._host_names["192.0.2.24"] == "switch1"
     assert c._host_models["192.0.2.24"] == ("Zyxel GS1900", "zyxel,gs1900")
 
@@ -1170,7 +1177,12 @@ def test_switch_only_update_exposes_switch_name_from_board_metadata():
     async def collect_wifi(host, ap_name):
         c._host_names[host] = "switch1"
         c._host_models[host] = ("Zyxel GS1900", "zyxel,gs1900")
-        return [], ["cpu  10 0 10 80", "1000 500", "25"], {"AA:BB:CC:DD:EE:01": "lan4"}
+        return (
+            [],
+            ["cpu  10 0 10 80", "1000 500", "25"],
+            {"AA:BB:CC:DD:EE:01": "lan4"},
+            "",
+        )
 
     with ExitStack() as stack:
         stack.enter_context(
@@ -1185,6 +1197,140 @@ def test_switch_only_update_exposes_switch_name_from_board_metadata():
     assert result["host_names"] == {"192.0.2.24": "switch1"}
     assert result["switch_names"] == {"192.0.2.24": "switch1"}
     assert result["host_stats"]["192.0.2.24"]["hostname"] == "switch1"
+
+
+def test_host_topology_resolves_ap_behind_switch():
+    """AP whose self-MAC is learned on the switch's FDB resolves its parent
+    to the switch — the topology map keys off this to nest the AP under the
+    switch instead of drawing it flat under the gateway."""
+    c = _make_coordinator(ap_hosts="192.0.2.22", switch_hosts="192.0.2.21")
+    ap_self_mac = "AA:BB:CC:DD:EE:01"
+
+    async def collect_wifi(host, ap_name):
+        if host == "192.0.2.21":  # switch: sees the AP's own MAC on lan4,
+            # alongside a client MAC relayed through the same uplink port.
+            return (
+                [],
+                [],
+                {ap_self_mac: "lan4", "11:11:11:11:11:11": "lan4"},
+                "",
+            )
+        if host == "192.0.2.22":  # AP: reports its own MAC, no FDB of its own
+            return ([], [], {}, ap_self_mac)
+        return ([], [], {}, "")  # gateway
+
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch.object(c, "_collect_gateway", new=AsyncMock(return_value=_MINIMAL_GW))
+        )
+        stack.enter_context(
+            patch.object(c, "_collect_wifi", new=AsyncMock(side_effect=collect_wifi))
+        )
+        stack.enter_context(
+            patch.object(
+                c, "_get_ap_info", new=AsyncMock(return_value=("AP1", "", [], []))
+            )
+        )
+        stack.enter_context(
+            patch.object(c, "_ping_stale", new=AsyncMock(return_value=[]))
+        )
+        stack.enter_context(
+            patch.object(c, "_resolve_hostnames", new=AsyncMock(return_value={}))
+        )
+        stack.enter_context(patch.object(c, "_detect_wan_events", return_value=[]))
+        result = asyncio.run(c._async_update_data())
+
+    assert result["host_topology"]["192.0.2.22"] == {
+        "parent_host": "192.0.2.21",
+        "parent_port": "4",
+    }
+    assert result["host_topology"]["192.0.2.21"] == {
+        "parent_host": None,
+        "parent_port": None,
+    }
+
+
+def test_host_topology_omits_parent_for_older_collector_script():
+    """An AP still running an older collector script (no SELFMAC| line) still
+    gets a host_topology entry — None/None, not omitted — so the topology
+    map falls back to attaching it under the gateway, same as today."""
+    c = _make_coordinator(ap_hosts="192.0.2.22", switch_hosts="192.0.2.21")
+
+    async def collect_wifi(host, ap_name):
+        if host == "192.0.2.21":
+            return ([], [], {"11:11:11:11:11:11": "lan4"}, "")
+        return ([], [], {}, "")  # AP self_mac empty — pre-update collector
+
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch.object(c, "_collect_gateway", new=AsyncMock(return_value=_MINIMAL_GW))
+        )
+        stack.enter_context(
+            patch.object(c, "_collect_wifi", new=AsyncMock(side_effect=collect_wifi))
+        )
+        stack.enter_context(
+            patch.object(
+                c, "_get_ap_info", new=AsyncMock(return_value=("AP1", "", [], []))
+            )
+        )
+        stack.enter_context(
+            patch.object(c, "_ping_stale", new=AsyncMock(return_value=[]))
+        )
+        stack.enter_context(
+            patch.object(c, "_resolve_hostnames", new=AsyncMock(return_value={}))
+        )
+        stack.enter_context(patch.object(c, "_detect_wan_events", return_value=[]))
+        result = asyncio.run(c._async_update_data())
+
+    assert result["host_topology"]["192.0.2.22"] == {
+        "parent_host": None,
+        "parent_port": None,
+    }
+
+
+def test_host_topology_populated_with_host_metrics_disabled():
+    """Topology derives from fdb_by_host (collected under network_hosts), not
+    host_metrics — a user who disables CPU/RAM polling should still get it."""
+    c = _make_coordinator(
+        ap_hosts="192.0.2.22",
+        switch_hosts="192.0.2.21",
+        options={const_mod.CONF_ENABLE_HOST_METRICS: False},
+    )
+    ap_self_mac = "AA:BB:CC:DD:EE:01"
+
+    async def collect_wifi(host, ap_name):
+        if host == "192.0.2.21":
+            return ([], [], {ap_self_mac: "lan4", "11:11:11:11:11:11": "lan4"}, "")
+        if host == "192.0.2.22":
+            return ([], [], {}, ap_self_mac)
+        return ([], [], {}, "")
+
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch.object(c, "_collect_gateway", new=AsyncMock(return_value=_MINIMAL_GW))
+        )
+        stack.enter_context(
+            patch.object(c, "_collect_wifi", new=AsyncMock(side_effect=collect_wifi))
+        )
+        stack.enter_context(
+            patch.object(
+                c, "_get_ap_info", new=AsyncMock(return_value=("AP1", "", [], []))
+            )
+        )
+        stack.enter_context(
+            patch.object(c, "_ping_stale", new=AsyncMock(return_value=[]))
+        )
+        stack.enter_context(
+            patch.object(c, "_resolve_hostnames", new=AsyncMock(return_value={}))
+        )
+        stack.enter_context(patch.object(c, "_detect_wan_events", return_value=[]))
+        result = asyncio.run(c._async_update_data())
+
+    assert "host_stats" not in result
+    assert result["host_topology"]["192.0.2.22"] == {
+        "parent_host": "192.0.2.21",
+        "parent_port": "4",
+    }
 
 
 def test_configured_openwrt_hostnames_override_device_hostnames():
@@ -1225,7 +1371,7 @@ def test_dns_only_update_skips_ap_info_and_wifi_collection():
             const_mod.CONF_ENABLE_WIREGUARD: False,
         },
     )
-    collect_wifi = AsyncMock(return_value=([], [], {}))
+    collect_wifi = AsyncMock(return_value=([], [], {}, ""))
     get_ap_info = AsyncMock(return_value=("AP1", "", [], []))
     with ExitStack() as stack:
         stack.enter_context(
@@ -1269,8 +1415,8 @@ def test_host_metrics_with_network_hosts_disabled_runs_collector_without_devices
     ]
     collect_wifi = AsyncMock(
         side_effect=[
-            (wifi_entries, ["cpu  10 0 10 80", "1000 500", "25"], {}),
-            (wifi_entries, ["cpu  10 0 10 80", "1000 500", "25"], {}),
+            (wifi_entries, ["cpu  10 0 10 80", "1000 500", "25"], {}, ""),
+            (wifi_entries, ["cpu  10 0 10 80", "1000 500", "25"], {}, ""),
         ]
     )
     get_ap_info = AsyncMock(return_value=("AP1", "2001:db8::22", [], []))

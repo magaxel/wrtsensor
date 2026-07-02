@@ -365,11 +365,17 @@ class NetworkTableCard extends LitElement {
 
     // Infra hosts (gateway/AP/switch) whose SSH probe failed this cycle are
     // still listed in `devices` via stale ARP data — host_stats.available is
-    // the authoritative signal that the device itself is down.
+    // the authoritative signal for whether the device itself is up, in BOTH
+    // directions. Only falling through on available===false (and leaving
+    // available===true untouched) would let a stale ARP-derived d.online
+    // keep a row stuck offline after the host is confirmed back up, e.g.
+    // right after a reboot.
     const hostStats = state.attributes?.host_stats ?? {};
     const all = (state.attributes?.devices ?? []).map((d) => {
       const stats = d.ip ? hostStats[d.ip] : undefined;
-      return stats?.available === false ? { ...d, online: false } : d;
+      if (stats?.available === true) return { ...d, online: true };
+      if (stats?.available === false) return { ...d, online: false };
+      return d;
     });
     const visible = all.filter(
       (d) =>

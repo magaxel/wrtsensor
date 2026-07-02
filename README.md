@@ -95,7 +95,7 @@ each AP and switch — no redundant shell sensors.
    JavaScript Modules):
 
    - `/wrtsensor_static/network-table-card.js?v=2.4.0`
-   - `/wrtsensor_static/network-topology-card.js?v=1.1.11`
+   - `/wrtsensor_static/network-topology-card.js?v=1.2.1`
    - `/wrtsensor_static/network-events-card.js?v=1.1.2`
    - `/wrtsensor_static/dns-stats-card.js?v=3.0.1`
    - `/wrtsensor_static/wireguard-card.js?v=1.1.0` *(only if WireGuard is enabled)*
@@ -126,9 +126,13 @@ Bundled Lovelace cards — full YAML examples and options in
 - **`network-table-card`** — wide tabular device list with filterable columns.
   Infra rows (gateway/AP/switch) whose SSH probe failed this cycle are dimmed
   and filtered like any other offline device, keyed off `host_stats.available`.
-- **`network-topology-card`** — SVG map of gateway, switches, APs, and clients.
-  An infra node whose SSH probe failed this cycle renders dimmed/offline, same
-  as an offline client — even if it's still visible over ARP.
+- **`network-topology-card`** — SVG map of the real physical hierarchy: router
+  on top, switch(es) beneath it, APs beneath whichever switch they're actually
+  plugged into (or the router directly), and clients attached to whichever
+  node they're actually on. Auto-detected each poll from `bridge fdb show`
+  data already collected from every host — no manual wiring config. An infra
+  node whose SSH probe failed this cycle renders dimmed/offline, same as an
+  offline client — even if it's still visible over ARP.
 - **`network-events-card`** — filterable connect/disconnect/roam/ip_change log.
 - **`dns-stats-card`** — dnsmasq cache hit/miss and upstream latency.
 - **`wireguard-card`** — per-peer WireGuard tunnel status.
@@ -143,7 +147,7 @@ removed from the registry on reload.
 
 | Entity ID | Owning option | What it is |
 |-----------|---------------|-----------|
-| `sensor.<entry>_network_scanner` | Track LAN/Wi-Fi clients | Device count as state; `devices` (with `switch_port`/`switch_host`), `wan_ip`, `wan_ip6`, `gateway_mac`, `host_names`, `ap_hosts`, `ap_names`, `switch_hosts`, `switch_names`, `host_stats`, `partial`, `scan_duration` as attributes. Powers the topology, table, and events cards. |
+| `sensor.<entry>_network_scanner` | Track LAN/Wi-Fi clients | Device count as state; `devices` (with `switch_port`/`switch_host`), `wan_ip`, `wan_ip6`, `gateway_mac`, `host_names`, `ap_hosts`, `ap_names`, `switch_hosts`, `switch_names`, `host_stats`, `host_topology`, `partial`, `scan_duration` as attributes. Powers the topology, table, and events cards. |
 | `device_tracker.<hostname>` | Track LAN/Wi-Fi clients | home/not_home per discovered device — **disabled by default** |
 | `binary_sensor.<entry>_presence_<mac>` | Track LAN/Wi-Fi clients | Online/offline per configured MAC |
 | `sensor.<entry>_wan_download` / `_wan_upload` | Collect WAN bandwidth | WAN RX / TX rate in Mbit/s |

@@ -540,15 +540,18 @@ def parse_ndp(lines: list[str]) -> dict[str, str]:
 
 def collect_wifi(
     host: str, ap_name: str, script: str
-) -> tuple[list[dict[str, Any]], list[str], dict[str, str]]:
+) -> tuple[list[dict[str, Any]], list[str], dict[str, str], str]:
     """Get WiFi associations from an OpenWrt host.
 
-    Returns (entries, hoststat_lines, fdb) where fdb maps MAC -> bridge port.
+    Returns (entries, hoststat_lines, fdb, self_mac) where fdb maps MAC ->
+    bridge port and self_mac is this host's own LAN bridge MAC (empty string
+    if it's running an older collector script that doesn't emit it).
     """
     out = ssh_run(host, script)
     entries: list[dict[str, Any]] = []
     hoststat: list[str] = []
     fdb: dict[str, str] = {}
+    self_mac = ""
     for line in out.splitlines():
         if line.startswith("STAT|"):
             stat_parts = line.split("|")
@@ -564,6 +567,9 @@ def collect_wifi(
                 fport = fdb_parts[2].strip()
                 if fmac and fport:
                     fdb[fmac] = fport
+            continue
+        if line.startswith("SELFMAC|"):
+            self_mac = line[len("SELFMAC|") :].strip().upper()
             continue
         parts = line.split("|")
         if len(parts) < 3:
@@ -624,7 +630,7 @@ def collect_wifi(
                 "exp_tput": exp_tput,
             }
         )
-    return entries, hoststat, fdb
+    return entries, hoststat, fdb, self_mac
 
 
 def resolve_switch_ports(
@@ -652,6 +658,65 @@ def resolve_switch_ports(
         _, host, port = min(cands)
         m = re.search(r"(\d+)$", port)
         result[mac] = {"port": m.group(1) if m else port, "host": host}
+    return result
+
+
+def resolve_infra_parents(
+    fdb_by_host: dict[str, dict[str, str]],
+    self_macs: dict[str, str],
+) -> dict[str, dict[str, str]]:
+    """Resolve each AP's uplink parent from other hosts' FDB tables.
+
+    A host's own MAC never appears in its own FDB dump (filtered as a "self"
+    entry by the collector) but shows up as a normal learned entry in
+    whichever OTHER host's FDB table sees it arrive on the wire — that's the
+    physical uplink. Deliberately does NOT apply the upper uplink-MAC-count
+    threshold like resolve_switch_ports does: a real AP-to-switch port is
+    expected to carry many relayed client MACs, which is exactly the
+    signature that identifies it here, not noise to discard.
+
+    It DOES exclude any candidate port that also carries another known infra
+    host's own MAC. A leaf AP has only one wired port, so that port
+    necessarily aggregates traffic from the ENTIRE rest of the LAN — every
+    other device's MAC eventually gets learned there too, since that's the
+    AP's only path to anything beyond its own radios. That makes a leaf
+    device's FDB useless as a *source* of "who's plugged into me" evidence;
+    only a real switch's per-port table has genuine per-neighbor
+    specificity. A port carrying two or more known infra identities at once
+    is exactly that kind of shared/trunk link and is excluded outright,
+    regardless of MAC count. Confirmed against a live fleet: without this
+    filter, a switch's own MAC — naturally relayed onto an AP's single
+    uplink port along with a dozen other devices' MACs — was incorrectly
+    resolved as "the switch is downstream of the AP."
+
+    Returns AP host -> {"host": parent_host, "port": display_port} only for
+    hosts with a known, non-empty self-MAC that was actually seen, on a
+    plausibly-dedicated port, on some other host's FDB. Absence means "no
+    resolvable parent" (the root, a host only ever seen on shared/trunk
+    ports, or an AP on an older collector script with no self-MAC), not an
+    error.
+    """
+    all_self_macs = {mac for mac in self_macs.values() if mac}
+    port_macs: dict[tuple[str, str], set[str]] = {}
+    for host, fdb in fdb_by_host.items():
+        for mac, port in fdb.items():
+            port_macs.setdefault((host, port), set()).add(mac)
+
+    result: dict[str, dict[str, str]] = {}
+    for host, self_mac in self_macs.items():
+        if not self_mac:
+            continue
+        candidates: list[tuple[int, str, str]] = []
+        for (parent_host, port), macs in port_macs.items():
+            if parent_host == host or self_mac not in macs:
+                continue
+            if (all_self_macs & macs) - {self_mac}:
+                continue  # shared/trunk port — carries another infra identity too
+            candidates.append((len(macs), parent_host, port))
+        if candidates:
+            _, parent_host, port = min(candidates)
+            m = re.search(r"(\d+)$", port)
+            result[host] = {"host": parent_host, "port": m.group(1) if m else port}
     return result
 
 
@@ -1624,16 +1689,20 @@ def collect_all_wifi(
     dict[str, str],
     dict[str, list[str]],
     dict[str, dict[str, str]],
+    dict[str, str],
 ]:
     """Collect WiFi from gateway + all APs in parallel.
-    Returns (wifi_entries, alive_ap_ips, ap_ip6_map, ap_hoststats, fdb_by_host)
-    where ap_hoststats is {ap_ip: [cpu_line, 'mem_total mem_avail']} and
-    fdb_by_host is {host_ip: {MAC: bridge_port}}."""
+    Returns (wifi_entries, alive_ap_ips, ap_ip6_map, ap_hoststats, fdb_by_host,
+    self_macs) where ap_hoststats is {ap_ip: [cpu_line, 'mem_total mem_avail']},
+    fdb_by_host is {host_ip: {MAC: bridge_port}}, and self_macs is
+    {ap_ip: own_lan_bridge_mac} (gateway excluded — it's always the display
+    root when present)."""
     all_wifi: list[dict] = []
     alive_ap_ips: list[str] = []
     ap_ip6_map: dict[str, str] = {}
     ap_hoststats: dict[str, list[str]] = {}
     fdb_by_host: dict[str, dict[str, str]] = {}
+    self_macs: dict[str, str] = {}
 
     # Phase 1: resolve AP hostnames + IPv6 in parallel
     name_map: dict[str, str] = {}
@@ -1664,13 +1733,15 @@ def collect_all_wifi(
         for wfut in concurrent.futures.as_completed(wifi_futs):
             ap_name, host = wifi_futs[wfut]
             try:
-                entries, hoststat, fdb = wfut.result()
+                entries, hoststat, fdb, self_mac = wfut.result()
                 all_wifi.extend(entries)
                 ip = host.split("@")[-1]
                 if hoststat:
                     ap_hoststats[ip] = hoststat
                 if fdb:
                     fdb_by_host[ip] = fdb
+                if self_mac and host != gw_host:
+                    self_macs[ip] = self_mac
                 # An AP is considered alive if it returned hoststat (means SSH worked),
                 # even if no clients are currently associated.
                 if host != gw_host and (entries or hoststat):
@@ -1678,7 +1749,7 @@ def collect_all_wifi(
             except Exception:
                 pass
 
-    return all_wifi, alive_ap_ips, ap_ip6_map, ap_hoststats, fdb_by_host
+    return all_wifi, alive_ap_ips, ap_ip6_map, ap_hoststats, fdb_by_host, self_macs
 
 
 # ------------------------- Build device list -------------------------
@@ -2306,10 +2377,25 @@ def main() -> None:
     arp_hostnames = {mac: dns_cache.get(arp_ips[mac], "") for mac in arp_only_macs}
 
     # Collect WiFi from all APs in parallel
-    wifi, alive_aps, ap_ip6_map, ap_hoststats, fdb_by_host = collect_all_wifi(
-        gw_host, ap_hosts, wifi_script
+    wifi, alive_aps, ap_ip6_map, ap_hoststats, fdb_by_host, self_macs = (
+        collect_all_wifi(gw_host, ap_hosts, wifi_script)
     )
     switch_ports = resolve_switch_ports(fdb_by_host)
+
+    # host_topology maps each AP to its resolved uplink parent (gateway or
+    # another AP acting as a switch) for the topology map. Every AP gets an
+    # entry, even when unresolved (older collector script, or genuinely the
+    # root) — None/None rather than omitted, so the topology card can fall
+    # back to attaching it directly under the gateway.
+    host_topology: dict[str, dict[str, str | None]] = {}
+    infra_parents = resolve_infra_parents(fdb_by_host, self_macs)
+    for ap_host in ap_hosts:
+        ap_ip = ap_host.split("@")[-1]
+        parent = infra_parents.get(ap_ip)
+        host_topology[ap_ip] = {
+            "parent_host": parent["host"] if parent else None,
+            "parent_port": parent["port"] if parent else None,
+        }
 
     # Inject AP IPv6 addresses into ndp (APs never appear in gateway's NDP with global addresses)
     for ap_ip, ap_ip6 in ap_ip6_map.items():
@@ -2526,6 +2612,7 @@ def main() -> None:
         "wan_rx_rate": rx_rate,
         "wan_tx_rate": tx_rate,
         "host_stats": host_stats,
+        "host_topology": host_topology,
         "dns_stats": dns_stats,
         **({"wireguard": wireguard} if enable_wireguard else {}),
         **({"asu": asu} if enable_asu else {}),

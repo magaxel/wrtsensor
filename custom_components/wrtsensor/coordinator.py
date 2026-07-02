@@ -40,9 +40,11 @@ from .parser import (
     parse_hoststat,
     parse_leases,
     parse_ndp,
+    parse_self_mac,
     parse_wg_show_sections,
     parse_wg_uci,
     parse_wifi_output,
+    resolve_infra_parents,
     resolve_switch_ports,
 )
 from .const import (
@@ -1302,7 +1304,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _collect_wifi(
         self, host: str, ap_name: str
-    ) -> tuple[list[dict[str, Any]], list[str], dict[str, str]]:
+    ) -> tuple[list[dict[str, Any]], list[str], dict[str, str], str]:
         metrics_arg = "" if self._enable_host_metrics else " --no-host-metrics"
         out = await self._ssh_run(
             host, f"sh {COLLECTOR_REMOTE_PATH}{metrics_arg}", timeout=12
@@ -1316,7 +1318,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if hostname:
             self._host_names[host] = hostname
         entries, hoststat = parse_wifi_output(out, ap_name)
-        return entries, hoststat, parse_fdb(out)
+        return entries, hoststat, parse_fdb(out), parse_self_mac(out)
 
     @staticmethod
     def _build_wireguard_command() -> str:
@@ -2018,6 +2020,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         alive_ap_ips: list[str] = []
         ap_hoststats: dict[str, list[str]] = {}
         fdb_by_host: dict[str, dict[str, str]] = {}
+        self_macs: dict[str, str] = {}
 
         if collect_host_bundle:
             # Collect WiFi stations, host metrics, and forwarding DB from the
@@ -2037,7 +2040,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 gw_wifi_result = wifi_results[idx]
                 idx += 1
                 if not isinstance(gw_wifi_result, Exception):
-                    entries, hoststat, fdb = gw_wifi_result
+                    entries, hoststat, fdb, _gw_self_mac = gw_wifi_result
                     if self._enable_network_hosts:
                         all_wifi.extend(entries)
                         if fdb:
@@ -2050,11 +2053,13 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 idx += 1
                 if isinstance(result, Exception):
                     continue
-                entries, hoststat, fdb = result
+                entries, hoststat, fdb, self_mac = result
                 if self._enable_network_hosts:
                     all_wifi.extend(entries)
                     if fdb:
                         fdb_by_host[host] = fdb
+                    if self_mac:
+                        self_macs[host] = self_mac
                 ip = host
                 if hoststat:
                     ap_hoststats[ip] = hoststat
@@ -2066,9 +2071,12 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 idx += 1
                 if isinstance(result, Exception):
                     continue
-                _entries, hoststat, fdb = result
-                if self._enable_network_hosts and fdb:
-                    fdb_by_host[host] = fdb
+                _entries, hoststat, fdb, self_mac = result
+                if self._enable_network_hosts:
+                    if fdb:
+                        fdb_by_host[host] = fdb
+                    if self_mac:
+                        self_macs[host] = self_mac
                 if hoststat:
                     ap_hoststats[host] = hoststat
 
@@ -2077,6 +2085,29 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             switch_ports = resolve_switch_ports(
                 fdb_by_host, switch_hosts=set(self._switch_hosts)
             )
+
+        # host_topology maps each configured AP/switch to its resolved uplink
+        # parent (gateway, a switch, or another AP) for the topology map.
+        # Every configured host gets an entry, even when unresolved (older
+        # collector script not yet emitting SELFMAC|, or genuinely the root)
+        # — it reports None/None rather than being omitted, so the frontend
+        # can fall back to attaching it directly under the gateway (today's
+        # flat layout) instead of losing the host from the map entirely.
+        host_topology: dict[str, dict[str, str | None]] = {}
+        if self._enable_network_hosts:
+            infra_parents = (
+                resolve_infra_parents(
+                    fdb_by_host, self_macs, switch_hosts=set(self._switch_hosts)
+                )
+                if fdb_by_host
+                else {}
+            )
+            for host in [*self._ap_hosts, *self._switch_hosts]:
+                parent = infra_parents.get(host)
+                host_topology[host] = {
+                    "parent_host": parent["host"] if parent else None,
+                    "parent_port": parent["port"] if parent else None,
+                }
 
         active_ap_names = set()
         if self._enable_network_hosts:
@@ -2333,6 +2364,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if name_map.get(host) and name_map[host] != host
             }
             result["switch_hosts"] = list(self._switch_hosts)
+            result["host_topology"] = host_topology
             configured_hosts = [
                 host
                 for host in [self._gateway_host, *self._ap_hosts, *self._switch_hosts]

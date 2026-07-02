@@ -6,9 +6,12 @@
 #   STAT|<cpu_stat_line>|<mem_total_kB>|<mem_available_kB>|<root_disk_use_pct>
 # And one FDB| line per MAC learned on a bridged switch port (DSA):
 #   FDB|<MAC>|<port_netdev>
+# And a SELFMAC| line with this host's own LAN bridge MAC (used to place
+# this host in the topology tree via other hosts' FDB tables):
+#   SELFMAC|<MAC>
 # Called remotely over SSH by diagnose.py / coordinator.py.
 # Wi-Fi collection requires iwinfo; hosts without it (e.g. a managed switch)
-# still emit BOARD, STAT, and FDB lines and just skip the Wi-Fi section.
+# still emit BOARD, STAT, FDB, and SELFMAC lines and just skip the Wi-Fi section.
 
 collect_host_metrics=1
 if [ "${1:-}" = "--no-host-metrics" ]; then
@@ -70,6 +73,26 @@ elif command -v brctl >/dev/null 2>&1; then
             if (port != "") print "FDB|" mac "|" port
           }'
     done
+fi
+
+# This host's own LAN bridge MAC. Lets the coordinator find this AP/switch's
+# own uplink in some OTHER host's FDB table above (physical topology
+# detection) — a host's MAC never appears in its own FDB dump (filtered as
+# a "self" entry above), only in whichever host sees it arrive on the wire.
+# Prefer br-lan (the default LAN bridge name); fall back to the first bridge
+# found so non-default bridge names still work. Emits nothing if there's no
+# bridge at all.
+selfmac_path="/sys/class/net/br-lan/address"
+if [ ! -r "$selfmac_path" ]; then
+    for brpath in /sys/class/net/*/bridge; do
+        [ -d "$brpath" ] || continue
+        selfmac_path="${brpath%/bridge}/address"
+        break
+    done
+fi
+if [ -r "$selfmac_path" ]; then
+    read -r selfmac < "$selfmac_path"
+    echo "SELFMAC|$(echo "$selfmac" | tr 'a-z' 'A-Z')"
 fi
 
 # Wi-Fi section needs iwinfo; switches and wired-only hosts stop here.
