@@ -427,6 +427,10 @@ class NetworkTopologyCard extends HTMLElement {
           return d.connection === "gateway";
         })
       : null;
+    // The gateway's own SSH-reachability (host_stats[gateway.ip].available) is
+    // authoritative over its ARP-derived device.online, same as AP/switch nodes.
+    const gatewayStats = gateway ? (hostStats[gateway.ip] ?? {}) : {};
+    const gatewayOnline = gatewayStats.available === false ? false : gateway?.online !== false;
     const apDeviceMatches = new Set();
     const apNodes = [];
     const apNodeKeys = new Set();
@@ -619,6 +623,7 @@ class NetworkTopologyCard extends HTMLElement {
         const date = new Date(d.bw_since * 1000).toLocaleDateString();
         parts.push(`BW tracking: ${age} (since ${date})`);
       }
+      if (d.online === false) parts.push("Status: offline");
       return parts.join("\n");
     };
 
@@ -647,7 +652,12 @@ class NetworkTopologyCard extends HTMLElement {
     };
 
     const switchTitle = (sw) =>
-      [sw.hostname, sw.host && sw.host !== sw.hostname ? `Host: ${sw.host}` : "", sw.model]
+      [
+        sw.hostname,
+        sw.host && sw.host !== sw.hostname ? `Host: ${sw.host}` : "",
+        sw.model,
+        sw.online === false ? "Status: offline" : "",
+      ]
         .filter(Boolean)
         .join("\n");
 
@@ -747,7 +757,7 @@ class NetworkTopologyCard extends HTMLElement {
     if (hasGateway) {
       paths.push(curve(inetX, inetY + 30, gwX, gwY - GW_R, "ntc-link-inet"));
 
-      const gwOp = gateway ? (gateway.online !== false ? "1" : "0.4") : "1";
+      const gwOp = gateway ? (gatewayOnline ? "1" : "0.4") : "1";
       nodes.push(`
         <g>
           ${publicIpRows.length ? `<text x="${gwX - GW_R - 10}" y="${gwY + 4}" text-anchor="end" font-size="11" class="ntc-label">${publicIpLabel}</text>` : ""}
@@ -762,7 +772,7 @@ class NetworkTopologyCard extends HTMLElement {
           nodeTextRows(gateway, gatewayLabel),
           "ntc-gw",
           gwOp,
-          gateway ? nodeTitle(gateway) : gatewayLabel,
+          gateway ? nodeTitle({ ...gateway, online: gatewayOnline }) : gatewayLabel,
         ),
       );
     }
