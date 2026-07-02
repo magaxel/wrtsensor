@@ -92,7 +92,7 @@ if [ ! -r "$selfmac_path" ]; then
 fi
 if [ -r "$selfmac_path" ]; then
     read -r selfmac < "$selfmac_path"
-    echo "SELFMAC|$(echo "$selfmac" | tr 'a-z' 'A-Z')"
+    echo "SELFMAC|$(echo "$selfmac" | tr '[:lower:]' '[:upper:]')"
 fi
 
 # Wi-Fi section needs iwinfo; switches and wired-only hosts stop here.
