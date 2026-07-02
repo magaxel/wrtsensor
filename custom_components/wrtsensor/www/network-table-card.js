@@ -363,7 +363,14 @@ class NetworkTableCard extends LitElement {
       </ha-card>`;
     }
 
-    const all = state.attributes?.devices ?? [];
+    // Infra hosts (gateway/AP/switch) whose SSH probe failed this cycle are
+    // still listed in `devices` via stale ARP data — host_stats.available is
+    // the authoritative signal that the device itself is down.
+    const hostStats = state.attributes?.host_stats ?? {};
+    const all = (state.attributes?.devices ?? []).map((d) => {
+      const stats = d.ip ? hostStats[d.ip] : undefined;
+      return stats?.available === false ? { ...d, online: false } : d;
+    });
     const visible = all.filter(
       (d) =>
         (this._config.show_offline || d.online !== false) &&

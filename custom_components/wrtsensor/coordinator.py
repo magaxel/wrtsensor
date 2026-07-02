@@ -1893,7 +1893,19 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     payload["wan_rx_rate"] = None
                     payload["wan_tx_rate"] = None
                 if self._enable_host_metrics:
-                    payload["host_stats"] = {}
+                    gw_model_info = self._host_models.get(self._gateway_host, ("", ""))
+                    payload["host_stats"] = {
+                        self._gateway_host: {
+                            "hostname": self._host_names.get(self._gateway_host)
+                            or "gateway",
+                            "model": gw_model_info[0],
+                            "board_name": gw_model_info[1],
+                            "available": False,
+                            "cpu": None,
+                            "ram": None,
+                            "disk": None,
+                        }
+                    }
                 if self._enable_dns_stats:
                     payload["dns_stats"] = None
                 if self._enable_wireguard:
@@ -2241,19 +2253,29 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self.hass.async_add_executor_job(self._save_state, new_state)
             self._append_event_buffer(all_events)
 
+        # A host stays in host_stats even when this cycle's SSH probe failed —
+        # omitting it entirely would make the topology map / table card fall
+        # back to stale ARP-derived liveness instead of showing it as down.
         host_stats: dict[str, dict[str, Any]] = {}
-        if self._enable_host_metrics and self._gateway_host and gw_data:
+        if self._enable_host_metrics and self._gateway_host:
             gw_stats = self._compute_host_stats(
-                self._gateway_host, parse_hoststat(gw_data.get("hoststat", []))
+                self._gateway_host,
+                parse_hoststat(gw_data.get("hoststat", [])) if gw_data else None,
             )
-            if gw_stats:
-                gw_model_info = self._host_models.get(self._gateway_host, ("", ""))
-                host_stats[self._gateway_host] = {
-                    "hostname": gw_data.get("gw_hostname", "gateway"),
-                    "model": gw_model_info[0],
-                    "board_name": gw_model_info[1],
-                    **gw_stats,
-                }
+            gw_model_info = self._host_models.get(self._gateway_host, ("", ""))
+            host_stats[self._gateway_host] = {
+                "hostname": (
+                    (gw_data.get("gw_hostname") if gw_data else None)
+                    or self._host_names.get(self._gateway_host)
+                    or "gateway"
+                ),
+                "model": gw_model_info[0],
+                "board_name": gw_model_info[1],
+                "available": gw_stats is not None,
+                "cpu": gw_stats["cpu"] if gw_stats else None,
+                "ram": gw_stats["ram"] if gw_stats else None,
+                "disk": gw_stats["disk"] if gw_stats else None,
+            }
         if self._enable_host_metrics:
             hosts_for_stats = self._ap_hosts + self._switch_hosts
         else:
@@ -2262,24 +2284,22 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             stats = self._compute_host_stats(
                 host, parse_hoststat(ap_hoststats.get(host, []))
             )
-            if stats:
-                ap_model_info = self._host_models.get(host, ("", ""))
-                host_stats[host] = {
-                    "hostname": (
-                        self._host_names.get(host)
-                        or next(
-                            (
-                                d.hostname
-                                for d in devices
-                                if d.ip == host and d.hostname
-                            ),
-                            host,
-                        )
-                    ),
-                    "model": ap_model_info[0],
-                    "board_name": ap_model_info[1],
-                    **stats,
-                }
+            ap_model_info = self._host_models.get(host, ("", ""))
+            host_stats[host] = {
+                "hostname": (
+                    self._host_names.get(host)
+                    or next(
+                        (d.hostname for d in devices if d.ip == host and d.hostname),
+                        host,
+                    )
+                ),
+                "model": ap_model_info[0],
+                "board_name": ap_model_info[1],
+                "available": stats is not None,
+                "cpu": stats["cpu"] if stats else None,
+                "ram": stats["ram"] if stats else None,
+                "disk": stats["disk"] if stats else None,
+            }
 
         # DNS stats — file I/O lives in _compute_dns_rates_sync, run on executor.
         # Skipped entirely when disabled in options; the dns_stats key is then

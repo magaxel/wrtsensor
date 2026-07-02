@@ -2432,28 +2432,34 @@ def main() -> None:
     append_events(events)
     prune_events()
 
-    # Host CPU/RAM stats (gateway + APs)
+    # Host CPU/RAM stats (gateway + APs). A host that failed to respond this
+    # cycle still gets an entry — available=False — so the topology map and
+    # table card can mark it down instead of falling back to stale ARP data.
     host_stats: dict[str, dict[str, Any]] = {}
     gw_ip_key = gw_host.split("@")[-1]
     gw_stats = compute_host_stats(
         gw_ip_key, parse_hoststat(gw_data.get("hoststat", []))
     )
-    if gw_stats:
-        host_stats[gw_ip_key] = {
-            "hostname": gw_data.get("gw_hostname", "gateway"),
-            **gw_stats,
-        }
+    host_stats[gw_ip_key] = {
+        "hostname": gw_data.get("gw_hostname", "gateway"),
+        "available": gw_stats is not None,
+        "cpu": gw_stats["cpu"] if gw_stats else None,
+        "ram": gw_stats["ram"] if gw_stats else None,
+        "disk": gw_stats["disk"] if gw_stats else None,
+    }
     for ap_host in ap_hosts:
         ap_ip = ap_host.split("@")[-1]
         stats = compute_host_stats(ap_ip, parse_hoststat(ap_hoststats.get(ap_ip, [])))
-        if stats:
-            host_stats[ap_ip] = {
-                "hostname": next(
-                    (d.hostname for d in devices if d.ip == ap_ip and d.hostname),
-                    ap_ip,
-                ),
-                **stats,
-            }
+        host_stats[ap_ip] = {
+            "hostname": next(
+                (d.hostname for d in devices if d.ip == ap_ip and d.hostname),
+                ap_ip,
+            ),
+            "available": stats is not None,
+            "cpu": stats["cpu"] if stats else None,
+            "ram": stats["ram"] if stats else None,
+            "disk": stats["disk"] if stats else None,
+        }
 
     # dnsmasq DNS cache stats
     dns_stats = compute_dns_rates(parse_dns_stats(gw_data.get("dns", [])))

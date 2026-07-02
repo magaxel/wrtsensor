@@ -124,7 +124,11 @@ Bundled Lovelace cards — full YAML examples and options in
 [docs/cards.md](docs/cards.md):
 
 - **`network-table-card`** — wide tabular device list with filterable columns.
+  Infra rows (gateway/AP/switch) whose SSH probe failed this cycle are dimmed
+  and filtered like any other offline device, keyed off `host_stats.available`.
 - **`network-topology-card`** — SVG map of gateway, switches, APs, and clients.
+  An infra node whose SSH probe failed this cycle renders dimmed/offline, same
+  as an offline client — even if it's still visible over ARP.
 - **`network-events-card`** — filterable connect/disconnect/roam/ip_change log.
 - **`dns-stats-card`** — dnsmasq cache hit/miss and upstream latency.
 - **`wireguard-card`** — per-peer WireGuard tunnel status.

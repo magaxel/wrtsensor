@@ -537,6 +537,7 @@ def test_gateway_unreachable_with_prev_state_returns_partial():
         result = asyncio.run(c._async_update_data())
     assert result["partial"] is True
     assert result["device_count"] == 1  # only online device counted
+    assert result["host_stats"]["192.0.2.1"]["available"] is False
 
 
 def test_gateway_unreachable_no_prev_raises_update_failed():
@@ -986,6 +987,44 @@ def test_ap_unreachable_gateway_device_still_present():
 
     macs = {d["mac"] for d in result["devices"]}
     assert _MINIMAL_GW["gw_mac"] in macs
+
+
+def test_ap_unreachable_marked_unavailable_in_host_stats():
+    """An AP whose SSH probe fails still gets a host_stats entry, flagged down —
+    the topology map and table card key off this instead of dropping the host."""
+    c = _make_coordinator(ap_hosts="192.0.2.22")
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch.object(c, "_collect_gateway", new=AsyncMock(return_value=_MINIMAL_GW))
+        )
+        stack.enter_context(
+            patch.object(
+                c,
+                "_collect_wifi",
+                new=AsyncMock(
+                    side_effect=[
+                        ([], [], {}),  # gateway WiFi OK
+                        Exception("SSH timeout"),  # AP WiFi fails
+                    ]
+                ),
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                c, "_get_ap_info", new=AsyncMock(return_value=("AP1", "", [], []))
+            )
+        )
+        stack.enter_context(
+            patch.object(c, "_ping_stale", new=AsyncMock(return_value=[]))
+        )
+        stack.enter_context(
+            patch.object(c, "_resolve_hostnames", new=AsyncMock(return_value={}))
+        )
+        stack.enter_context(patch.object(c, "_detect_wan_events", return_value=[]))
+        result = asyncio.run(c._async_update_data())
+
+    assert result["host_stats"]["192.0.2.22"]["available"] is False
+    assert result["host_stats"]["192.0.2.22"]["cpu"] is None
 
 
 # ── APs-only mode (no gateway configured) ────────────────────────────────────
