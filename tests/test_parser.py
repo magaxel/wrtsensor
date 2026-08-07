@@ -18,8 +18,10 @@ parse_dns_stats = coord.parse_dns_stats
 parse_board_info = parser.parse_board_info
 parse_board_model = parser.parse_board_model
 parse_fdb = parser.parse_fdb
+parse_port_bytes = parser.parse_port_bytes
 parse_self_mac = parser.parse_self_mac
 resolve_switch_ports = parser.resolve_switch_ports
+resolve_port_bytes = parser.resolve_port_bytes
 resolve_infra_parents = parser.resolve_infra_parents
 _is_random_mac = parser._is_random_mac
 
@@ -890,6 +892,72 @@ class TestResolveSwitchPorts:
     def test_non_numeric_port_falls_back_to_raw(self):
         ports = resolve_switch_ports({"sw": {"AA:BB:CC:DD:EE:01": "wan"}})
         assert ports == {"AA:BB:CC:DD:EE:01": {"port": "wan", "host": "sw"}}
+
+
+class TestParsePortBytes:
+    def test_extracts_port_counters(self):
+        out = (
+            "STAT|cpu  1 2 3 4|1000|500|10\n"
+            "PORTBYTES|lan5|12345|67890\n"
+            "PORTBYTES|lan6|1|2\n"
+        )
+        assert parse_port_bytes(out) == {
+            "lan5": {"rx": 12345, "tx": 67890},
+            "lan6": {"rx": 1, "tx": 2},
+        }
+
+    def test_ignores_malformed_and_non_portbytes_lines(self):
+        out = (
+            "PORTBYTES|lan5|12345\n"  # too few fields
+            "PORTBYTES||1|2\n"  # empty port
+            "PORTBYTES|lan6|x|2\n"  # non-integer rx
+            "random line\n"
+            "PORTBYTES|lan7|10|20\n"
+        )
+        assert parse_port_bytes(out) == {"lan7": {"rx": 10, "tx": 20}}
+
+    def test_wifi_parser_skips_portbytes_lines(self):
+        # A PORTBYTES| line must never be mistaken for a Wi-Fi station entry.
+        entries, _ = parse_wifi_output("PORTBYTES|lan5|1|2\n", "AP1")
+        assert entries == []
+
+
+class TestResolvePortBytes:
+    def test_single_device_port_attributed_with_direction_swap(self):
+        # Device alone on the switch's lan5. Port rx (frames INTO the switch) is
+        # the device's upload (ul); port tx is its download (dl).
+        fdb = {"sw": {"AA:BB:CC:DD:EE:01": "lan5"}}
+        pbytes = {"sw": {"lan5": {"rx": 100, "tx": 900}}}
+        assert resolve_port_bytes(fdb, pbytes) == {
+            "AA:BB:CC:DD:EE:01": {"ul": 100, "dl": 900}
+        }
+
+    def test_shared_port_not_attributed(self):
+        # Two MACs learned on one port (a downstream dumb switch): the aggregate
+        # counters cannot be assigned to a single device.
+        fdb = {"sw": {"AA:BB:CC:DD:EE:01": "lan5", "AA:BB:CC:DD:EE:02": "lan5"}}
+        pbytes = {"sw": {"lan5": {"rx": 100, "tx": 900}}}
+        assert resolve_port_bytes(fdb, pbytes) == {}
+
+    def test_uplink_winner_attribution_uses_access_port(self):
+        # The device's winning access port is its single-MAC switch port, not the
+        # crowded router uplink it is also learned on — bytes come from lan5.
+        switch = {"AA:BB:CC:DD:EE:01": "lan5"}
+        uplink = {f"AA:BB:CC:DD:EE:{i:02d}": "lan1" for i in range(1, 8)}
+        uplink["AA:BB:CC:DD:EE:01"] = "lan1"
+        fdb = {"switch": switch, "router": uplink}
+        pbytes = {
+            "switch": {"lan5": {"rx": 5, "tx": 6}},
+            "router": {"lan1": {"rx": 999, "tx": 999}},
+        }
+        assert resolve_port_bytes(fdb, pbytes, uplink_threshold=4) == {
+            "AA:BB:CC:DD:EE:01": {"ul": 5, "dl": 6}
+        }
+
+    def test_missing_port_counter_skipped(self):
+        # Winner resolved but no PORTBYTES for that port (older collector script).
+        fdb = {"sw": {"AA:BB:CC:DD:EE:01": "lan5"}}
+        assert resolve_port_bytes(fdb, {}) == {}
 
 
 class TestParseSelfMac:

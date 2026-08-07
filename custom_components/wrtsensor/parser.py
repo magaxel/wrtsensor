@@ -146,6 +146,9 @@ def parse_wifi_output(out: str, ap_name: str) -> tuple[list[dict[str, Any]], lis
         if line.startswith("FDB|"):
             # Forwarding-DB lines are handled by parse_fdb; never a wifi station.
             continue
+        if line.startswith("PORTBYTES|"):
+            # Per-port byte counters are handled by parse_port_bytes.
+            continue
         parts = line.split("|")
         if len(parts) < 3:
             continue
@@ -204,6 +207,30 @@ def parse_fdb(out: str) -> dict[str, str]:
     return result
 
 
+def parse_port_bytes(out: str) -> dict[str, dict[str, int]]:
+    """Map bridge port netdev -> cumulative byte counters from ``PORTBYTES|`` lines.
+
+    Format per line is ``PORTBYTES|<port_netdev>|<rx_bytes>|<tx_bytes>`` (e.g.
+    ``PORTBYTES|lan5|12345|67890``). Counters are from the switch's point of
+    view (``rx`` = frames the switch received on the port).
+    """
+    result: dict[str, dict[str, int]] = {}
+    for line in out.splitlines():
+        if not line.startswith("PORTBYTES|"):
+            continue
+        parts = line.split("|")
+        if len(parts) >= 4:
+            port = parts[1].strip()
+            try:
+                rx = int(parts[2])
+                tx = int(parts[3])
+            except ValueError:
+                continue
+            if port:
+                result[port] = {"rx": rx, "tx": tx}
+    return result
+
+
 def _port_number(port: str) -> str:
     """Display label for a bridge port: trailing digits of the netdev name.
 
@@ -214,20 +241,20 @@ def _port_number(port: str) -> str:
     return m.group(1) if m else port
 
 
-def resolve_switch_ports(
+def _winning_ports(
     fdb_by_host: dict[str, dict[str, str]],
-    switch_hosts: set[str] | None = None,
-    uplink_threshold: int = FDB_UPLINK_MAC_THRESHOLD,
-) -> dict[str, dict[str, str]]:
-    """Resolve each MAC to the access port it is physically connected to.
+    switch_hosts: set[str] | None,
+    uplink_threshold: int,
+) -> dict[str, tuple[str, str, int]]:
+    """Per MAC, the winning access port as ``(host, port_netdev, mac_count)``.
 
     A MAC is learned both on its real access port and on the uplink/trunk ports
     of every other OpenWrt device. Ports carrying more than ``uplink_threshold``
     MACs are treated as uplinks and ignored. Among the remaining candidates the
     port with the fewest MACs (the most specific access port) wins, preferring a
-    designated switch host on ties.
-
-    Returns ``mac -> {"port": display_port, "host": switch_host}``.
+    designated switch host on ties. Shared by ``resolve_switch_ports`` (for the
+    display port) and ``resolve_port_bytes`` (for per-port byte attribution) so
+    both agree on which port a device sits on.
     """
     switch_hosts = switch_hosts or set()
     port_macs: dict[tuple[str, str], set[str]] = {}
@@ -245,10 +272,54 @@ def resolve_switch_ports(
             candidates.setdefault(mac, []).append(
                 (len(macs), 0 if host in switch_hosts else 1, host, port)
             )
-    result: dict[str, dict[str, str]] = {}
+    winners: dict[str, tuple[str, str, int]] = {}
     for mac, cands in candidates.items():
-        _, _, host, port = min(cands)
-        result[mac] = {"port": _port_number(port), "host": host}
+        count, _, host, port = min(cands)
+        winners[mac] = (host, port, count)
+    return winners
+
+
+def resolve_switch_ports(
+    fdb_by_host: dict[str, dict[str, str]],
+    switch_hosts: set[str] | None = None,
+    uplink_threshold: int = FDB_UPLINK_MAC_THRESHOLD,
+) -> dict[str, dict[str, str]]:
+    """Resolve each MAC to the access port it is physically connected to.
+
+    Returns ``mac -> {"port": display_port, "host": switch_host}``.
+    """
+    winners = _winning_ports(fdb_by_host, switch_hosts, uplink_threshold)
+    return {
+        mac: {"port": _port_number(port), "host": host}
+        for mac, (host, port, _count) in winners.items()
+    }
+
+
+def resolve_port_bytes(
+    fdb_by_host: dict[str, dict[str, str]],
+    port_bytes_by_host: dict[str, dict[str, dict[str, int]]],
+    switch_hosts: set[str] | None = None,
+    uplink_threshold: int = FDB_UPLINK_MAC_THRESHOLD,
+) -> dict[str, dict[str, int]]:
+    """Per-MAC wired byte counters from the switch port each device sits alone on.
+
+    Only single-device access ports (exactly one learned MAC) are attributed, so
+    shared ports (a downstream dumb switch, uplinks/trunks) are skipped — their
+    aggregate counters can't be assigned to one device. Direction is swapped to
+    the device's perspective: the switch port's ``rx`` is the device's upload
+    (``ul``) and its ``tx`` is the device's download (``dl``).
+
+    Returns ``mac -> {"ul": bytes, "dl": bytes}``.
+    """
+    winners = _winning_ports(fdb_by_host, switch_hosts, uplink_threshold)
+    result: dict[str, dict[str, int]] = {}
+    for mac, (host, port, count) in winners.items():
+        if count != 1:
+            continue
+        pb = port_bytes_by_host.get(host, {}).get(port)
+        if not pb:
+            continue
+        result[mac] = {"ul": pb["rx"], "dl": pb["tx"]}
     return result
 
 

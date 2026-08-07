@@ -9,9 +9,13 @@
 # And a SELFMAC| line with this host's own LAN bridge MAC (used to place
 # this host in the topology tree via other hosts' FDB tables):
 #   SELFMAC|<MAC>
+# And one PORTBYTES| line per enslaved bridge port with its cumulative sysfs
+# byte counters (used to derive wired Tx/Rx totals for the device on that port):
+#   PORTBYTES|<port_netdev>|<rx_bytes>|<tx_bytes>
 # Called remotely over SSH by diagnose.py / coordinator.py.
 # Wi-Fi collection requires iwinfo; hosts without it (e.g. a managed switch)
-# still emit BOARD, STAT, FDB, and SELFMAC lines and just skip the Wi-Fi section.
+# still emit BOARD, STAT, FDB, SELFMAC, and PORTBYTES lines and just skip the
+# Wi-Fi section.
 
 collect_host_metrics=1
 if [ "${1:-}" = "--no-host-metrics" ]; then
@@ -94,6 +98,29 @@ if [ -r "$selfmac_path" ]; then
     read -r selfmac < "$selfmac_path"
     echo "SELFMAC|$(echo "$selfmac" | tr '[:lower:]' '[:upper:]')"
 fi
+
+# Per-port byte counters for wired clients. Each enslaved bridge port (a DSA
+# `lanN` netdev under `br-lan`) exposes cumulative RX/TX byte counters in sysfs.
+# The coordinator maps a port back to the single MAC learned on it (via the FDB
+# above) to derive that device's wired Tx/Rx. Direction is from the switch's
+# point of view: port rx_bytes = frames the switch received from the device
+# (its upload); port tx_bytes = frames the switch sent to it (its download).
+# Shell builtins only (no fork/exec per port) for RAM-constrained switches.
+for brpath in /sys/class/net/*/bridge; do
+    [ -d "$brpath" ] || continue
+    br=${brpath%/bridge}
+    br=${br##*/}
+    for p in /sys/class/net/"$br"/brif/*; do
+        [ -e "$p" ] || continue
+        port=${p##*/}
+        rxf="/sys/class/net/${port}/statistics/rx_bytes"
+        txf="/sys/class/net/${port}/statistics/tx_bytes"
+        [ -r "$rxf" ] && [ -r "$txf" ] || continue
+        read -r rxb < "$rxf" || continue
+        read -r txb < "$txf" || continue
+        echo "PORTBYTES|${port}|${rxb}|${txb}"
+    done
+done
 
 # Wi-Fi section needs iwinfo; switches and wired-only hosts stop here.
 command -v iwinfo >/dev/null 2>&1 || exit 0

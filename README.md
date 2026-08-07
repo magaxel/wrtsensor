@@ -29,9 +29,10 @@ Any mix works; each role is optional on its own, but at least one host must be c
   forwarding table (`bridge fdb`) reports **which switch port** a wired device is on.
 
 If autodetection ever picks the wrong role, append `=gateway`, `=ap`, or `=switch` to that
-IP (e.g. `192.0.2.5=switch`). Switch ports show in the `network-table-card` **Port/AP**
-column and as the `switch_port` attribute on each device; `switch_host` identifies which
-detected switch reported the access port.
+IP (e.g. `192.0.2.5=switch`). A wired device's access port shows in the
+`network-table-card` **Port/AP** column as `<SwitchName> #<port>` (e.g. `KallarenAP #17`,
+falling back to `Port 17` when the switch's hostname is unknown), and as the `switch_port`
+attribute on each device; `switch_host` identifies which detected switch reported it.
 
 ## What it collects
 
@@ -46,6 +47,10 @@ toggling the rest off after first run.
   binary sensors. Required by the topology, table, and events cards.
 - **Wi-Fi metrics** — AP, band, signal, noise, SNR, TX/RX PHY rates, expected
   throughput, per-station byte counters. Tied to Network hosts.
+- **Per-device Tx/Rx totals** — cumulative download/upload per device. Wi-Fi clients use
+  their AP station counters; wired devices on a dedicated OpenWrt switch port use that
+  port's byte counters (captures intra-LAN traffic), falling back to the gateway's
+  conntrack table when a device shares a port or sits behind a dumb switch.
 - **Host stats** *(default on)* — CPU%, RAM%, root disk%, hardware model, board name
   per configured host.
 - **WAN bandwidth** *(default on)* — gateway WAN RX/TX rate and byte totals.
@@ -94,7 +99,7 @@ each AP and switch — no redundant shell sensors.
 6. Add the Lovelace resources in **Settings → Dashboards → Resources** (all
    JavaScript Modules):
 
-   - `/wrtsensor_static/network-table-card.js?v=2.4.0`
+   - `/wrtsensor_static/network-table-card.js?v=2.5.0`
    - `/wrtsensor_static/network-topology-card.js?v=1.2.1`
    - `/wrtsensor_static/network-events-card.js?v=1.1.2`
    - `/wrtsensor_static/dns-stats-card.js?v=3.0.1`
@@ -176,8 +181,9 @@ detected as the gateway and also collects its own Wi-Fi.
 | WAN interface | autodetected (e.g. `eth0`) |
 
 The LAN bridge and WAN interface are autodetected from the gateway; leave the matching
-options blank unless you need to override them. WAN bandwidth, DNS cache, and
-conntrack-derived per-device bandwidth are only collected when a gateway is detected. In APs-only mode, devices are discovered via
+options blank unless you need to override them. WAN bandwidth, DNS cache, and the
+conntrack fallback for per-device bandwidth are only collected when a gateway is detected
+(per-switch-port Tx/Rx totals still work without one). In APs-only mode, devices are discovered via
 each AP's `ip -4/-6 neigh show dev br-lan`; DHCP hostnames are unavailable since the
 non-OpenWrt router holds them. Configured OpenWrt gateway, AP, and switch devices
 use their own `ubus call system board` hostname when available, including

@@ -5,7 +5,7 @@ import {
   nothing,
 } from "https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js";
 
-const CARD_VERSION = "2.4.0";
+const CARD_VERSION = "2.5.0";
 const CARD_TYPE = "network-table-card";
 const EDITOR_TYPE = `${CARD_TYPE}-editor`;
 
@@ -115,7 +115,9 @@ function colDisplayName(col) {
 function portApValue(d) {
   if (isUnknownPath(d)) return "Unknown";
   if (isConfirmedWifi(d) && d.ap) return d.ap;
-  if (d.switch_port) return `Port ${d.switch_port}`;
+  if (d.switch_port) {
+    return d._switchName ? `${d._switchName} #${d.switch_port}` : `Port ${d.switch_port}`;
+  }
   return "";
 }
 
@@ -371,11 +373,29 @@ class NetworkTableCard extends LitElement {
     // keep a row stuck offline after the host is confirmed back up, e.g.
     // right after a reboot.
     const hostStats = state.attributes?.host_stats ?? {};
+    const switchNames = state.attributes?.switch_names ?? {};
+    const hostNames = state.attributes?.host_names ?? {};
+    const switchHosts = state.attributes?.switch_hosts ?? [];
+    // Resolve a wired device's owning switch to a friendly name, mirroring the
+    // topology card: switch_names → host_names → single-switch fallback.
+    const switchName = (d) => {
+      const key = d.switch_host;
+      if (!key) return "";
+      return (
+        switchNames[key] ||
+        hostNames[key] ||
+        (switchHosts.length === 1
+          ? switchNames[switchHosts[0]] || hostNames[switchHosts[0]]
+          : "") ||
+        ""
+      );
+    };
     const all = (state.attributes?.devices ?? []).map((d) => {
       const stats = d.ip ? hostStats[d.ip] : undefined;
-      if (stats?.available === true) return { ...d, online: true };
-      if (stats?.available === false) return { ...d, online: false };
-      return d;
+      const _switchName = switchName(d);
+      if (stats?.available === true) return { ...d, _switchName, online: true };
+      if (stats?.available === false) return { ...d, _switchName, online: false };
+      return { ...d, _switchName };
     });
     const visible = all.filter(
       (d) =>

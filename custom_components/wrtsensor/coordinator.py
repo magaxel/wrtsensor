@@ -40,11 +40,13 @@ from .parser import (
     parse_hoststat,
     parse_leases,
     parse_ndp,
+    parse_port_bytes,
     parse_self_mac,
     parse_wg_show_sections,
     parse_wg_uci,
     parse_wifi_output,
     resolve_infra_parents,
+    resolve_port_bytes,
     resolve_switch_ports,
 )
 from .const import (
@@ -1304,7 +1306,9 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _collect_wifi(
         self, host: str, ap_name: str
-    ) -> tuple[list[dict[str, Any]], list[str], dict[str, str], str]:
+    ) -> tuple[
+        list[dict[str, Any]], list[str], dict[str, str], str, dict[str, dict[str, int]]
+    ]:
         metrics_arg = "" if self._enable_host_metrics else " --no-host-metrics"
         out = await self._ssh_run(
             host, f"sh {COLLECTOR_REMOTE_PATH}{metrics_arg}", timeout=12
@@ -1318,7 +1322,13 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if hostname:
             self._host_names[host] = hostname
         entries, hoststat = parse_wifi_output(out, ap_name)
-        return entries, hoststat, parse_fdb(out), parse_self_mac(out)
+        return (
+            entries,
+            hoststat,
+            parse_fdb(out),
+            parse_self_mac(out),
+            parse_port_bytes(out),
+        )
 
     @staticmethod
     def _build_wireguard_command() -> str:
@@ -1743,36 +1753,26 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self,
         wifi_bytes: dict[str, dict[str, int]],
         wired_bytes: dict[str, dict[str, int]],
+        port_bytes: dict[str, dict[str, int]],
     ) -> tuple[dict[str, dict[str, int | None]], dict[str, dict[str, int]]]:
         now = time.time()
         p = self._device_bw
         prev_ts = float(p.get("ts", 0.0))
-        prev_wifi = p.get("wifi", {})
-        prev_wired = p.get("wired", {})
         elapsed = now - prev_ts
         rates: dict[str, dict[str, int | None]] = {}
         deltas: dict[str, dict[str, int]] = {}
-        if BW_MIN_ELAPSED_S <= elapsed < BW_MAX_AGE_S:
-            for mac, curr in wifi_bytes.items():
-                prev_m = prev_wifi.get(mac)
-                if not prev_m:
-                    continue
-                d_ul = curr["ul"] - prev_m.get("ul", 0)
-                d_dl = curr["dl"] - prev_m.get("dl", 0)
-                rx = max(0, int(d_dl / elapsed))
-                tx = max(0, int(d_ul / elapsed))
-                rates[mac] = {
-                    "rx_bps": rx if rx <= BW_MAX_RATE_BPS else None,
-                    "tx_bps": tx if tx <= BW_MAX_RATE_BPS else None,
-                }
-                deltas[mac] = {
-                    "rx": max(0, d_dl) if rx <= BW_MAX_RATE_BPS else 0,
-                    "tx": max(0, d_ul) if tx <= BW_MAX_RATE_BPS else 0,
-                }
-            for mac, curr in wired_bytes.items():
+
+        def _accumulate(
+            curr_bytes: dict[str, dict[str, int]], prev_bytes: dict[str, dict[str, int]]
+        ) -> None:
+            # First source with both prev+curr for a MAC wins (priority order).
+            # Requiring a matching prev in the SAME source means a MAC switching
+            # sources between scans is skipped for one interval rather than
+            # producing a garbage delta from mismatched counters.
+            for mac, curr in curr_bytes.items():
                 if mac in rates:
                     continue
-                prev_m = prev_wired.get(mac)
+                prev_m = prev_bytes.get(mac)
                 if not prev_m:
                     continue
                 d_ul = curr["ul"] - prev_m.get("ul", 0)
@@ -1787,7 +1787,19 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "rx": max(0, d_dl) if rx <= BW_MAX_RATE_BPS else 0,
                     "tx": max(0, d_ul) if tx <= BW_MAX_RATE_BPS else 0,
                 }
-        self._device_bw = {"ts": now, "wifi": wifi_bytes, "wired": wired_bytes}
+
+        if BW_MIN_ELAPSED_S <= elapsed < BW_MAX_AGE_S:
+            # Priority: Wi-Fi station counters, then per-switch-port counters
+            # (accurate wired, captures intra-LAN), then gateway conntrack.
+            _accumulate(wifi_bytes, p.get("wifi", {}))
+            _accumulate(port_bytes, p.get("port", {}))
+            _accumulate(wired_bytes, p.get("wired", {}))
+        self._device_bw = {
+            "ts": now,
+            "wifi": wifi_bytes,
+            "wired": wired_bytes,
+            "port": port_bytes,
+        }
         accum = self._device_bw_accum
         for mac, delta in deltas.items():
             if mac not in accum:
@@ -2020,6 +2032,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         alive_ap_ips: list[str] = []
         ap_hoststats: dict[str, list[str]] = {}
         fdb_by_host: dict[str, dict[str, str]] = {}
+        port_bytes_by_host: dict[str, dict[str, dict[str, int]]] = {}
         self_macs: dict[str, str] = {}
 
         if collect_host_bundle:
@@ -2040,11 +2053,13 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 gw_wifi_result = wifi_results[idx]
                 idx += 1
                 if not isinstance(gw_wifi_result, Exception):
-                    entries, hoststat, fdb, _gw_self_mac = gw_wifi_result
+                    entries, hoststat, fdb, _gw_self_mac, port_bytes = gw_wifi_result
                     if self._enable_network_hosts:
                         all_wifi.extend(entries)
                         if fdb:
                             fdb_by_host[self._gateway_host] = fdb
+                        if port_bytes:
+                            port_bytes_by_host[self._gateway_host] = port_bytes
                     if hoststat:
                         ap_hoststats[self._gateway_host] = hoststat
 
@@ -2053,11 +2068,13 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 idx += 1
                 if isinstance(result, Exception):
                     continue
-                entries, hoststat, fdb, self_mac = result
+                entries, hoststat, fdb, self_mac, port_bytes = result
                 if self._enable_network_hosts:
                     all_wifi.extend(entries)
                     if fdb:
                         fdb_by_host[host] = fdb
+                    if port_bytes:
+                        port_bytes_by_host[host] = port_bytes
                     if self_mac:
                         self_macs[host] = self_mac
                 ip = host
@@ -2071,10 +2088,12 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 idx += 1
                 if isinstance(result, Exception):
                     continue
-                _entries, hoststat, fdb, self_mac = result
+                _entries, hoststat, fdb, self_mac, port_bytes = result
                 if self._enable_network_hosts:
                     if fdb:
                         fdb_by_host[host] = fdb
+                    if port_bytes:
+                        port_bytes_by_host[host] = port_bytes
                     if self_mac:
                         self_macs[host] = self_mac
                 if hoststat:
@@ -2186,8 +2205,16 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 wmac = ip_to_mac.get(ip)
                 if wmac and wmac not in wifi_bytes:
                     wired_bytes[wmac] = bw
+            # Per-switch-port byte counters for directly-wired devices. More
+            # accurate than conntrack (it captures intra-LAN traffic the gateway
+            # never routes), so it takes priority over wired_bytes below.
+            port_bytes_by_mac = resolve_port_bytes(
+                fdb_by_host,
+                port_bytes_by_host,
+                switch_hosts=set(self._switch_hosts),
+            )
             device_rates, device_accum = self._compute_device_rates(
-                wifi_bytes, wired_bytes
+                wifi_bytes, wired_bytes, port_bytes_by_mac
             )
 
             # Build device list

@@ -33,10 +33,12 @@ columns:
 ```
 
 The `ap` column is displayed as **Port/AP**. It shows the AP name for Wi-Fi clients
-and `Port <number>` for wired clients learned from a configured switch. Devices
-with no current Wi-Fi station match and no switch-port attribution show as
-**Unknown** unless `show_unknown: false` is set. Existing dashboards that still list
-`switch_port` are mapped to `ap` automatically by the card.
+and `<SwitchName> #<port>` for wired clients learned from a configured switch (e.g.
+`KallarenAP #17`), where the name is the switch's own hostname; it falls back to
+`Port <number>` when that hostname is unknown. Devices with no current Wi-Fi station
+match and no switch-port attribution show as **Unknown** unless `show_unknown: false`
+is set. Existing dashboards that still list `switch_port` are mapped to `ap`
+automatically by the card.
 
 ## `network-topology-card`
 
