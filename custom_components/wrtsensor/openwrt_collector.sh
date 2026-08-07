@@ -9,20 +9,24 @@
 # And a SELFMAC| line with this host's own LAN bridge MAC (used to place
 # this host in the topology tree via other hosts' FDB tables):
 #   SELFMAC|<MAC>
-# And one PORTBYTES| line per enslaved bridge port with its cumulative sysfs
-# byte counters and negotiated link speed in Mbit/s (used to derive wired Tx/Rx
-# totals and the wired link rate for the device on that port; speed is empty
-# when the link is down or unknown):
+# And one PORTBYTES| line per enslaved WIRED bridge port with its cumulative
+# sysfs byte counters and negotiated link speed in Mbit/s (speed empty when the
+# link is down or unknown):
 #   PORTBYTES|<port_netdev>|<rx_bytes>|<tx_bytes>|<speed_mbit>
-# Called remotely over SSH by diagnose.py / coordinator.py.
+# Called remotely over SSH by diagnose.py / coordinator.py. diagnose.py passes
+# this whole file as the SSH command argument, so it must stay well under
+# dropbear's 9000-byte MAX_CMD_LEN or the switch resets the connection and
+# every FDB/PORTBYTES line silently disappears (see tests).
 # Wi-Fi collection requires iwinfo; hosts without it (e.g. a managed switch)
-# still emit BOARD, STAT, FDB, SELFMAC, and PORTBYTES lines and just skip the
-# Wi-Fi section.
+# still emit BOARD, STAT, FDB, SELFMAC, and PORTBYTES lines.
 
 collect_host_metrics=1
 if [ "${1:-}" = "--no-host-metrics" ]; then
     collect_host_metrics=0
 fi
+
+# Overridable so the bridge/port scans below can be tested on a fixture tree.
+NETDIR="${WRTSENSOR_NETDIR:-/sys/class/net}"
 
 # Clean up leftover children only on interrupt/termination. Deliberately NOT on
 # EXIT: `kill 0` on normal completion also tears down the SSH session's process
@@ -61,12 +65,12 @@ elif command -v brctl >/dev/null 2>&1; then
     # netdev (lanN) via sysfs, where port_no is hex. Only non-local entries.
     # Uses shell builtins (read, parameter expansion) instead of cat/basename to
     # avoid dozens of fork/exec per run on RAM-constrained switches.
-    for brpath in /sys/class/net/*/bridge; do
+    for brpath in "$NETDIR"/*/bridge; do
         [ -d "$brpath" ] || continue
         br=${brpath%/bridge}
         br=${br##*/}
         {
-            for p in /sys/class/net/"$br"/brif/*; do
+            for p in "$NETDIR/$br"/brif/*; do
                 [ -e "$p/port_no" ] || continue
                 read -r pn < "$p/port_no" || continue
                 printf 'P|%d|%s\n' "$pn" "${p##*/}"
@@ -88,9 +92,9 @@ fi
 # Prefer br-lan (the default LAN bridge name); fall back to the first bridge
 # found so non-default bridge names still work. Emits nothing if there's no
 # bridge at all.
-selfmac_path="/sys/class/net/br-lan/address"
+selfmac_path="$NETDIR/br-lan/address"
 if [ ! -r "$selfmac_path" ]; then
-    for brpath in /sys/class/net/*/bridge; do
+    for brpath in "$NETDIR"/*/bridge; do
         [ -d "$brpath" ] || continue
         selfmac_path="${brpath%/bridge}/address"
         break
@@ -101,29 +105,31 @@ if [ -r "$selfmac_path" ]; then
     echo "SELFMAC|$(echo "$selfmac" | tr '[:lower:]' '[:upper:]')"
 fi
 
-# Per-port byte counters for wired clients. Each enslaved bridge port (a DSA
-# `lanN` netdev under `br-lan`) exposes cumulative RX/TX byte counters in sysfs.
-# The coordinator maps a port back to the single MAC learned on it (via the FDB
-# above) to derive that device's wired Tx/Rx. Direction is from the switch's
-# point of view: port rx_bytes = frames the switch received from the device
-# (its upload); port tx_bytes = frames the switch sent to it (its download).
+# Per-port byte counters for wired clients. The coordinator maps a port back to
+# the single MAC learned on it (via the FDB above) to derive that device's wired
+# Tx/Rx. Direction is from the switch's point of view: rx_bytes = frames it
+# received from the device (its upload); tx_bytes = frames it sent (download).
+# Wireless vifs are skipped — their counters are radio-wide, so a lone station
+# on an SSID would be charged every other station's traffic plus flooded
+# multicast; Wi-Fi clients get per-station counters from iwinfo below.
 # Shell builtins only (no fork/exec per port) for RAM-constrained switches.
-for brpath in /sys/class/net/*/bridge; do
+for brpath in "$NETDIR"/*/bridge; do
     [ -d "$brpath" ] || continue
     br=${brpath%/bridge}
     br=${br##*/}
-    for p in /sys/class/net/"$br"/brif/*; do
+    for p in "$NETDIR/$br"/brif/*; do
         [ -e "$p" ] || continue
         port=${p##*/}
-        rxf="/sys/class/net/${port}/statistics/rx_bytes"
-        txf="/sys/class/net/${port}/statistics/tx_bytes"
+        [ -e "$NETDIR/${port}/phy80211" ] && continue
+        rxf="$NETDIR/${port}/statistics/rx_bytes"
+        txf="$NETDIR/${port}/statistics/tx_bytes"
         [ -r "$rxf" ] && [ -r "$txf" ] || continue
         read -r rxb < "$rxf" || continue
         read -r txb < "$txf" || continue
         # Negotiated link speed (Mbit/s). Reading it errors when the link is
         # down; leave it empty in that case.
         spd=""
-        read -r spd 2>/dev/null < "/sys/class/net/${port}/speed" || spd=""
+        read -r spd 2>/dev/null < "$NETDIR/${port}/speed" || spd=""
         echo "PORTBYTES|${port}|${rxb}|${txb}|${spd}"
     done
 done

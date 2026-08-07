@@ -24,6 +24,7 @@ resolve_switch_ports = parser.resolve_switch_ports
 resolve_port_bytes = parser.resolve_port_bytes
 resolve_port_links = parser.resolve_port_links
 resolve_infra_parents = parser.resolve_infra_parents
+resolve_wired_macs = parser.resolve_wired_macs
 _is_random_mac = parser._is_random_mac
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -969,6 +970,24 @@ class TestResolvePortBytes:
         pbytes = {"sw": {"lan5": {"rx": 100, "tx": 900}}}
         assert resolve_port_bytes(fdb, pbytes) == {}
 
+    def test_infra_self_mac_not_attributed(self):
+        # A router uplinked through the switch is the ONLY MAC learned on the
+        # switch's uplink port — every routed frame carries its rewritten
+        # source MAC — so it looks exactly like a lone access-port device and
+        # would inherit the whole downstream fan-out's counters. Observed on a
+        # live fleet: the gateway alone on the switch's lan9.
+        gw_mac = "FC:EC:DA:43:95:A2"
+        fdb = {"sw": {gw_mac: "lan9", "AA:BB:CC:DD:EE:01": "lan5"}}
+        pbytes = {
+            "sw": {
+                "lan9": {"rx": 10**12, "tx": 10**12},
+                "lan5": {"rx": 100, "tx": 900},
+            }
+        }
+        result = resolve_port_bytes(fdb, pbytes, exclude_macs={gw_mac})
+        assert gw_mac not in result
+        assert result == {"AA:BB:CC:DD:EE:01": {"ul": 100, "dl": 900}}
+
     def test_uplink_winner_attribution_uses_access_port(self):
         # The device's winning access port is its single-MAC switch port, not the
         # crowded router uplink it is also learned on — bytes come from lan5.
@@ -1003,6 +1022,39 @@ class TestParseSelfMac:
         # A SELFMAC| line must never be mistaken for a Wi-Fi station entry.
         entries, _ = parse_wifi_output("SELFMAC|AA:BB:CC:DD:EE:01\n", "AP1")
         assert entries == []
+
+
+class TestResolveWiredMacs:
+    def test_wired_port_counts_as_wired_evidence(self):
+        # The collector emits PORTBYTES only for wired bridge members, so a
+        # winning port that has byte counters proves the device is cabled.
+        fdb = {"sw": {"AA:BB:CC:DD:EE:01": "lan5"}}
+        pbytes = {"sw": {"lan5": {"rx": 1, "tx": 2, "speed": 1000}}}
+        assert resolve_wired_macs(fdb, pbytes) == {"AA:BB:CC:DD:EE:01"}
+
+    def test_wireless_vif_is_not_wired_evidence(self):
+        # A Wi-Fi station is learned in the bridge FDB on the AP's wireless
+        # vif, but the collector emits no PORTBYTES for it — so it must not
+        # count as "this device is cabled" and override its Wi-Fi state.
+        fdb = {"ap": {"AA:BB:CC:DD:EE:01": "phy1-ap1"}}
+        assert resolve_wired_macs(fdb, {"ap": {}}) == set()
+
+    def test_older_collector_yields_no_evidence(self):
+        # A host emitting no PORTBYTES at all degrades to "no wired evidence"
+        # rather than a wrong answer.
+        fdb = {"sw": {"AA:BB:CC:DD:EE:01": "lan5"}}
+        assert resolve_wired_macs(fdb, {}) == set()
+
+
+def _assert_acyclic(parents):
+    """Walking parents from every host must terminate at a root."""
+    for start in parents:
+        seen = {start}
+        cur = parents.get(start, {}).get("host")
+        while cur:
+            assert cur not in seen, f"cycle reached from {start!r} via {cur!r}"
+            seen.add(cur)
+            cur = parents.get(cur, {}).get("host")
 
 
 class TestResolveInfraParents:
@@ -1044,13 +1096,13 @@ class TestResolveInfraParents:
     def test_shared_uplink_port_not_treated_as_dedicated_link(self):
         # A leaf AP's single wired port aggregates traffic from the ENTIRE
         # rest of the LAN — it eventually sees every other infra device's
-        # MAC, not just whichever one is "closest." A port carrying two or
-        # more known infra identities at once is exactly that kind of
-        # shared/trunk link and must be excluded outright, regardless of MAC
-        # count. Regression test for a real bug found against a live fleet:
-        # a switch's own MAC was relayed onto an AP's single uplink port
-        # alongside another AP's MAC and incorrectly resolved as "the switch
-        # is downstream of the AP."
+        # MAC, not just whichever one is "closest." With no gateway MAC to
+        # establish direction there is no way to tell a relayed infra MAC
+        # from a genuinely downstream one, so such a port is rejected
+        # outright. Regression test for a real bug found against a live
+        # fleet: a switch's own MAC was relayed onto an AP's single uplink
+        # port alongside another AP's MAC and incorrectly resolved as "the
+        # switch is downstream of the AP."
         switch_mac = "AA:BB:CC:DD:EE:01"
         other_ap_mac = "AA:BB:CC:DD:EE:02"
         leaf_ap_uplink = {
@@ -1063,6 +1115,67 @@ class TestResolveInfraParents:
             {"switch": switch_mac, "other_ap": other_ap_mac},
         )
         assert parents == {}
+
+    def test_gateway_mac_gives_direction_on_shared_port(self):
+        # Same shared uplink as above, but now the gateway is known. The leaf
+        # AP's uplink carries the gateway's MAC, which proves the port faces
+        # UPSTREAM — so the leaf AP is below the switch, not above it, and
+        # must not be offered as anyone's parent.
+        gw_mac = "AA:BB:CC:DD:EE:00"
+        switch_mac = "AA:BB:CC:DD:EE:01"
+        leaf_ap_mac = "AA:BB:CC:DD:EE:02"
+        fdb = {
+            # The leaf AP's only wired port sees everything upstream of it.
+            "leaf_ap": {gw_mac: "eth0", switch_mac: "eth0"},
+            # The switch's port toward the AP sees only what is below it.
+            "switch": {leaf_ap_mac: "lan7", "11:11:11:11:11:11": "lan7"},
+            # The gateway's port toward the switch sees the whole LAN.
+            "gw": {switch_mac: "eth1", leaf_ap_mac: "eth1"},
+        }
+        parents = resolve_infra_parents(
+            fdb,
+            {"gw": gw_mac, "switch": switch_mac, "leaf_ap": leaf_ap_mac},
+            switch_hosts={"switch"},
+            gateway_host="gw",
+        )
+        assert parents["leaf_ap"] == {"host": "switch", "port": "7"}
+        assert parents["switch"] == {"host": "gw", "port": "1"}
+        assert "gw" not in parents  # the gateway is the root
+
+    def test_switch_chain_resolves_without_cycle(self):
+        # gateway -> switchA -> switchB. switchA's port toward switchB carries
+        # switchB's MAC; switchB's uplink carries the gateway's MAC and so is
+        # correctly not offered as switchA's parent. Before the direction rule
+        # this produced a mutual switchA <-> switchB cycle.
+        gw_mac = "AA:BB:CC:DD:EE:00"
+        a_mac = "AA:BB:CC:DD:EE:0A"
+        b_mac = "AA:BB:CC:DD:EE:0B"
+        fdb = {
+            "gw": {a_mac: "eth1", b_mac: "eth1"},
+            "switchA": {gw_mac: "lan1", b_mac: "lan9"},
+            "switchB": {gw_mac: "lan1", a_mac: "lan1"},
+        }
+        parents = resolve_infra_parents(
+            fdb,
+            {"gw": gw_mac, "switchA": a_mac, "switchB": b_mac},
+            switch_hosts={"switchA", "switchB"},
+            gateway_host="gw",
+        )
+        assert parents["switchA"] == {"host": "gw", "port": "1"}
+        assert parents["switchB"] == {"host": "switchA", "port": "9"}
+        _assert_acyclic(parents)
+
+    def test_result_is_always_a_forest(self):
+        # Defense in depth: even if the direction rule is defeated by stale or
+        # partial FDB data, consumers walk these edges to the root, so the
+        # result must never contain a cycle.
+        a_mac = "AA:BB:CC:DD:EE:0A"
+        b_mac = "AA:BB:CC:DD:EE:0B"
+        # Each host sees the other alone on a port and no gateway is known,
+        # so both would otherwise claim the other as parent.
+        fdb = {"a": {b_mac: "lan1"}, "b": {a_mac: "lan2"}}
+        parents = resolve_infra_parents(fdb, {"a": a_mac, "b": b_mac})
+        _assert_acyclic(parents)
 
     def test_switch_host_preferred_on_count_tie(self):
         ap_mac = "AA:BB:CC:DD:EE:01"

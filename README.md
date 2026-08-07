@@ -103,7 +103,7 @@ each AP and switch — no redundant shell sensors.
    JavaScript Modules):
 
    - `/wrtsensor_static/network-table-card.js?v=2.6.0`
-   - `/wrtsensor_static/network-topology-card.js?v=1.2.1`
+   - `/wrtsensor_static/network-topology-card.js?v=1.3.0`
    - `/wrtsensor_static/network-events-card.js?v=1.1.2`
    - `/wrtsensor_static/dns-stats-card.js?v=3.0.1`
    - `/wrtsensor_static/wireguard-card.js?v=1.1.0` *(only if WireGuard is enabled)*
@@ -135,12 +135,16 @@ Bundled Lovelace cards — full YAML examples and options in
   Infra rows (gateway/AP/switch) whose SSH probe failed this cycle are dimmed
   and filtered like any other offline device, keyed off `host_stats.available`.
 - **`network-topology-card`** — SVG map of the real physical hierarchy: router
-  on top, switch(es) beneath it, APs beneath whichever switch they're actually
-  plugged into (or the router directly), and clients attached to whichever
-  node they're actually on. Auto-detected each poll from `bridge fdb show`
-  data already collected from every host — no manual wiring config. An infra
-  node whose SSH probe failed this cycle renders dimmed/offline, same as an
-  offline client — even if it's still visible over ARP.
+  on top, each switch beneath whatever it uplinks into (the router or another
+  switch), APs beneath whichever switch they're actually plugged into, and
+  clients attached to whichever node they're actually on. Auto-detected each
+  poll from `bridge fdb show` data already collected from every host — no
+  manual wiring config. Direction comes from the router's own MAC address: a
+  candidate uplink port that also carries it faces the router, so the host
+  offering it must sit below rather than above. The last known parent is
+  reused when a host's probe fails, so one flaky poll doesn't reshuffle the
+  map. An infra node whose SSH probe failed this cycle renders dimmed/offline,
+  same as an offline client — even if it's still visible over ARP.
 - **`network-events-card`** — filterable connect/disconnect/roam/ip_change log.
 - **`dns-stats-card`** — dnsmasq cache hit/miss and upstream latency.
 - **`wireguard-card`** — per-peer WireGuard tunnel status.

@@ -147,6 +147,54 @@ def test_compute_device_rates_prefers_port_bytes_over_conntrack():
     assert c._device_bw["port"] == {mac: {"ul": 600, "dl": 12000}}
 
 
+def test_compute_device_rates_discards_delta_when_port_changes():
+    """Recabling a device to a different port must not credit phantom traffic.
+
+    The two ports' lifetime counters are unrelated, so their difference is
+    meaningless. A 2 GB gap over a 60 s poll is only ~33 MB/s — well under
+    BW_MAX_RATE_BPS — so the rate sanity cap does not catch this.
+    """
+    c = _make_coordinator()
+    mac = "AA:BB:CC:DD:EE:03"
+    c._device_bw = {
+        "ts": time.time() - 60,
+        "wifi": {},
+        "wired": {},
+        "port": {mac: {"ul": 0, "dl": 0}},
+        "port_src": {mac: "192.0.2.21:5"},
+    }
+    _rates, accum = c._compute_device_rates(
+        {},
+        {},
+        {mac: {"ul": 0, "dl": 2_000_000_000}},  # lan7's lifetime counters
+        {mac: "192.0.2.21:7"},  # now on a different port
+    )
+    assert mac not in accum
+    # The new port's counters are still recorded, so the next poll — same port,
+    # same source — produces a real delta.
+    assert c._device_bw["port_src"] == {mac: "192.0.2.21:7"}
+
+
+def test_compute_device_rates_accumulates_when_port_unchanged():
+    c = _make_coordinator()
+    mac = "AA:BB:CC:DD:EE:04"
+    c._device_bw = {
+        "ts": time.time() - 60,
+        "wifi": {},
+        "wired": {},
+        "port": {mac: {"ul": 100, "dl": 200}},
+        "port_src": {mac: "192.0.2.21:5"},
+    }
+    _rates, accum = c._compute_device_rates(
+        {},
+        {},
+        {mac: {"ul": 700, "dl": 1200}},
+        {mac: "192.0.2.21:5"},
+    )
+    assert accum[mac]["tx"] == 600
+    assert accum[mac]["rx"] == 1000
+
+
 def test_compute_device_rates_prefers_wifi_over_port_bytes():
     c = _make_coordinator()
     mac = "AA:BB:CC:DD:EE:02"
@@ -1934,3 +1982,118 @@ def test_get_asu_info_swallows_ssh_errors():
     assert info["tool"] == "unknown"
     assert "connection refused" in (info["error"] or "")
     assert info["installed_version"] is None
+
+
+def test_gateway_alone_on_switch_port_keeps_wan_totals():
+    """The gateway is the only MAC learned on the switch's uplink port.
+
+    Every routed frame carries the gateway's rewritten source MAC, so that port
+    looks exactly like a lone access port and would otherwise attribute the
+    whole LAN's byte counters to the gateway — overwriting its WAN totals with
+    LAN-side numbers, upload and download swapped. Observed live: the gateway
+    alone on the switch's lan9.
+    """
+    gw_mac = _MINIMAL_GW["gw_mac"]
+    c = _make_coordinator(switch_hosts="192.0.2.21")
+    c._device_bw = {
+        "ts": time.time() - 60,
+        "wifi": {},
+        "wired": {},
+        "port": {gw_mac: {"ul": 0, "dl": 0}},
+        "port_src": {gw_mac: "192.0.2.21:9"},
+    }
+
+    async def collect_wifi(host, ap_name):
+        if host == "192.0.2.21":  # switch: gateway alone on lan9
+            # A plausible one-minute delta (10 MB/s up, 5 MB/s down) — under
+            # BW_MAX_RATE_BPS, so the rate sanity cap does not mask this.
+            return (
+                [],
+                [],
+                {gw_mac: "lan9"},
+                "B8:EC:A3:B4:4F:5B",
+                {"lan9": {"rx": 600_000_000, "tx": 300_000_000, "speed": 1000}},
+            )
+        return ([], [], {}, "FC:EC:DA:43:95:A2", {})  # gateway reports its own MAC
+
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch.object(c, "_collect_gateway", new=AsyncMock(return_value=_MINIMAL_GW))
+        )
+        stack.enter_context(
+            patch.object(c, "_collect_wifi", new=AsyncMock(side_effect=collect_wifi))
+        )
+        stack.enter_context(
+            patch.object(
+                c, "_get_ap_info", new=AsyncMock(return_value=("SW", "", [], []))
+            )
+        )
+        stack.enter_context(
+            patch.object(c, "_ping_stale", new=AsyncMock(return_value=[]))
+        )
+        stack.enter_context(
+            patch.object(c, "_resolve_hostnames", new=AsyncMock(return_value={}))
+        )
+        stack.enter_context(patch.object(c, "_detect_wan_events", return_value=[]))
+        result = asyncio.run(c._async_update_data())
+
+    gw_row = next(d for d in result["devices"] if d["mac"] == gw_mac)
+    # The WAN totals injected for the gateway (0 here — the fixture reports no
+    # WAN byte counters) must survive; the switch-port numbers must not appear,
+    # least of all with upload and download transposed.
+    assert (gw_row["rx_total"], gw_row["tx_total"]) == (0, 0)
+
+
+def test_host_topology_falls_back_to_last_known_parent():
+    """One failed SSH probe must not visibly collapse the topology map.
+
+    The switch's FDB is what places every AP behind it; without caching, a
+    single timeout reparents them all to the gateway for that poll and the map
+    reshuffles, then snaps back on the next one.
+    """
+    c = _make_coordinator(ap_hosts="192.0.2.22", switch_hosts="192.0.2.21")
+    ap_self_mac = "AA:BB:CC:DD:EE:01"
+    switch_reachable = True
+
+    async def collect_wifi(host, ap_name):
+        if host == "192.0.2.21":
+            if not switch_reachable:
+                raise OSError("ssh timeout")
+            return ([], [], {ap_self_mac: "lan4"}, "B8:EC:A3:B4:4F:5B", {})
+        if host == "192.0.2.22":
+            return ([], [], {}, ap_self_mac, {})
+        return ([], [], {}, "FC:EC:DA:43:95:A2", {})
+
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch.object(c, "_collect_gateway", new=AsyncMock(return_value=_MINIMAL_GW))
+        )
+        stack.enter_context(
+            patch.object(c, "_collect_wifi", new=AsyncMock(side_effect=collect_wifi))
+        )
+        stack.enter_context(
+            patch.object(
+                c, "_get_ap_info", new=AsyncMock(return_value=("AP1", "", [], []))
+            )
+        )
+        stack.enter_context(
+            patch.object(c, "_ping_stale", new=AsyncMock(return_value=[]))
+        )
+        stack.enter_context(
+            patch.object(c, "_resolve_hostnames", new=AsyncMock(return_value={}))
+        )
+        stack.enter_context(patch.object(c, "_detect_wan_events", return_value=[]))
+
+        first = asyncio.run(c._async_update_data())
+        assert first["host_topology"]["192.0.2.22"] == {
+            "parent_host": "192.0.2.21",
+            "parent_port": "4",
+        }
+
+        switch_reachable = False
+        second = asyncio.run(c._async_update_data())
+
+    assert second["host_topology"]["192.0.2.22"] == {
+        "parent_host": "192.0.2.21",
+        "parent_port": "4",
+    }

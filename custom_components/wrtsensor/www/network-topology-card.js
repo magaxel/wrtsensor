@@ -605,15 +605,18 @@ class NetworkTopologyCard extends HTMLElement {
     };
     const parentKeyOf = {};
     for (const node of hubNodes) parentKeyOf[node._key] = resolveParentKey(node);
-    // Cycle guard: cut any cycle by treating the offending node as unresolved
-    // (falls back to attaching under the gateway/root), so malformed or
-    // flaky FDB data can never hang the recursive layout below.
+    // Cycle guard: the backend already returns a forest, so this only fires on
+    // malformed or flaky FDB data — but the recursive layout below would hang
+    // on a cycle, so guarantee termination here too. Cut the edge that closes
+    // the cycle (the node revisited), not the edge of whichever node the walk
+    // happened to start from: a node that merely points INTO a cycle has a
+    // perfectly valid parent and must keep it.
     for (const node of hubNodes) {
       const seen = new Set([node._key]);
       let cur = parentKeyOf[node._key];
       while (cur && cur !== "__gateway__") {
         if (seen.has(cur)) {
-          parentKeyOf[node._key] = null;
+          parentKeyOf[cur] = null;
           break;
         }
         seen.add(cur);
