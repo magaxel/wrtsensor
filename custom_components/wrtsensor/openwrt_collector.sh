@@ -10,8 +10,10 @@
 # this host in the topology tree via other hosts' FDB tables):
 #   SELFMAC|<MAC>
 # And one PORTBYTES| line per enslaved bridge port with its cumulative sysfs
-# byte counters (used to derive wired Tx/Rx totals for the device on that port):
-#   PORTBYTES|<port_netdev>|<rx_bytes>|<tx_bytes>
+# byte counters and negotiated link speed in Mbit/s (used to derive wired Tx/Rx
+# totals and the wired link rate for the device on that port; speed is empty
+# when the link is down or unknown):
+#   PORTBYTES|<port_netdev>|<rx_bytes>|<tx_bytes>|<speed_mbit>
 # Called remotely over SSH by diagnose.py / coordinator.py.
 # Wi-Fi collection requires iwinfo; hosts without it (e.g. a managed switch)
 # still emit BOARD, STAT, FDB, SELFMAC, and PORTBYTES lines and just skip the
@@ -118,7 +120,11 @@ for brpath in /sys/class/net/*/bridge; do
         [ -r "$rxf" ] && [ -r "$txf" ] || continue
         read -r rxb < "$rxf" || continue
         read -r txb < "$txf" || continue
-        echo "PORTBYTES|${port}|${rxb}|${txb}"
+        # Negotiated link speed (Mbit/s). Reading it errors when the link is
+        # down; leave it empty in that case.
+        spd=""
+        read -r spd 2>/dev/null < "/sys/class/net/${port}/speed" || spd=""
+        echo "PORTBYTES|${port}|${rxb}|${txb}|${spd}"
     done
 done
 

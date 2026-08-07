@@ -541,21 +541,26 @@ def parse_ndp(lines: list[str]) -> dict[str, str]:
 def collect_wifi(
     host: str, ap_name: str, script: str
 ) -> tuple[
-    list[dict[str, Any]], list[str], dict[str, str], str, dict[str, dict[str, int]]
+    list[dict[str, Any]],
+    list[str],
+    dict[str, str],
+    str,
+    dict[str, dict[str, int | None]],
 ]:
     """Get WiFi associations from an OpenWrt host.
 
     Returns (entries, hoststat_lines, fdb, self_mac, port_bytes) where fdb maps
     MAC -> bridge port, self_mac is this host's own LAN bridge MAC (empty string
     if it's running an older collector script that doesn't emit it), and
-    port_bytes maps bridge port netdev -> {rx, tx} cumulative byte counters.
+    port_bytes maps bridge port netdev -> {rx, tx, speed} (cumulative byte
+    counters and negotiated link speed in Mbit/s, speed None if down/unknown).
     """
     out = ssh_run(host, script)
     entries: list[dict[str, Any]] = []
     hoststat: list[str] = []
     fdb: dict[str, str] = {}
     self_mac = ""
-    port_bytes: dict[str, dict[str, int]] = {}
+    port_bytes: dict[str, dict[str, int | None]] = {}
     for line in out.splitlines():
         if line.startswith("STAT|"):
             stat_parts = line.split("|")
@@ -581,8 +586,16 @@ def collect_wifi(
                     ptx = int(pb_parts[3])
                 except ValueError:
                     continue
+                pspeed: int | None = None
+                if len(pb_parts) >= 5 and pb_parts[4].strip():
+                    try:
+                        ps = int(pb_parts[4])
+                    except ValueError:
+                        ps = 0
+                    if ps > 0:
+                        pspeed = ps
                 if pport:
-                    port_bytes[pport] = {"rx": prx, "tx": ptx}
+                    port_bytes[pport] = {"rx": prx, "tx": ptx, "speed": pspeed}
             continue
         if line.startswith("SELFMAC|"):
             self_mac = line[len("SELFMAC|") :].strip().upper()
@@ -695,7 +708,7 @@ def resolve_switch_ports(
 
 def resolve_port_bytes(
     fdb_by_host: dict[str, dict[str, str]],
-    port_bytes_by_host: dict[str, dict[str, dict[str, int]]],
+    port_bytes_by_host: dict[str, dict[str, dict[str, int | None]]],
     uplink_threshold: int = FDB_UPLINK_MAC_THRESHOLD,
 ) -> dict[str, dict[str, int]]:
     """Per-MAC wired byte counters from the switch port each device sits alone on.
@@ -713,9 +726,34 @@ def resolve_port_bytes(
         if count != 1:
             continue
         pb = port_bytes_by_host.get(host, {}).get(port)
-        if not pb:
+        if not pb or pb.get("rx") is None or pb.get("tx") is None:
             continue
         result[mac] = {"ul": pb["rx"], "dl": pb["tx"]}
+    return result
+
+
+def resolve_port_links(
+    fdb_by_host: dict[str, dict[str, str]],
+    port_bytes_by_host: dict[str, dict[str, dict[str, int | None]]],
+    uplink_threshold: int = FDB_UPLINK_MAC_THRESHOLD,
+) -> dict[str, int]:
+    """Per-MAC negotiated link speed (Mbit/s) from the port each device sits alone on.
+
+    Same single-device-access-port rule as ``resolve_port_bytes``: a wired device
+    alone on its switch port inherits that port's negotiated Ethernet speed
+    (100 / 1000 / 2500 …). Ports with no known speed are skipped.
+
+    Returns MAC -> speed_mbit.
+    """
+    winners = _winning_ports(fdb_by_host, uplink_threshold)
+    result: dict[str, int] = {}
+    for mac, (host, port, count) in winners.items():
+        if count != 1:
+            continue
+        pb = port_bytes_by_host.get(host, {}).get(port)
+        speed = pb.get("speed") if pb else None
+        if speed:
+            result[mac] = speed
     return result
 
 
@@ -2518,6 +2556,8 @@ def main() -> None:
     # Per-switch-port counters for directly-wired devices — captures intra-LAN
     # traffic conntrack never sees, so it takes priority over wired_bytes.
     port_bytes_by_mac = resolve_port_bytes(fdb_by_host, port_bytes_by_host)
+    # Negotiated wired link speed per device, for the TX/RX (Mbit/s) columns.
+    port_links = resolve_port_links(fdb_by_host, port_bytes_by_host)
     device_rates, device_accum = compute_device_rates(
         wifi_bytes, wired_bytes, port_bytes_by_mac
     )
@@ -2541,6 +2581,13 @@ def main() -> None:
         rates=device_rates,
         switch_ports=switch_ports,
     )
+
+    # Wired link speed fills the TX/RX (Mbit/s) columns (the wired analogue of
+    # the Wi-Fi PHY rate); only when no Wi-Fi rate is already set.
+    for d in devices:
+        if d.tx_rate is None and d.mac in port_links:
+            d.tx_rate = port_links[d.mac]
+            d.rx_rate = port_links[d.mac]
 
     # Aggregate client rates onto AP devices; inject WAN rates onto gateway device
     ap_rx: dict[str, int] = {}

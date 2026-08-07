@@ -40,6 +40,12 @@ match and no switch-port attribution show as **Unknown** unless `show_unknown: f
 is set. Existing dashboards that still list `switch_port` are mapped to `ap`
 automatically by the card.
 
+The `tx_rate` / `rx_rate` columns (**TX/RX (Mbit/s)**) show the Wi-Fi PHY link rate for
+wireless clients and the **negotiated Ethernet speed** (100 / 1000 / 2500) for a wired
+client on its own switch port — both are the current link rate, not live throughput (use
+the `tx_bps` / `rx_bps` columns, **↑/↓ Mbit/s**, for that). Wired speed is symmetric, so
+`TX` and `RX` read the same value; shared-port and unresolved devices show `—`.
+
 ## `network-topology-card`
 
 SVG topology map showing the gateway, switches, APs, and clients. Configured APs are

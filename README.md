@@ -47,6 +47,9 @@ toggling the rest off after first run.
   binary sensors. Required by the topology, table, and events cards.
 - **Wi-Fi metrics** — AP, band, signal, noise, SNR, TX/RX PHY rates, expected
   throughput, per-station byte counters. Tied to Network hosts.
+- **Wired link speed** — the negotiated Ethernet speed (100 / 1000 / 2500 …) for a
+  wired device on a dedicated OpenWrt switch port, surfaced in the same `TX/RX (Mbit/s)`
+  columns the Wi-Fi PHY rate uses (blank for shared-port devices).
 - **Per-device Tx/Rx totals** — cumulative download/upload per device. Wi-Fi clients use
   their AP station counters; wired devices on a dedicated OpenWrt switch port use that
   port's byte counters (captures intra-LAN traffic), falling back to the gateway's

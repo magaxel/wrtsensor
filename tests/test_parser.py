@@ -22,6 +22,7 @@ parse_port_bytes = parser.parse_port_bytes
 parse_self_mac = parser.parse_self_mac
 resolve_switch_ports = parser.resolve_switch_ports
 resolve_port_bytes = parser.resolve_port_bytes
+resolve_port_links = parser.resolve_port_links
 resolve_infra_parents = parser.resolve_infra_parents
 _is_random_mac = parser._is_random_mac
 
@@ -895,15 +896,27 @@ class TestResolveSwitchPorts:
 
 
 class TestParsePortBytes:
-    def test_extracts_port_counters(self):
+    def test_extracts_counters_and_speed(self):
         out = (
             "STAT|cpu  1 2 3 4|1000|500|10\n"
-            "PORTBYTES|lan5|12345|67890\n"
-            "PORTBYTES|lan6|1|2\n"
+            "PORTBYTES|lan5|12345|67890|1000\n"  # gigabit
+            "PORTBYTES|lan6|1|2|100\n"  # 100 Mbit
         )
         assert parse_port_bytes(out) == {
-            "lan5": {"rx": 12345, "tx": 67890},
-            "lan6": {"rx": 1, "tx": 2},
+            "lan5": {"rx": 12345, "tx": 67890, "speed": 1000},
+            "lan6": {"rx": 1, "tx": 2, "speed": 100},
+        }
+
+    def test_speed_absent_or_down_is_none(self):
+        out = (
+            "PORTBYTES|lan5|12345|67890\n"  # older collector, no speed field
+            "PORTBYTES|lan6|1|2|-1\n"  # link down -> sysfs reports -1
+            "PORTBYTES|lan7|3|4|\n"  # empty speed field
+        )
+        assert parse_port_bytes(out) == {
+            "lan5": {"rx": 12345, "tx": 67890, "speed": None},
+            "lan6": {"rx": 1, "tx": 2, "speed": None},
+            "lan7": {"rx": 3, "tx": 4, "speed": None},
         }
 
     def test_ignores_malformed_and_non_portbytes_lines(self):
@@ -912,14 +925,31 @@ class TestParsePortBytes:
             "PORTBYTES||1|2\n"  # empty port
             "PORTBYTES|lan6|x|2\n"  # non-integer rx
             "random line\n"
-            "PORTBYTES|lan7|10|20\n"
+            "PORTBYTES|lan7|10|20|1000\n"
         )
-        assert parse_port_bytes(out) == {"lan7": {"rx": 10, "tx": 20}}
+        assert parse_port_bytes(out) == {"lan7": {"rx": 10, "tx": 20, "speed": 1000}}
 
     def test_wifi_parser_skips_portbytes_lines(self):
         # A PORTBYTES| line must never be mistaken for a Wi-Fi station entry.
-        entries, _ = parse_wifi_output("PORTBYTES|lan5|1|2\n", "AP1")
+        entries, _ = parse_wifi_output("PORTBYTES|lan5|1|2|1000\n", "AP1")
         assert entries == []
+
+
+class TestResolvePortLinks:
+    def test_single_device_port_gets_speed(self):
+        fdb = {"sw": {"AA:BB:CC:DD:EE:01": "lan5"}}
+        pbytes = {"sw": {"lan5": {"rx": 1, "tx": 2, "speed": 1000}}}
+        assert resolve_port_links(fdb, pbytes) == {"AA:BB:CC:DD:EE:01": 1000}
+
+    def test_shared_port_gets_no_speed(self):
+        fdb = {"sw": {"AA:BB:CC:DD:EE:01": "lan5", "AA:BB:CC:DD:EE:02": "lan5"}}
+        pbytes = {"sw": {"lan5": {"rx": 1, "tx": 2, "speed": 1000}}}
+        assert resolve_port_links(fdb, pbytes) == {}
+
+    def test_unknown_speed_skipped(self):
+        fdb = {"sw": {"AA:BB:CC:DD:EE:01": "lan5"}}
+        pbytes = {"sw": {"lan5": {"rx": 1, "tx": 2, "speed": None}}}
+        assert resolve_port_links(fdb, pbytes) == {}
 
 
 class TestResolvePortBytes:

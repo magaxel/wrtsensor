@@ -207,14 +207,16 @@ def parse_fdb(out: str) -> dict[str, str]:
     return result
 
 
-def parse_port_bytes(out: str) -> dict[str, dict[str, int]]:
-    """Map bridge port netdev -> cumulative byte counters from ``PORTBYTES|`` lines.
+def parse_port_bytes(out: str) -> dict[str, dict[str, int | None]]:
+    """Map bridge port netdev -> counters/link speed from ``PORTBYTES|`` lines.
 
-    Format per line is ``PORTBYTES|<port_netdev>|<rx_bytes>|<tx_bytes>`` (e.g.
-    ``PORTBYTES|lan5|12345|67890``). Counters are from the switch's point of
-    view (``rx`` = frames the switch received on the port).
+    Format per line is ``PORTBYTES|<port_netdev>|<rx_bytes>|<tx_bytes>|<speed_mbit>``
+    (e.g. ``PORTBYTES|lan5|12345|67890|1000``). Counters are from the switch's
+    point of view (``rx`` = frames the switch received on the port). ``speed`` is
+    the negotiated link rate in Mbit/s, or ``None`` when the link is down/unknown
+    (sysfs reports ``-1``) or an older collector omitted the field.
     """
-    result: dict[str, dict[str, int]] = {}
+    result: dict[str, dict[str, int | None]] = {}
     for line in out.splitlines():
         if not line.startswith("PORTBYTES|"):
             continue
@@ -226,8 +228,16 @@ def parse_port_bytes(out: str) -> dict[str, dict[str, int]]:
                 tx = int(parts[3])
             except ValueError:
                 continue
+            speed: int | None = None
+            if len(parts) >= 5 and parts[4].strip():
+                try:
+                    s = int(parts[4])
+                except ValueError:
+                    s = 0
+                if s > 0:
+                    speed = s
             if port:
-                result[port] = {"rx": rx, "tx": tx}
+                result[port] = {"rx": rx, "tx": tx, "speed": speed}
     return result
 
 
@@ -297,7 +307,7 @@ def resolve_switch_ports(
 
 def resolve_port_bytes(
     fdb_by_host: dict[str, dict[str, str]],
-    port_bytes_by_host: dict[str, dict[str, dict[str, int]]],
+    port_bytes_by_host: dict[str, dict[str, dict[str, int | None]]],
     switch_hosts: set[str] | None = None,
     uplink_threshold: int = FDB_UPLINK_MAC_THRESHOLD,
 ) -> dict[str, dict[str, int]]:
@@ -317,9 +327,35 @@ def resolve_port_bytes(
         if count != 1:
             continue
         pb = port_bytes_by_host.get(host, {}).get(port)
-        if not pb:
+        if not pb or pb.get("rx") is None or pb.get("tx") is None:
             continue
         result[mac] = {"ul": pb["rx"], "dl": pb["tx"]}
+    return result
+
+
+def resolve_port_links(
+    fdb_by_host: dict[str, dict[str, str]],
+    port_bytes_by_host: dict[str, dict[str, dict[str, int | None]]],
+    switch_hosts: set[str] | None = None,
+    uplink_threshold: int = FDB_UPLINK_MAC_THRESHOLD,
+) -> dict[str, int]:
+    """Per-MAC negotiated link speed (Mbit/s) from the port each device sits alone on.
+
+    Same single-device-access-port rule as ``resolve_port_bytes``: a wired device
+    that is the only MAC on its switch port inherits that port's negotiated
+    Ethernet speed (100 / 1000 / 2500 …). Ports with no known speed are skipped.
+
+    Returns ``mac -> speed_mbit``.
+    """
+    winners = _winning_ports(fdb_by_host, switch_hosts, uplink_threshold)
+    result: dict[str, int] = {}
+    for mac, (host, port, count) in winners.items():
+        if count != 1:
+            continue
+        pb = port_bytes_by_host.get(host, {}).get(port)
+        speed = pb.get("speed") if pb else None
+        if speed:
+            result[mac] = speed
     return result
 
 

@@ -47,6 +47,7 @@ from .parser import (
     parse_wifi_output,
     resolve_infra_parents,
     resolve_port_bytes,
+    resolve_port_links,
     resolve_switch_ports,
 )
 from .const import (
@@ -2032,7 +2033,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         alive_ap_ips: list[str] = []
         ap_hoststats: dict[str, list[str]] = {}
         fdb_by_host: dict[str, dict[str, str]] = {}
-        port_bytes_by_host: dict[str, dict[str, dict[str, int]]] = {}
+        port_bytes_by_host: dict[str, dict[str, dict[str, int | None]]] = {}
         self_macs: dict[str, str] = {}
 
         if collect_host_bundle:
@@ -2213,6 +2214,13 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 port_bytes_by_host,
                 switch_hosts=set(self._switch_hosts),
             )
+            # Negotiated wired link speed per device (100/1000/2500…), for the
+            # TX/RX (Mbit/s) columns — the wired analogue of the Wi-Fi PHY rate.
+            port_links = resolve_port_links(
+                fdb_by_host,
+                port_bytes_by_host,
+                switch_hosts=set(self._switch_hosts),
+            )
             device_rates, device_accum = self._compute_device_rates(
                 wifi_bytes, wired_bytes, port_bytes_by_mac
             )
@@ -2273,6 +2281,12 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     d.rx_total = device_accum[d.mac].get("rx")
                     d.tx_total = device_accum[d.mac].get("tx")
                     d.bw_since = device_accum[d.mac].get("since")
+                # Wired link speed fills the TX/RX (Mbit/s) columns (the wired
+                # analogue of the Wi-Fi PHY rate). Only when no Wi-Fi rate is set,
+                # so wireless clients keep their real per-direction PHY rates.
+                if d.tx_rate is None and d.mac in port_links:
+                    d.tx_rate = port_links[d.mac]
+                    d.rx_rate = port_links[d.mac]
 
             # Event detection
             ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
