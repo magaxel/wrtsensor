@@ -5,7 +5,7 @@ import {
   nothing,
 } from "https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js";
 
-const CARD_VERSION = "2.5.0";
+const CARD_VERSION = "2.6.0";
 const CARD_TYPE = "network-table-card";
 const EDITOR_TYPE = `${CARD_TYPE}-editor`;
 
@@ -293,6 +293,9 @@ class NetworkTableCard extends LitElement {
     .ic-red {
       color: var(--error-color);
     }
+    .ic-cyan {
+      color: var(--info-color, #4dd0e1);
+    }
     .msg {
       padding: 16px;
       color: var(--secondary-text-color);
@@ -574,13 +577,7 @@ class NetworkTableCard extends LitElement {
             role="img"
             aria-label="Unknown connection path"
           ></ha-icon>`;
-        if (d.connection === "wired")
-          return html`<ha-icon
-            icon="mdi:ethernet"
-            title="Wired connection"
-            role="img"
-            aria-label="Wired connection"
-          ></ha-icon>`;
+        if (d.connection === "wired") return this._wiredIcon(d.tx_rate);
         return "—";
       case "ap":
         return portApValue(d) || "—";
@@ -668,6 +665,31 @@ class NetworkTableCard extends LitElement {
       title=${`Weak Wi-Fi signal (${s} dBm)`}
       role="img"
       aria-label=${`Weak Wi-Fi signal, ${s} dBm`}
+    ></ha-icon>`;
+  }
+
+  _wiredIcon(speed) {
+    // Colour the ethernet icon by negotiated link speed, mirroring how the
+    // Wi-Fi icon is coloured by signal: cyan = 2.5 Gbit/s+, green = gigabit,
+    // orange = 100 Mbit/s (Fast Ethernet), red = 10 Mbit/s. Speed is unknown
+    // for shared-port devices, which fall back to a plain (uncoloured) icon.
+    const s = Number(speed);
+    if (!Number.isFinite(s) || s <= 0)
+      return html`<ha-icon
+        icon="mdi:ethernet"
+        title="Wired connection"
+        role="img"
+        aria-label="Wired connection"
+      ></ha-icon>`;
+    const label = s >= 1000 ? `${s / 1000} Gbit/s` : `${s} Mbit/s`;
+    const cls =
+      s >= 2500 ? "ic-cyan" : s >= 1000 ? "ic-green" : s >= 100 ? "ic-orange" : "ic-red";
+    return html`<ha-icon
+      icon="mdi:ethernet"
+      class=${cls}
+      title=${`Wired link: ${label}`}
+      role="img"
+      aria-label=${`Wired link, ${label}`}
     ></ha-icon>`;
   }
 

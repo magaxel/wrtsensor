@@ -46,6 +46,11 @@ client on its own switch port — both are the current link rate, not live throu
 the `tx_bps` / `rx_bps` columns, **↑/↓ Mbit/s**, for that). Wired speed is symmetric, so
 `TX` and `RX` read the same value; shared-port and unresolved devices show `—`.
 
+The **connection** icon is colour-coded by link quality: for Wi-Fi by signal strength,
+and for wired by negotiated speed — cyan = 2.5 Gbit/s+, green = gigabit, orange =
+100 Mbit/s (Fast Ethernet), red = 10 Mbit/s. Wired devices whose speed can't be resolved
+(shared port) show a plain uncoloured ethernet icon.
+
 ## `network-topology-card`
 
 SVG topology map showing the gateway, switches, APs, and clients. Configured APs are

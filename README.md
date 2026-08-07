@@ -102,7 +102,7 @@ each AP and switch — no redundant shell sensors.
 6. Add the Lovelace resources in **Settings → Dashboards → Resources** (all
    JavaScript Modules):
 
-   - `/wrtsensor_static/network-table-card.js?v=2.5.0`
+   - `/wrtsensor_static/network-table-card.js?v=2.6.0`
    - `/wrtsensor_static/network-topology-card.js?v=1.2.1`
    - `/wrtsensor_static/network-events-card.js?v=1.1.2`
    - `/wrtsensor_static/dns-stats-card.js?v=3.0.1`
