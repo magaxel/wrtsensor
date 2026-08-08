@@ -5,7 +5,7 @@ import {
   nothing,
 } from "https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js";
 
-const CARD_VERSION = "2.6.0";
+const CARD_VERSION = "2.7.0";
 const CARD_TYPE = "network-table-card";
 const EDITOR_TYPE = `${CARD_TYPE}-editor`;
 
@@ -118,6 +118,9 @@ function portApValue(d) {
   if (d.switch_port) {
     return d._switchName ? `${d._switchName} #${d.switch_port}` : `Port ${d.switch_port}`;
   }
+  if (d._topoPort) {
+    return d._topoName ? `${d._topoName} #${d._topoPort}` : `Port ${d._topoPort}`;
+  }
   return "";
 }
 
@@ -131,6 +134,11 @@ function isConfirmedWifi(d) {
 function isUnknownPath(d) {
   if (d.connection === "gateway") return false;
   if (d.switch_port || d.switch_host) return false;
+  // An AP or switch sits on a port that also relays everything behind it, so
+  // resolve_switch_ports discards that port as an uplink and leaves the host
+  // with no switch_port. host_topology resolves the same link without the
+  // MAC-count threshold, so a host with a parent there has a known path.
+  if (d._topoPort) return false;
   if (isConfirmedWifi(d)) return false;
   return d.connection === "wifi" || d.connection === "wired" || !!d.ap;
 }
@@ -379,6 +387,12 @@ class NetworkTableCard extends LitElement {
     const switchNames = state.attributes?.switch_names ?? {};
     const hostNames = state.attributes?.host_names ?? {};
     const switchHosts = state.attributes?.switch_hosts ?? [];
+    const apNames = state.attributes?.ap_names ?? {};
+    const hostTopology = state.attributes?.host_topology ?? {};
+    // Friendly name for whichever infra host a topology edge points at — it
+    // may be a switch, an AP, or the gateway, so try every name map.
+    const infraName = (host) =>
+      switchNames[host] || apNames[host] || hostNames[host] || "";
     // Resolve a wired device's owning switch to a friendly name, mirroring the
     // topology card: switch_names → host_names → single-switch fallback.
     const switchName = (d) => {
@@ -396,9 +410,14 @@ class NetworkTableCard extends LitElement {
     const all = (state.attributes?.devices ?? []).map((d) => {
       const stats = d.ip ? hostStats[d.ip] : undefined;
       const _switchName = switchName(d);
-      if (stats?.available === true) return { ...d, _switchName, online: true };
-      if (stats?.available === false) return { ...d, _switchName, online: false };
-      return { ...d, _switchName };
+      // Configured APs/switches only: host_topology is keyed by their IP.
+      const topo = d.ip ? hostTopology[d.ip] : undefined;
+      const _topoPort = topo?.parent_port ?? "";
+      const _topoName = _topoPort ? infraName(topo.parent_host) : "";
+      const extra = { _switchName, _topoPort, _topoName };
+      if (stats?.available === true) return { ...d, ...extra, online: true };
+      if (stats?.available === false) return { ...d, ...extra, online: false };
+      return { ...d, ...extra };
     });
     const visible = all.filter(
       (d) =>

@@ -219,6 +219,10 @@ const SVG_STYLE = `
     .ntc-switch   { fill: var(--cyan-color, #00acc1); }
     .ntc-unknown-hub { fill: var(--grey-color, #757575); }
     .ntc-wire     { fill: var(--blue-grey-color, #607d8b); }
+    .ntc-wire-cyan   { fill: var(--info-color, #4dd0e1); }
+    .ntc-wire-green  { fill: var(--success-color, #4caf50); }
+    .ntc-wire-orange { fill: var(--warning-color, #ff9800); }
+    .ntc-wire-red    { fill: var(--error-color, #f44336); }
     .ntc-wg-peer  { fill: var(--red-color, #88171a); }
     .ntc-wg-icon  { color: #fff; }
     .ntc-icon     { color: #fff; }
@@ -257,6 +261,7 @@ class NetworkTopologyCard extends HTMLElement {
       show_ipv4: config.show_ipv4 ?? true,
       show_ipv6: config.show_ipv6 ?? false,
       sort_wireless_by_signal: config.sort_wireless_by_signal ?? false,
+      sort_wired_by_speed: config.sort_wired_by_speed ?? false,
       show_wireguard_peers: config.show_wireguard_peers ?? false,
       show_offline_wireguard: config.show_offline_wireguard ?? true,
       wireguard_entity: config.wireguard_entity ?? null,
@@ -314,6 +319,7 @@ class NetworkTopologyCard extends HTMLElement {
       this._config.show_ipv4 ? 1 : 0,
       this._config.show_ipv6 ? 1 : 0,
       this._config.sort_wireless_by_signal ? 1 : 0,
+      this._config.sort_wired_by_speed ? 1 : 0,
     ].join("|");
     if (cacheKey === this._lastUpdated) return;
     this._lastUpdated = cacheKey;
@@ -350,6 +356,19 @@ class NetworkTopologyCard extends HTMLElement {
     if (s > -70) return "#ff9800";
     if (s > -75) return "#ff5722";
     return "#f44336";
+  }
+
+  _wiredSpeedClass(speed) {
+    // Mirrors network-table-card's _wiredIcon: cyan = 2.5 Gbit/s+, green =
+    // gigabit, orange = 100 Mbit/s, red = 10 Mbit/s. Shared-port devices have
+    // no resolved speed and keep the neutral blue-grey every wired node used
+    // before. Wi-Fi nodes are coloured by signal instead, via _signalColor.
+    const s = Number(speed);
+    if (!Number.isFinite(s) || s <= 0) return "ntc-wire";
+    if (s >= 2500) return "ntc-wire-cyan";
+    if (s >= 1000) return "ntc-wire-green";
+    if (s >= 100) return "ntc-wire-orange";
+    return "ntc-wire-red";
   }
 
   _render(state, wgState) {
@@ -580,8 +599,21 @@ class NetworkTopologyCard extends HTMLElement {
       if (sa !== sb) return sb - sa;
       return cmpHostname(a, b);
     };
+    const cmpSpeed = (a, b) => {
+      // Wired analogue of cmpSignal: tx_rate carries the negotiated Ethernet
+      // speed, so fastest first. Shared-port devices have no resolved speed
+      // and sort to the bottom, below the slowest known link.
+      const sa = a.tx_rate,
+        sb = b.tx_rate;
+      if (sa == null && sb == null) return cmpHostname(a, b);
+      if (sa == null) return 1;
+      if (sb == null) return -1;
+      if (sa !== sb) return sb - sa;
+      return cmpHostname(a, b);
+    };
     const cmpWireless = this._config.sort_wireless_by_signal ? cmpSignal : cmpHostname;
-    const sortWired = (arr) => [...arr].sort(cmpHostname);
+    const cmpWired = this._config.sort_wired_by_speed ? cmpSpeed : cmpHostname;
+    const sortWired = (arr) => [...arr].sort(cmpWired);
     const sortWireless = (arr) => [...arr].sort(cmpWireless);
 
     // ── Hub hierarchy resolution ─────────────────────────────────────────────
@@ -780,8 +812,18 @@ class NetworkTopologyCard extends HTMLElement {
       if (_isUnknownPath(d)) parts.push("Path: Unknown");
       if (d.noise != null) parts.push(`Noise: ${d.noise} dBm`);
       if (d.snr != null) parts.push(`SNR: ${d.snr} dB`);
-      if (d.tx_rate != null) parts.push(`TX rate: ${d.tx_rate} Mbit/s`);
-      if (d.rx_rate != null) parts.push(`RX rate: ${d.rx_rate} Mbit/s`);
+      if (_isConfirmedWifi(d)) {
+        if (d.tx_rate != null) parts.push(`TX rate: ${d.tx_rate} Mbit/s`);
+        if (d.rx_rate != null) parts.push(`RX rate: ${d.rx_rate} Mbit/s`);
+      } else if (d.tx_rate != null) {
+        // Wired links reuse tx_rate/rx_rate to carry the negotiated Ethernet
+        // speed, which is symmetric — report it once, and as a link speed
+        // rather than the Wi-Fi PHY-rate phrasing above. This is also what
+        // explains the node's colour, so keep the wording aligned with the
+        // table card's "Wired link: …" tooltip.
+        const s = Number(d.tx_rate);
+        parts.push(`Wired link: ${s >= 1000 ? `${s / 1000} Gbit/s` : `${s} Mbit/s`}`);
+      }
       if (d.exp_tput != null) parts.push(`Expected: ${d.exp_tput} Mbit/s`);
       if (d.band) parts.push(`Band: ${d.band}`);
       const rx = _fmtMbps(d.rx_bps),
@@ -996,7 +1038,7 @@ class NetworkTopologyCard extends HTMLElement {
               NODE_R,
               icon,
               nodeTextRows(d),
-              item.wifi ? null : "ntc-wire",
+              item.wifi ? null : this._wiredSpeedClass(d.tx_rate),
               devOp,
               nodeTitle(d),
               sc,
@@ -1506,6 +1548,7 @@ class NetworkTopologyCard extends HTMLElement {
       show_ipv4: true,
       show_ipv6: false,
       sort_wireless_by_signal: false,
+      sort_wired_by_speed: false,
     };
   }
 }
@@ -1600,6 +1643,10 @@ class NetworkTopologyCardEditor extends HTMLElement {
           <ha-checkbox id="sort_wireless_by_signal"></ha-checkbox>
           <span>Sort wireless clients by signal (strongest first)</span>
         </label>
+        <label class="cb-row">
+          <ha-checkbox id="sort_wired_by_speed"></ha-checkbox>
+          <span>Sort wired clients by link speed (fastest first)</span>
+        </label>
         <div id="wg-section"></div>
       </div>`;
 
@@ -1667,6 +1714,12 @@ class NetworkTopologyCardEditor extends HTMLElement {
     sortSignalCb.checked = c.sort_wireless_by_signal ?? false;
     sortSignalCb.addEventListener("change", () => {
       this._fire({ ...this._config, sort_wireless_by_signal: sortSignalCb.checked });
+    });
+
+    const sortSpeedCb = this.shadowRoot.querySelector("#sort_wired_by_speed");
+    sortSpeedCb.checked = c.sort_wired_by_speed ?? false;
+    sortSpeedCb.addEventListener("change", () => {
+      this._fire({ ...this._config, sort_wired_by_speed: sortSpeedCb.checked });
     });
 
     const wgSection = this.shadowRoot.querySelector("#wg-section");
