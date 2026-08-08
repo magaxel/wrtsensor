@@ -29,6 +29,12 @@
       - wan_rx_rate
       - wan_tx_rate
       - host_stats
+      - host_names
+      - ap_hosts
+      - ap_names
+      - switch_names
+      - switch_hosts
+      - host_topology
       - dns_stats
       - scan_duration
       - partial

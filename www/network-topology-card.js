@@ -219,6 +219,10 @@ const SVG_STYLE = `
     .ntc-switch   { fill: var(--cyan-color, #00acc1); }
     .ntc-unknown-hub { fill: var(--grey-color, #757575); }
     .ntc-wire     { fill: var(--blue-grey-color, #607d8b); }
+    .ntc-wire-cyan   { fill: var(--info-color, #4dd0e1); }
+    .ntc-wire-green  { fill: var(--success-color, #4caf50); }
+    .ntc-wire-orange { fill: var(--warning-color, #ff9800); }
+    .ntc-wire-red    { fill: var(--error-color, #f44336); }
     .ntc-wg-peer  { fill: var(--red-color, #88171a); }
     .ntc-wg-icon  { color: #fff; }
     .ntc-icon     { color: #fff; }
@@ -257,6 +261,7 @@ class NetworkTopologyCard extends HTMLElement {
       show_ipv4: config.show_ipv4 ?? true,
       show_ipv6: config.show_ipv6 ?? false,
       sort_wireless_by_signal: config.sort_wireless_by_signal ?? false,
+      sort_wired_by_speed: config.sort_wired_by_speed ?? false,
       show_wireguard_peers: config.show_wireguard_peers ?? false,
       show_offline_wireguard: config.show_offline_wireguard ?? true,
       wireguard_entity: config.wireguard_entity ?? null,
@@ -314,6 +319,7 @@ class NetworkTopologyCard extends HTMLElement {
       this._config.show_ipv4 ? 1 : 0,
       this._config.show_ipv6 ? 1 : 0,
       this._config.sort_wireless_by_signal ? 1 : 0,
+      this._config.sort_wired_by_speed ? 1 : 0,
     ].join("|");
     if (cacheKey === this._lastUpdated) return;
     this._lastUpdated = cacheKey;
@@ -352,6 +358,19 @@ class NetworkTopologyCard extends HTMLElement {
     return "#f44336";
   }
 
+  _wiredSpeedClass(speed) {
+    // Mirrors network-table-card's _wiredIcon: cyan = 2.5 Gbit/s+, green =
+    // gigabit, orange = 100 Mbit/s, red = 10 Mbit/s. Shared-port devices have
+    // no resolved speed and keep the neutral blue-grey every wired node used
+    // before. Wi-Fi nodes are coloured by signal instead, via _signalColor.
+    const s = Number(speed);
+    if (!Number.isFinite(s) || s <= 0) return "ntc-wire";
+    if (s >= 2500) return "ntc-wire-cyan";
+    if (s >= 1000) return "ntc-wire-green";
+    if (s >= 100) return "ntc-wire-orange";
+    return "ntc-wire-red";
+  }
+
   _render(state, wgState) {
     const attr = state.attributes ?? {};
     const allDevices = attr.devices ?? [];
@@ -369,6 +388,7 @@ class NetworkTopologyCard extends HTMLElement {
     const hostNames = attr.host_names ?? {};
     const switchNames = attr.switch_names ?? {};
     const hostStats = attr.host_stats ?? {};
+    const hostTopology = attr.host_topology ?? {};
     const hasGateway = !!(gatewayMac || wanIp || wanIp6);
 
     const devices = this._config.show_offline
@@ -410,11 +430,22 @@ class NetworkTopologyCard extends HTMLElement {
       return {
         ...(device ?? {}),
         host: key,
+        _key: key,
+        kind: "switch",
+        _parentHost: hostTopology[key]?.parent_host ?? null,
         hostname: switchName || key,
         model: stats.model || device?.model || "",
         ip: device?.ip || key,
         ip6: device?.ip6,
-        online: stats.available === false ? false : device?.online !== false,
+        // SSH-reachability this cycle is authoritative in both directions —
+        // a stale ARP-derived device.online must not keep a node greyed out
+        // after it's confirmed back up (e.g. right after a reboot).
+        online:
+          stats.available === true
+            ? true
+            : stats.available === false
+              ? false
+              : device?.online !== false,
       };
     });
 
@@ -428,9 +459,16 @@ class NetworkTopologyCard extends HTMLElement {
         })
       : null;
     // The gateway's own SSH-reachability (host_stats[gateway.ip].available) is
-    // authoritative over its ARP-derived device.online, same as AP/switch nodes.
+    // authoritative over its ARP-derived device.online, in BOTH directions —
+    // same as AP/switch nodes — so it doesn't stay greyed out after a reboot
+    // just because the stale ARP-derived flag hasn't caught up yet.
     const gatewayStats = gateway ? (hostStats[gateway.ip] ?? {}) : {};
-    const gatewayOnline = gatewayStats.available === false ? false : gateway?.online !== false;
+    const gatewayOnline =
+      gatewayStats.available === true
+        ? true
+        : gatewayStats.available === false
+          ? false
+          : gateway?.online !== false;
     const apDeviceMatches = new Set();
     const apNodes = [];
     const apNodeKeys = new Set();
@@ -453,11 +491,20 @@ class NetworkTopologyCard extends HTMLElement {
         {
           ...(device ?? {}),
           host: key,
+          kind: "ap",
+          _parentHost: hostTopology[key]?.parent_host ?? null,
           hostname: apName,
           ip: device?.ip || key,
           ip6: device?.ip6,
           model: stats.model || device?.model || "",
-          online: stats.available === false ? false : device?.online !== false,
+          // SSH-reachability this cycle is authoritative in both directions —
+          // see switchNodes above for why.
+          online:
+            stats.available === true
+              ? true
+              : stats.available === false
+                ? false
+                : device?.online !== false,
         },
         aliases,
       );
@@ -466,7 +513,7 @@ class NetworkTopologyCard extends HTMLElement {
     for (const d of allDevices) {
       if (!apHostnames.has(d.hostname) && !apHostnames.has(d.mac?.toLowerCase())) continue;
       if (apDeviceMatches.has(d)) continue;
-      addApNode(d, [d.hostname, d.ip, d.mac?.toLowerCase()]);
+      addApNode({ ...d, kind: "ap", _parentHost: null }, [d.hostname, d.ip, d.mac?.toLowerCase()]);
       apDeviceMatches.add(d);
     }
     const switchDevices = allDevices.filter(
@@ -552,24 +599,175 @@ class NetworkTopologyCard extends HTMLElement {
       if (sa !== sb) return sb - sa;
       return cmpHostname(a, b);
     };
+    const cmpSpeed = (a, b) => {
+      // Wired analogue of cmpSignal: tx_rate carries the negotiated Ethernet
+      // speed, so fastest first. Shared-port devices have no resolved speed
+      // and sort to the bottom, below the slowest known link.
+      const sa = a.tx_rate,
+        sb = b.tx_rate;
+      if (sa == null && sb == null) return cmpHostname(a, b);
+      if (sa == null) return 1;
+      if (sb == null) return -1;
+      if (sa !== sb) return sb - sa;
+      return cmpHostname(a, b);
+    };
     const cmpWireless = this._config.sort_wireless_by_signal ? cmpSignal : cmpHostname;
-    const sortWired = (arr) => [...arr].sort(cmpHostname);
+    const cmpWired = this._config.sort_wired_by_speed ? cmpSpeed : cmpHostname;
+    const sortWired = (arr) => [...arr].sort(cmpWired);
     const sortWireless = (arr) => [...arr].sort(cmpWireless);
 
-    const columns = [];
+    // ── Hub hierarchy resolution ─────────────────────────────────────────────
+    // Router → switch(es) → AP(s) → devices, auto-detected from host_topology
+    // (backend FDB-based uplink detection: each AP/switch's own MAC found on
+    // another host's forwarding-DB table). A hub with no resolvable parent
+    // (older collector script not yet emitting it, or genuinely the root)
+    // falls back to attaching directly under the gateway — same as the old
+    // flat layout, not an error state.
+    const hubNodes = [...switchNodes, ...apNodes];
+    const hubByKey = {};
+    for (const node of hubNodes) hubByKey[node._key] = node;
+    const gatewayHostKey = gateway?.ip ?? null;
+
+    const resolveParentKey = (node) => {
+      const parentHost = node._parentHost;
+      if (!parentHost) return null;
+      if (gatewayHostKey && parentHost === gatewayHostKey) return "__gateway__";
+      const parent = hubByKey[parentHost];
+      return parent ? parent._key : null;
+    };
+    const parentKeyOf = {};
+    for (const node of hubNodes) parentKeyOf[node._key] = resolveParentKey(node);
+    // Cycle guard: the backend already returns a forest, so this only fires on
+    // malformed or flaky FDB data — but the recursive layout below would hang
+    // on a cycle, so guarantee termination here too. Cut the edge that closes
+    // the cycle (the node revisited), not the edge of whichever node the walk
+    // happened to start from: a node that merely points INTO a cycle has a
+    // perfectly valid parent and must keep it.
+    for (const node of hubNodes) {
+      const seen = new Set([node._key]);
+      let cur = parentKeyOf[node._key];
+      while (cur && cur !== "__gateway__") {
+        if (seen.has(cur)) {
+          parentKeyOf[cur] = null;
+          break;
+        }
+        seen.add(cur);
+        cur = parentKeyOf[cur];
+      }
+    }
+    const childHubsOf = {};
+    for (const node of hubNodes) childHubsOf[node._key] = [];
+    const topLevelHubs = [];
+    for (const node of hubNodes) {
+      const pk = parentKeyOf[node._key];
+      if (pk && pk !== "__gateway__" && childHubsOf[pk] !== undefined) {
+        childHubsOf[pk].push(node);
+      } else {
+        topLevelHubs.push(node);
+      }
+    }
+
+    const ROW_GAP = 100;
+    // topDepth: the row a hub attaching directly to the gateway sits at (1
+    // when there's a gateway node above it, 0 when it's a root itself).
+    const topDepth = hasGateway ? 1 : 0;
+
+    // Build each hub's subtree as an ordered list of "parts": its own
+    // directly-attached devices (if any) followed by nested child-hub
+    // subtrees. A hub with neither gets one empty devices part so it still
+    // gets a position (a lone idle AP/switch, same as today).
+    const buildHubLayout = (node, depth) => {
+      const ownDevices =
+        node.kind === "switch"
+          ? sortWired(bySwitch[node.host] ?? [])
+          : sortWireless(byAp[node._key] ?? []);
+      const parts = [];
+      if (ownDevices.length) {
+        parts.push({
+          kind: "devices",
+          devices: ownDevices,
+          depth: depth + 1,
+          wifi: node.kind === "ap",
+        });
+      }
+      for (const child of childHubsOf[node._key] ?? []) {
+        parts.push({ kind: "hub", layout: buildHubLayout(child, depth + 1) });
+      }
+      if (parts.length === 0) parts.push({ kind: "devices", devices: [], depth: depth + 1 });
+      return { node, depth, parts };
+    };
+
+    const partWidth = (part) => {
+      if (part.kind === "devices") return 1;
+      return part.layout.parts.reduce((sum, p) => sum + partWidth(p), 0);
+    };
+
+    // Left-to-right X assignment in abstract units: each part gets a
+    // horizontal slice proportional to its subtree width; a hub's X is the
+    // centroid of its own parts (classic centered-tree layout).
+    const assignX = (parts, startUnit) => {
+      let cursor = startUnit;
+      const placed = [];
+      for (const part of parts) {
+        const w = partWidth(part);
+        const centerUnit = cursor + w / 2;
+        if (part.kind === "devices") {
+          placed.push({ ...part, type: "devices", centerUnit });
+        } else {
+          const children = assignX(part.layout.parts, cursor);
+          placed.push({
+            type: "hub",
+            node: part.layout.node,
+            depth: part.layout.depth,
+            centerUnit,
+            children,
+          });
+        }
+        cursor += w;
+      }
+      return placed;
+    };
+
+    const topLevelParts = [];
     const sortedWired = sortWired(directWiredDevices);
-    for (let i = 0; i < sortedWired.length; i += MAX_COL)
-      columns.push({ devices: sortedWired.slice(i, i + MAX_COL), ap: null });
-    for (const sw of switchNodes)
-      columns.push({ devices: sortWired(bySwitch[sw.host] ?? []), ap: null, switchNode: sw });
-    for (const ap of apNodes) columns.push({ devices: sortWireless(byAp[ap._key]), ap });
-    if (unknownApDevices.length > 0)
-      columns.push({ devices: sortWireless(unknownApDevices), ap: null });
-    if (unknownPathDevices.length > 0)
-      columns.push({ devices: sortWired(unknownPathDevices), ap: null, unknownNode: true });
+    for (let i = 0; i < sortedWired.length; i += MAX_COL) {
+      topLevelParts.push({
+        kind: "devices",
+        devices: sortedWired.slice(i, i + MAX_COL),
+        depth: topDepth + 1,
+        chained: true,
+      });
+    }
+    if (unknownApDevices.length > 0) {
+      topLevelParts.push({
+        kind: "devices",
+        devices: sortWireless(unknownApDevices),
+        depth: topDepth + 1,
+        chained: true,
+      });
+    }
+    if (unknownPathDevices.length > 0) {
+      topLevelParts.push({
+        kind: "hub",
+        layout: {
+          node: { kind: "unknown-hub" },
+          depth: topDepth,
+          parts: [{ kind: "devices", devices: sortWired(unknownPathDevices), depth: topDepth + 1 }],
+        },
+      });
+    }
+    for (const hub of topLevelHubs) {
+      topLevelParts.push({ kind: "hub", layout: buildHubLayout(hub, topDepth) });
+    }
+
+    const placedParts = assignX(topLevelParts, 0);
+    const totalUnits = Math.max(
+      topLevelParts.reduce((sum, p) => sum + partWidth(p), 0),
+      1,
+    );
 
     // Dynamic width — each column gets a fixed minimum, no shrinking on mobile
-    const W = Math.max(columns.length * COL_WIDTH + COL_PAD * 2, 600);
+    const W = Math.max(totalUnits * COL_WIDTH + COL_PAD * 2, 600);
 
     const wgPerRow = Math.max(1, Math.floor((W - 2 * COL_PAD) / WG_CELL_W));
     const wgCount = wgEnabled ? wgPeers.length : 0;
@@ -577,15 +775,26 @@ class NetworkTopologyCard extends HTMLElement {
     const wgBlockH = wgCount ? (wgRows - 1) * WG_ROW_H + WG_ROW_GAP : 0;
 
     const topMargin = 80 + wgBlockH,
-      gwY = hasGateway ? topMargin + 90 : topMargin,
-      apRowY = hasGateway ? gwY + 110 : topMargin + 90,
-      devStartY = apRowY + 90;
-    const maxDevs = Math.max(...columns.map((c) => c.devices.length), 0);
-    const totalH = devStartY + Math.max(maxDevs * ROW_H + 20, 60) + 40;
+      gwY = hasGateway ? topMargin + 90 : topMargin;
+    // rowY(0) is the gateway's own row when present; each further depth
+    // (hub tier, or a hub's device tier) steps down by one uniform gap —
+    // this generalizes the old fixed apRowY/devStartY constants to N tiers.
+    const rowY = (depth) => (hasGateway ? gwY + depth * ROW_GAP : topMargin + 90 + depth * ROW_GAP);
 
-    const nCols = Math.max(columns.length, 1);
-    const colW = (W - 2 * COL_PAD) / nCols;
-    const colCenters = columns.map((_, i) => COL_PAD + colW * i + colW / 2);
+    let maxDepth = topDepth + 1;
+    let maxDevs = 0;
+    const walkForMetrics = (items) => {
+      for (const item of items) {
+        maxDepth = Math.max(maxDepth, item.depth);
+        if (item.type === "devices") maxDevs = Math.max(maxDevs, item.devices.length);
+        else walkForMetrics(item.children);
+      }
+    };
+    walkForMetrics(placedParts);
+    const totalH = rowY(maxDepth) + Math.max(maxDevs * ROW_H + 20, 60) + 40;
+
+    const colW = (W - 2 * COL_PAD) / totalUnits;
+    const unitToX = (centerUnit) => COL_PAD + colW * centerUnit;
     const inetX = W / 2;
     const gwX = inetX,
       inetY = topMargin;
@@ -603,8 +812,18 @@ class NetworkTopologyCard extends HTMLElement {
       if (_isUnknownPath(d)) parts.push("Path: Unknown");
       if (d.noise != null) parts.push(`Noise: ${d.noise} dBm`);
       if (d.snr != null) parts.push(`SNR: ${d.snr} dB`);
-      if (d.tx_rate != null) parts.push(`TX rate: ${d.tx_rate} Mbit/s`);
-      if (d.rx_rate != null) parts.push(`RX rate: ${d.rx_rate} Mbit/s`);
+      if (_isConfirmedWifi(d)) {
+        if (d.tx_rate != null) parts.push(`TX rate: ${d.tx_rate} Mbit/s`);
+        if (d.rx_rate != null) parts.push(`RX rate: ${d.rx_rate} Mbit/s`);
+      } else if (d.tx_rate != null) {
+        // Wired links reuse tx_rate/rx_rate to carry the negotiated Ethernet
+        // speed, which is symmetric — report it once, and as a link speed
+        // rather than the Wi-Fi PHY-rate phrasing above. This is also what
+        // explains the node's colour, so keep the wording aligned with the
+        // table card's "Wired link: …" tooltip.
+        const s = Number(d.tx_rate);
+        parts.push(`Wired link: ${s >= 1000 ? `${s / 1000} Gbit/s` : `${s} Mbit/s`}`);
+      }
       if (d.exp_tput != null) parts.push(`Expected: ${d.exp_tput} Mbit/s`);
       if (d.band) parts.push(`Band: ${d.band}`);
       const rx = _fmtMbps(d.rx_bps),
@@ -783,109 +1002,95 @@ class NetworkTopologyCard extends HTMLElement {
       );
     }
 
-    for (let ci = 0; ci < columns.length; ci++) {
-      const col = columns[ci];
-      const cx = colCenters[ci];
-      const colTopY = col.ap || col.switchNode || col.unknownNode ? apRowY : devStartY;
-      if (hasGateway) {
-        paths.push(
-          curve(
-            gwX,
-            gwY + GW_R,
-            cx,
-            colTopY - (col.ap || col.switchNode || col.unknownNode ? AP_R : NODE_R),
-          ),
-        );
-      }
-
-      if (col.ap) {
-        const ap = col.ap;
-        const apOp = ap.online !== false ? "1" : "0.4";
-        nodes.push(
-          svgNode(cx, apRowY, AP_R, ICON_WIFI, nodeTextRows(ap), "ntc-ap", apOp, nodeTitle(ap)),
-        );
-
-        for (let di = 0; di < col.devices.length; di++) {
-          const d = col.devices[di];
-          const dy = devStartY + di * ROW_H;
-          const sc = this._signalColor(d.signal);
-          paths.push(line(cx, apRowY + AP_R, cx, dy - NODE_R, "ntc-link-wifi"));
+    // Walk the resolved hub tree, connecting each node to its ACTUAL parent's
+    // coordinates (gateway, a switch, or another AP) instead of always the
+    // gateway — this is what makes the map reflect real physical wiring.
+    // `parent` is the {x,y} anchor to connect FROM, or null for a floating
+    // root (no gateway configured and this hub has no resolvable parent).
+    const renderPart = (item, parent) => {
+      const cx = unitToX(item.centerUnit);
+      if (item.type === "devices") {
+        const y0 = rowY(item.depth);
+        const linkCls = item.wifi ? "ntc-link-wifi" : "ntc-link";
+        for (let di = 0; di < item.devices.length; di++) {
+          const d = item.devices[di];
+          const dy = y0 + di * ROW_H;
+          if (item.chained) {
+            // Direct-to-root device chunks chain vertically (device[i] links
+            // to device[i-1]); only the first links up to the parent.
+            if (di === 0) {
+              if (parent) paths.push(curve(parent.x, parent.y, cx, dy - NODE_R));
+            } else {
+              paths.push(line(cx, y0 + (di - 1) * ROW_H + NODE_R, cx, dy - NODE_R));
+            }
+          } else if (parent) {
+            paths.push(curve(parent.x, parent.y, cx, dy - NODE_R, linkCls));
+          }
+          const sc = item.wifi ? this._signalColor(d.signal) : null;
           const unknown = !d.hostname && !d.vendor;
           if (!this._iconCache[d.mac]) this._iconCache[d.mac] = _deviceIcon(d);
           const icon = this._iconCache[d.mac];
           const devOp = d.online !== false ? "1" : "0.4";
           nodes.push(
-            svgNode(cx, dy, NODE_R, icon, nodeTextRows(d), null, devOp, nodeTitle(d), sc, unknown),
+            svgNode(
+              cx,
+              dy,
+              NODE_R,
+              icon,
+              nodeTextRows(d),
+              item.wifi ? null : this._wiredSpeedClass(d.tx_rate),
+              devOp,
+              nodeTitle(d),
+              sc,
+              unknown,
+            ),
           );
         }
-      } else if (col.switchNode || col.unknownNode) {
-        const sw = col.switchNode;
-        const swOp = col.unknownNode ? "1" : sw.online !== false ? "1" : "0.4";
+        return;
+      }
+
+      const node = item.node;
+      const cy = rowY(item.depth);
+      if (parent) paths.push(curve(parent.x, parent.y, cx, cy - AP_R));
+      if (node.kind === "switch") {
+        const swOp = node.online !== false ? "1" : "0.4";
         nodes.push(
           svgNode(
             cx,
-            apRowY,
+            cy,
             AP_R,
-            col.unknownNode ? ICON_UNKNOWN : ICON_SWITCH,
-            col.unknownNode ? unknownTextRows() : switchTextRows(sw),
-            col.unknownNode ? "ntc-unknown-hub" : "ntc-switch",
+            ICON_SWITCH,
+            switchTextRows(node),
+            "ntc-switch",
             swOp,
-            col.unknownNode ? "Unknown connection path" : switchTitle(sw),
+            switchTitle(node),
           ),
         );
-
-        for (let di = 0; di < col.devices.length; di++) {
-          const d = col.devices[di];
-          const dy = devStartY + di * ROW_H;
-          paths.push(line(cx, apRowY + AP_R, cx, dy - NODE_R));
-          if (!this._iconCache[d.mac]) this._iconCache[d.mac] = _deviceIcon(d);
-          const icon = this._iconCache[d.mac];
-          const unknown = !d.hostname && !d.vendor;
-          const wireOp = d.online !== false ? "1" : "0.4";
-          nodes.push(
-            svgNode(
-              cx,
-              dy,
-              NODE_R,
-              icon,
-              nodeTextRows(d),
-              "ntc-wire",
-              wireOp,
-              nodeTitle(d),
-              null,
-              unknown,
-            ),
-          );
-        }
+      } else if (node.kind === "ap") {
+        const apOp = node.online !== false ? "1" : "0.4";
+        nodes.push(
+          svgNode(cx, cy, AP_R, ICON_WIFI, nodeTextRows(node), "ntc-ap", apOp, nodeTitle(node)),
+        );
       } else {
-        for (let di = 0; di < col.devices.length; di++) {
-          const d = col.devices[di];
-          const dy = devStartY + di * ROW_H;
-          const prevY = di === 0 && hasGateway ? gwY + GW_R : devStartY + (di - 1) * ROW_H + NODE_R;
-          const prevX = di === 0 ? (hasGateway ? gwX : cx) : cx;
-          if (di === 0 && hasGateway) paths.push(curve(prevX, prevY, cx, dy - NODE_R));
-          else if (di > 0) paths.push(line(prevX, prevY, cx, dy - NODE_R));
-          if (!this._iconCache[d.mac]) this._iconCache[d.mac] = _deviceIcon(d);
-          const icon = this._iconCache[d.mac];
-          const unknown = !d.hostname && !d.vendor;
-          const wireOp = d.online !== false ? "1" : "0.4";
-          nodes.push(
-            svgNode(
-              cx,
-              dy,
-              NODE_R,
-              icon,
-              nodeTextRows(d),
-              "ntc-wire",
-              wireOp,
-              nodeTitle(d),
-              null,
-              unknown,
-            ),
-          );
-        }
+        nodes.push(
+          svgNode(
+            cx,
+            cy,
+            AP_R,
+            ICON_UNKNOWN,
+            unknownTextRows(),
+            "ntc-unknown-hub",
+            "1",
+            "Unknown connection path",
+          ),
+        );
       }
-    }
+      const childAnchor = { x: cx, y: cy + AP_R };
+      for (const child of item.children) renderPart(child, childAnchor);
+    };
+
+    const rootAnchor = hasGateway ? { x: gwX, y: gwY + GW_R } : null;
+    for (const item of placedParts) renderPart(item, rootAnchor);
 
     const svg = `
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${totalH}"
@@ -1343,6 +1548,7 @@ class NetworkTopologyCard extends HTMLElement {
       show_ipv4: true,
       show_ipv6: false,
       sort_wireless_by_signal: false,
+      sort_wired_by_speed: false,
     };
   }
 }
@@ -1437,6 +1643,10 @@ class NetworkTopologyCardEditor extends HTMLElement {
           <ha-checkbox id="sort_wireless_by_signal"></ha-checkbox>
           <span>Sort wireless clients by signal (strongest first)</span>
         </label>
+        <label class="cb-row">
+          <ha-checkbox id="sort_wired_by_speed"></ha-checkbox>
+          <span>Sort wired clients by link speed (fastest first)</span>
+        </label>
         <div id="wg-section"></div>
       </div>`;
 
@@ -1504,6 +1714,12 @@ class NetworkTopologyCardEditor extends HTMLElement {
     sortSignalCb.checked = c.sort_wireless_by_signal ?? false;
     sortSignalCb.addEventListener("change", () => {
       this._fire({ ...this._config, sort_wireless_by_signal: sortSignalCb.checked });
+    });
+
+    const sortSpeedCb = this.shadowRoot.querySelector("#sort_wired_by_speed");
+    sortSpeedCb.checked = c.sort_wired_by_speed ?? false;
+    sortSpeedCb.addEventListener("change", () => {
+      this._fire({ ...this._config, sort_wired_by_speed: sortSpeedCb.checked });
     });
 
     const wgSection = this.shadowRoot.querySelector("#wg-section");

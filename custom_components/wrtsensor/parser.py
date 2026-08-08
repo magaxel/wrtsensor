@@ -146,6 +146,9 @@ def parse_wifi_output(out: str, ap_name: str) -> tuple[list[dict[str, Any]], lis
         if line.startswith("FDB|"):
             # Forwarding-DB lines are handled by parse_fdb; never a wifi station.
             continue
+        if line.startswith("PORTBYTES|"):
+            # Per-port byte counters are handled by parse_port_bytes.
+            continue
         parts = line.split("|")
         if len(parts) < 3:
             continue
@@ -204,6 +207,40 @@ def parse_fdb(out: str) -> dict[str, str]:
     return result
 
 
+def parse_port_bytes(out: str) -> dict[str, dict[str, int | None]]:
+    """Map bridge port netdev -> counters/link speed from ``PORTBYTES|`` lines.
+
+    Format per line is ``PORTBYTES|<port_netdev>|<rx_bytes>|<tx_bytes>|<speed_mbit>``
+    (e.g. ``PORTBYTES|lan5|12345|67890|1000``). Counters are from the switch's
+    point of view (``rx`` = frames the switch received on the port). ``speed`` is
+    the negotiated link rate in Mbit/s, or ``None`` when the link is down/unknown
+    (sysfs reports ``-1``) or an older collector omitted the field.
+    """
+    result: dict[str, dict[str, int | None]] = {}
+    for line in out.splitlines():
+        if not line.startswith("PORTBYTES|"):
+            continue
+        parts = line.split("|")
+        if len(parts) >= 4:
+            port = parts[1].strip()
+            try:
+                rx = int(parts[2])
+                tx = int(parts[3])
+            except ValueError:
+                continue
+            speed: int | None = None
+            if len(parts) >= 5 and parts[4].strip():
+                try:
+                    s = int(parts[4])
+                except ValueError:
+                    s = 0
+                if s > 0:
+                    speed = s
+            if port:
+                result[port] = {"rx": rx, "tx": tx, "speed": speed}
+    return result
+
+
 def _port_number(port: str) -> str:
     """Display label for a bridge port: trailing digits of the netdev name.
 
@@ -214,20 +251,20 @@ def _port_number(port: str) -> str:
     return m.group(1) if m else port
 
 
-def resolve_switch_ports(
+def _winning_ports(
     fdb_by_host: dict[str, dict[str, str]],
-    switch_hosts: set[str] | None = None,
-    uplink_threshold: int = FDB_UPLINK_MAC_THRESHOLD,
-) -> dict[str, dict[str, str]]:
-    """Resolve each MAC to the access port it is physically connected to.
+    switch_hosts: set[str] | None,
+    uplink_threshold: int,
+) -> dict[str, tuple[str, str, int]]:
+    """Per MAC, the winning access port as ``(host, port_netdev, mac_count)``.
 
     A MAC is learned both on its real access port and on the uplink/trunk ports
     of every other OpenWrt device. Ports carrying more than ``uplink_threshold``
     MACs are treated as uplinks and ignored. Among the remaining candidates the
     port with the fewest MACs (the most specific access port) wins, preferring a
-    designated switch host on ties.
-
-    Returns ``mac -> {"port": display_port, "host": switch_host}``.
+    designated switch host on ties. Shared by ``resolve_switch_ports`` (for the
+    display port) and ``resolve_port_bytes`` (for per-port byte attribution) so
+    both agree on which port a device sits on.
     """
     switch_hosts = switch_hosts or set()
     port_macs: dict[tuple[str, str], set[str]] = {}
@@ -245,11 +282,231 @@ def resolve_switch_ports(
             candidates.setdefault(mac, []).append(
                 (len(macs), 0 if host in switch_hosts else 1, host, port)
             )
-    result: dict[str, dict[str, str]] = {}
+    winners: dict[str, tuple[str, str, int]] = {}
     for mac, cands in candidates.items():
-        _, _, host, port = min(cands)
-        result[mac] = {"port": _port_number(port), "host": host}
+        count, _, host, port = min(cands)
+        winners[mac] = (host, port, count)
+    return winners
+
+
+def resolve_switch_ports(
+    fdb_by_host: dict[str, dict[str, str]],
+    switch_hosts: set[str] | None = None,
+    uplink_threshold: int = FDB_UPLINK_MAC_THRESHOLD,
+) -> dict[str, dict[str, str]]:
+    """Resolve each MAC to the access port it is physically connected to.
+
+    Returns ``mac -> {"port": display_port, "host": switch_host}``.
+    """
+    winners = _winning_ports(fdb_by_host, switch_hosts, uplink_threshold)
+    return {
+        mac: {"port": _port_number(port), "host": host}
+        for mac, (host, port, _count) in winners.items()
+    }
+
+
+def resolve_port_bytes(
+    fdb_by_host: dict[str, dict[str, str]],
+    port_bytes_by_host: dict[str, dict[str, dict[str, int | None]]],
+    switch_hosts: set[str] | None = None,
+    uplink_threshold: int = FDB_UPLINK_MAC_THRESHOLD,
+    exclude_macs: set[str] | None = None,
+) -> dict[str, dict[str, int]]:
+    """Per-MAC wired byte counters from the switch port each device sits alone on.
+
+    Only single-device access ports (exactly one learned MAC) are attributed, so
+    shared ports (a downstream dumb switch, uplinks/trunks) are skipped — their
+    aggregate counters can't be assigned to one device. Direction is swapped to
+    the device's perspective: the switch port's ``rx`` is the device's upload
+    (``ul``) and its ``tx`` is the device's download (``dl``).
+
+    ``exclude_macs`` holds the infra hosts' own bridge MACs. A router uplinked
+    through a switch is the *only* MAC learned on the switch's uplink port —
+    every routed frame carries its rewritten source MAC — so it looks exactly
+    like a lone access-port device and would otherwise inherit the whole
+    downstream fan-out's counters as if they were its own.
+
+    Returns ``mac -> {"ul": bytes, "dl": bytes}``.
+    """
+    exclude_macs = exclude_macs or set()
+    winners = _winning_ports(fdb_by_host, switch_hosts, uplink_threshold)
+    result: dict[str, dict[str, int]] = {}
+    for mac, (host, port, count) in winners.items():
+        if count != 1 or mac in exclude_macs:
+            continue
+        pb = port_bytes_by_host.get(host, {}).get(port)
+        if not pb or pb.get("rx") is None or pb.get("tx") is None:
+            continue
+        result[mac] = {"ul": pb["rx"], "dl": pb["tx"]}
     return result
+
+
+def resolve_port_links(
+    fdb_by_host: dict[str, dict[str, str]],
+    port_bytes_by_host: dict[str, dict[str, dict[str, int | None]]],
+    switch_hosts: set[str] | None = None,
+    uplink_threshold: int = FDB_UPLINK_MAC_THRESHOLD,
+) -> dict[str, int]:
+    """Per-MAC negotiated link speed (Mbit/s) from the port each device sits alone on.
+
+    Same single-device-access-port rule as ``resolve_port_bytes``: a wired device
+    that is the only MAC on its switch port inherits that port's negotiated
+    Ethernet speed (100 / 1000 / 2500 …). Ports with no known speed are skipped.
+
+    Returns ``mac -> speed_mbit``.
+    """
+    winners = _winning_ports(fdb_by_host, switch_hosts, uplink_threshold)
+    result: dict[str, int] = {}
+    for mac, (host, port, count) in winners.items():
+        if count != 1:
+            continue
+        pb = port_bytes_by_host.get(host, {}).get(port)
+        speed = pb.get("speed") if pb else None
+        if speed:
+            result[mac] = speed
+    return result
+
+
+def resolve_wired_macs(
+    fdb_by_host: dict[str, dict[str, str]],
+    port_bytes_by_host: dict[str, dict[str, dict[str, int | None]]],
+    switch_hosts: set[str] | None = None,
+    uplink_threshold: int = FDB_UPLINK_MAC_THRESHOLD,
+) -> set[str]:
+    """MACs whose winning access port is a physical wired bridge port.
+
+    The collector emits ``PORTBYTES|`` only for wired bridge members — wireless
+    vifs are skipped — so a winning port that has byte counters is evidence the
+    device is cabled rather than associated. Hosts running an older collector
+    contribute nothing here, which degrades to "no wired evidence" rather than
+    a wrong answer.
+    """
+    winners = _winning_ports(fdb_by_host, switch_hosts, uplink_threshold)
+    return {
+        mac
+        for mac, (host, port, _count) in winners.items()
+        if port in port_bytes_by_host.get(host, {})
+    }
+
+
+def parse_self_mac(out: str) -> str:
+    """Extract a host's own LAN bridge MAC from a collector ``SELFMAC|`` line.
+
+    Empty string when absent — a host running an older collector script that
+    doesn't emit it yet. Callers must treat that as "topology unknown", not
+    an error.
+    """
+    for line in out.splitlines():
+        if line.startswith("SELFMAC|"):
+            return line[len("SELFMAC|") :].strip().upper()
+    return ""
+
+
+def resolve_infra_parents(
+    fdb_by_host: dict[str, dict[str, str]],
+    self_macs: dict[str, str],
+    switch_hosts: set[str] | None = None,
+    gateway_host: str = "",
+) -> dict[str, dict[str, str]]:
+    """Resolve each infra host's uplink parent from other hosts' FDB tables.
+
+    A host's own MAC never appears in its own FDB dump (filtered as a "self"
+    entry by the collector) but shows up as a normal learned entry in
+    whichever OTHER host's FDB table sees it arrive on the wire. Every host
+    between us and the rest of the LAN sees us, though, so "who sees my MAC"
+    alone cannot tell upstream from downstream. Deliberately does NOT apply
+    the upper uplink-MAC-count threshold like ``resolve_switch_ports`` does: a
+    real AP-to-switch or switch-to-switch port is expected to carry many
+    relayed client MACs, which is exactly the signature that identifies it
+    here, not noise to discard.
+
+    Direction comes from the gateway's own MAC. Since a host's MAC is absent
+    from its own table, a candidate port that also carries the gateway's MAC
+    is a port pointing *towards* the gateway — so the host offering it sits
+    below us, not above, and it is rejected. Only the gateway itself is
+    exempt, because its ports legitimately never carry its own MAC. This is
+    what makes chains work: in ``gateway -> switchA -> switchB``, switchB's
+    uplink port carries the gateway's MAC, so switchB is correctly not
+    offered as switchA's parent, and the mutual ``switchA <-> switchB`` cycle
+    that would otherwise result cannot form.
+
+    Among surviving candidates, a port carrying no other infra identity is
+    preferred — a dedicated link is stronger evidence than a shared one — but
+    unlike a hard filter this still resolves a host that has other infra
+    downstream of it, whose true uplink necessarily carries those MACs. Then
+    the port with the fewest total MACs wins (closest to a dedicated link),
+    preferring a designated switch host on ties.
+
+    Returns ``host -> {"host": parent_host, "port": display_port}`` only for
+    hosts with a known, non-empty self-MAC that was actually seen on some
+    other host's FDB. A host absent from the result has no resolvable parent —
+    the root of the tree, or a host still running an older collector script
+    with no self-MAC. Callers must treat absence as "no resolvable parent,"
+    not an error. The result is guaranteed acyclic: it is a forest, so walking
+    parents from any host always terminates.
+    """
+    switch_hosts = switch_hosts or set()
+    all_self_macs = {mac for mac in self_macs.values() if mac}
+    gateway_mac = self_macs.get(gateway_host, "") if gateway_host else ""
+    port_macs: dict[tuple[str, str], set[str]] = {}
+    for host, fdb in fdb_by_host.items():
+        for mac, port in fdb.items():
+            port_macs.setdefault((host, port), set()).add(mac)
+
+    result: dict[str, dict[str, str]] = {}
+    for host, self_mac in self_macs.items():
+        if not self_mac or host == gateway_host:
+            continue
+        candidates: list[tuple[int, int, int, str, str]] = []
+        for (parent_host, port), macs in port_macs.items():
+            if parent_host == host or self_mac not in macs:
+                continue
+            if gateway_mac and parent_host != gateway_host and gateway_mac in macs:
+                continue  # port faces the gateway — this host is below us
+            shared = len((all_self_macs & macs) - {self_mac})
+            if shared and not gateway_mac:
+                # No gateway MAC to establish direction (switch-only or AP-only
+                # deployment, or the gateway is on an older collector script).
+                # Fall back to rejecting shared/trunk ports outright: without an
+                # anchor a relayed infra MAC is indistinguishable from a real
+                # downstream one, and a wrong edge is worse than a flat map.
+                continue
+            candidates.append(
+                (
+                    shared,
+                    len(macs),
+                    0 if parent_host in switch_hosts else 1,
+                    parent_host,
+                    port,
+                )
+            )
+        if candidates:
+            *_, parent_host, port = min(candidates)
+            result[host] = {"host": parent_host, "port": _port_number(port)}
+    _break_parent_cycles(result)
+    return result
+
+
+def _break_parent_cycles(parents: dict[str, dict[str, str]]) -> None:
+    """Drop edges until ``parents`` is a forest, in place.
+
+    The directional rule in ``resolve_infra_parents`` should already prevent
+    cycles, but it depends on the gateway's MAC being known and currently
+    learned. Without that anchor a stale or partial FDB could still produce
+    one, and every consumer walks these edges to the root — so guarantee
+    termination here rather than making each caller defend itself. The edge
+    that closes the cycle is the one dropped, leaving the rest of the chain
+    intact.
+    """
+    for start in list(parents):
+        seen = {start}
+        cur = parents.get(start, {}).get("host")
+        while cur:
+            if cur in seen:
+                parents.pop(cur, None)
+                break
+            seen.add(cur)
+            cur = parents.get(cur, {}).get("host")
 
 
 def parse_board_info(out: str) -> dict[str, str]:

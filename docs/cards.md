@@ -33,10 +33,29 @@ columns:
 ```
 
 The `ap` column is displayed as **Port/AP**. It shows the AP name for Wi-Fi clients
-and `Port <number>` for wired clients learned from a configured switch. Devices
-with no current Wi-Fi station match and no switch-port attribution show as
-**Unknown** unless `show_unknown: false` is set. Existing dashboards that still list
-`switch_port` are mapped to `ap` automatically by the card.
+and `<SwitchName> #<port>` for wired clients learned from a configured switch (e.g.
+`KallarenAP #17`), where the name is the switch's own hostname; it falls back to
+`Port <number>` when that hostname is unknown. Devices with no current Wi-Fi station
+match and no switch-port attribution show as **Unknown** unless `show_unknown: false`
+is set. Existing dashboards that still list `switch_port` are mapped to `ap`
+automatically by the card.
+
+Infrastructure hosts (APs and switches) fall back to their `host_topology` uplink. Their
+own port also relays every device behind them, so it exceeds the uplink-MAC threshold and
+is discarded for port attribution — a busy AP would otherwise flip to **Unknown** as its
+client count crosses the threshold. The topology data resolves the same link without that
+threshold, so an AP shows e.g. `switch #19` and the switch itself `gw #1`.
+
+The `tx_rate` / `rx_rate` columns (**TX/RX (Mbit/s)**) show the Wi-Fi PHY link rate for
+wireless clients and the **negotiated Ethernet speed** (100 / 1000 / 2500) for a wired
+client on its own switch port — both are the current link rate, not live throughput (use
+the `tx_bps` / `rx_bps` columns, **↑/↓ Mbit/s**, for that). Wired speed is symmetric, so
+`TX` and `RX` read the same value; shared-port and unresolved devices show `—`.
+
+The **connection** icon is colour-coded by link quality: for Wi-Fi by signal strength,
+and for wired by negotiated speed — cyan = 2.5 Gbit/s+, green = gigabit, orange =
+100 Mbit/s (Fast Ethernet), red = 10 Mbit/s. Wired devices whose speed can't be resolved
+(shared port) show a plain uncoloured ethernet icon.
 
 ## `network-topology-card`
 
@@ -53,6 +72,12 @@ OpenWrt hostnames reported by the collector, including switch-only maps.
 Configured OpenWrt gateway, AP, and switch nodes prefer the hostname configured
 on that device over DHCP or DNS names seen elsewhere.
 
+Client nodes are colour-coded by link quality, matching the `network-table-card`
+connection icon: Wi-Fi clients by signal strength, wired clients by negotiated
+speed — cyan = 2.5 Gbit/s+, green = gigabit, orange = 100 Mbit/s, red = 10 Mbit/s.
+Wired devices whose speed can't be resolved (shared port, or behind a dumb switch)
+keep the neutral blue-grey. Hovering a wired node shows its `Wired link:` speed.
+
 ```yaml
 type: custom:network-topology-card
 entity: sensor.my_router_network_scanner
@@ -65,6 +90,7 @@ show_hostnames: true          # show device hostnames; false leaves only selecte
 show_ipv4: true               # show IPv4 address rows and public IPv4 beside the gateway
 show_ipv6: false              # show IPv6 address rows and public IPv6 beside the gateway
 sort_wireless_by_signal: false   # true = order wireless clients by signal (strongest under the AP) instead of hostname
+sort_wired_by_speed: false       # true = order wired clients by link speed (fastest first); unresolved speeds sort last
 show_wireguard_peers: false      # true = draw WireGuard peers above Internet
 show_offline_wireguard: true     # include offline WireGuard peers dimmed
 wireguard_entity: null           # optional sensor override if auto-detect is wrong

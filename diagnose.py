@@ -540,15 +540,27 @@ def parse_ndp(lines: list[str]) -> dict[str, str]:
 
 def collect_wifi(
     host: str, ap_name: str, script: str
-) -> tuple[list[dict[str, Any]], list[str], dict[str, str]]:
+) -> tuple[
+    list[dict[str, Any]],
+    list[str],
+    dict[str, str],
+    str,
+    dict[str, dict[str, int | None]],
+]:
     """Get WiFi associations from an OpenWrt host.
 
-    Returns (entries, hoststat_lines, fdb) where fdb maps MAC -> bridge port.
+    Returns (entries, hoststat_lines, fdb, self_mac, port_bytes) where fdb maps
+    MAC -> bridge port, self_mac is this host's own LAN bridge MAC (empty string
+    if it's running an older collector script that doesn't emit it), and
+    port_bytes maps bridge port netdev -> {rx, tx, speed} (cumulative byte
+    counters and negotiated link speed in Mbit/s, speed None if down/unknown).
     """
     out = ssh_run(host, script)
     entries: list[dict[str, Any]] = []
     hoststat: list[str] = []
     fdb: dict[str, str] = {}
+    self_mac = ""
+    port_bytes: dict[str, dict[str, int | None]] = {}
     for line in out.splitlines():
         if line.startswith("STAT|"):
             stat_parts = line.split("|")
@@ -564,6 +576,29 @@ def collect_wifi(
                 fport = fdb_parts[2].strip()
                 if fmac and fport:
                     fdb[fmac] = fport
+            continue
+        if line.startswith("PORTBYTES|"):
+            pb_parts = line.split("|")
+            if len(pb_parts) >= 4:
+                pport = pb_parts[1].strip()
+                try:
+                    prx = int(pb_parts[2])
+                    ptx = int(pb_parts[3])
+                except ValueError:
+                    continue
+                pspeed: int | None = None
+                if len(pb_parts) >= 5 and pb_parts[4].strip():
+                    try:
+                        ps = int(pb_parts[4])
+                    except ValueError:
+                        ps = 0
+                    if ps > 0:
+                        pspeed = ps
+                if pport:
+                    port_bytes[pport] = {"rx": prx, "tx": ptx, "speed": pspeed}
+            continue
+        if line.startswith("SELFMAC|"):
+            self_mac = line[len("SELFMAC|") :].strip().upper()
             continue
         parts = line.split("|")
         if len(parts) < 3:
@@ -624,18 +659,19 @@ def collect_wifi(
                 "exp_tput": exp_tput,
             }
         )
-    return entries, hoststat, fdb
+    return entries, hoststat, fdb, self_mac, port_bytes
 
 
-def resolve_switch_ports(
+def _winning_ports(
     fdb_by_host: dict[str, dict[str, str]],
-    uplink_threshold: int = FDB_UPLINK_MAC_THRESHOLD,
-) -> dict[str, dict[str, str]]:
-    """Resolve each MAC to the access port it is physically connected to.
+    uplink_threshold: int,
+) -> dict[str, tuple[str, str, int]]:
+    """Per MAC, the winning access port as ``(host, port_netdev, mac_count)``.
 
     Ports carrying more than ``uplink_threshold`` MACs are uplinks/trunks and
     ignored; the remaining port with the fewest MACs (the access port) wins.
-    Returns MAC -> {"port": port number, "host": switch host}.
+    Shared by ``resolve_switch_ports`` and ``resolve_port_bytes`` so both agree
+    on which port a device sits on.
     """
     port_macs: dict[tuple[str, str], set[str]] = {}
     for host, fdb in fdb_by_host.items():
@@ -647,12 +683,202 @@ def resolve_switch_ports(
             continue
         for mac in macs:
             candidates.setdefault(mac, []).append((len(macs), host, port))
-    result: dict[str, dict[str, str]] = {}
+    winners: dict[str, tuple[str, str, int]] = {}
     for mac, cands in candidates.items():
-        _, host, port = min(cands)
+        count, host, port = min(cands)
+        winners[mac] = (host, port, count)
+    return winners
+
+
+def resolve_switch_ports(
+    fdb_by_host: dict[str, dict[str, str]],
+    uplink_threshold: int = FDB_UPLINK_MAC_THRESHOLD,
+) -> dict[str, dict[str, str]]:
+    """Resolve each MAC to the access port it is physically connected to.
+
+    Returns MAC -> {"port": port number, "host": switch host}.
+    """
+    winners = _winning_ports(fdb_by_host, uplink_threshold)
+    result: dict[str, dict[str, str]] = {}
+    for mac, (host, port, _count) in winners.items():
         m = re.search(r"(\d+)$", port)
         result[mac] = {"port": m.group(1) if m else port, "host": host}
     return result
+
+
+def resolve_port_bytes(
+    fdb_by_host: dict[str, dict[str, str]],
+    port_bytes_by_host: dict[str, dict[str, dict[str, int | None]]],
+    uplink_threshold: int = FDB_UPLINK_MAC_THRESHOLD,
+    exclude_macs: set[str] | None = None,
+) -> dict[str, dict[str, int]]:
+    """Per-MAC wired byte counters from the switch port each device sits alone on.
+
+    Only single-device access ports (exactly one learned MAC) are attributed, so
+    shared ports (a downstream dumb switch, uplinks/trunks) are skipped. Direction
+    is swapped to the device's perspective: the switch port's ``rx`` is the
+    device's upload (``ul``) and its ``tx`` is the device's download (``dl``).
+
+    ``exclude_macs`` holds the infra hosts' own bridge MACs. A router uplinked
+    through a switch is the *only* MAC learned on the switch's uplink port —
+    every routed frame carries its rewritten source MAC — so it looks exactly
+    like a lone access-port device and would otherwise inherit the whole
+    downstream fan-out's counters as if they were its own.
+
+    Returns MAC -> {"ul": bytes, "dl": bytes}.
+    """
+    exclude_macs = exclude_macs or set()
+    winners = _winning_ports(fdb_by_host, uplink_threshold)
+    result: dict[str, dict[str, int]] = {}
+    for mac, (host, port, count) in winners.items():
+        if count != 1 or mac in exclude_macs:
+            continue
+        pb = port_bytes_by_host.get(host, {}).get(port)
+        if not pb or pb.get("rx") is None or pb.get("tx") is None:
+            continue
+        result[mac] = {"ul": pb["rx"], "dl": pb["tx"]}
+    return result
+
+
+def resolve_wired_macs(
+    fdb_by_host: dict[str, dict[str, str]],
+    port_bytes_by_host: dict[str, dict[str, dict[str, int | None]]],
+    uplink_threshold: int = FDB_UPLINK_MAC_THRESHOLD,
+) -> set[str]:
+    """MACs whose winning access port is a physical wired bridge port.
+
+    The collector emits ``PORTBYTES|`` only for wired bridge members — wireless
+    vifs are skipped — so a winning port that has byte counters is evidence the
+    device is cabled rather than associated. Hosts running an older collector
+    contribute nothing here, which degrades to "no wired evidence" rather than
+    a wrong answer.
+    """
+    winners = _winning_ports(fdb_by_host, uplink_threshold)
+    return {
+        mac
+        for mac, (host, port, _count) in winners.items()
+        if port in port_bytes_by_host.get(host, {})
+    }
+
+
+def resolve_port_links(
+    fdb_by_host: dict[str, dict[str, str]],
+    port_bytes_by_host: dict[str, dict[str, dict[str, int | None]]],
+    uplink_threshold: int = FDB_UPLINK_MAC_THRESHOLD,
+) -> dict[str, int]:
+    """Per-MAC negotiated link speed (Mbit/s) from the port each device sits alone on.
+
+    Same single-device-access-port rule as ``resolve_port_bytes``: a wired device
+    alone on its switch port inherits that port's negotiated Ethernet speed
+    (100 / 1000 / 2500 …). Ports with no known speed are skipped.
+
+    Returns MAC -> speed_mbit.
+    """
+    winners = _winning_ports(fdb_by_host, uplink_threshold)
+    result: dict[str, int] = {}
+    for mac, (host, port, count) in winners.items():
+        if count != 1:
+            continue
+        pb = port_bytes_by_host.get(host, {}).get(port)
+        speed = pb.get("speed") if pb else None
+        if speed:
+            result[mac] = speed
+    return result
+
+
+def resolve_infra_parents(
+    fdb_by_host: dict[str, dict[str, str]],
+    self_macs: dict[str, str],
+    gateway_host: str = "",
+) -> dict[str, dict[str, str]]:
+    """Resolve each AP's uplink parent from other hosts' FDB tables.
+
+    A host's own MAC never appears in its own FDB dump (filtered as a "self"
+    entry by the collector) but shows up as a normal learned entry in
+    whichever OTHER host's FDB table sees it arrive on the wire. Every host
+    between us and the rest of the LAN sees us, though, so "who sees my MAC"
+    alone cannot tell upstream from downstream. Deliberately does NOT apply
+    the upper uplink-MAC-count threshold like resolve_switch_ports does: a
+    real AP-to-switch port is expected to carry many relayed client MACs,
+    which is exactly the signature that identifies it here, not noise to
+    discard.
+
+    Direction comes from the gateway's own MAC. Since a host's MAC is absent
+    from its own table, a candidate port that also carries the gateway's MAC
+    is a port pointing *towards* the gateway — so the host offering it sits
+    below us, not above, and it is rejected. Only the gateway itself is
+    exempt, because its ports legitimately never carry its own MAC. This is
+    what makes chains work: in ``gateway -> switchA -> switchB``, switchB's
+    uplink port carries the gateway's MAC, so switchB is correctly not
+    offered as switchA's parent, and the mutual ``switchA <-> switchB`` cycle
+    that would otherwise result cannot form.
+
+    Among surviving candidates, a port carrying no other infra identity is
+    preferred — a dedicated link is stronger evidence than a shared one — but
+    unlike a hard filter this still resolves a host that has other infra
+    downstream of it, whose true uplink necessarily carries those MACs. Then
+    the port with the fewest total MACs wins.
+
+    Returns AP host -> {"host": parent_host, "port": display_port} only for
+    hosts with a known, non-empty self-MAC that was actually seen on some
+    other host's FDB. Absence means "no resolvable parent" (the root, or an AP
+    on an older collector script with no self-MAC), not an error. The result
+    is guaranteed acyclic: it is a forest, so walking parents from any host
+    always terminates.
+    """
+    all_self_macs = {mac for mac in self_macs.values() if mac}
+    gateway_mac = self_macs.get(gateway_host, "") if gateway_host else ""
+    port_macs: dict[tuple[str, str], set[str]] = {}
+    for host, fdb in fdb_by_host.items():
+        for mac, port in fdb.items():
+            port_macs.setdefault((host, port), set()).add(mac)
+
+    result: dict[str, dict[str, str]] = {}
+    for host, self_mac in self_macs.items():
+        if not self_mac or host == gateway_host:
+            continue
+        candidates: list[tuple[int, int, str, str]] = []
+        for (parent_host, port), macs in port_macs.items():
+            if parent_host == host or self_mac not in macs:
+                continue
+            if gateway_mac and parent_host != gateway_host and gateway_mac in macs:
+                continue  # port faces the gateway — this host is below us
+            shared = len((all_self_macs & macs) - {self_mac})
+            if shared and not gateway_mac:
+                # No gateway MAC to establish direction. Fall back to rejecting
+                # shared/trunk ports outright: without an anchor a relayed infra
+                # MAC is indistinguishable from a real downstream one, and a
+                # wrong edge is worse than a flat map.
+                continue
+            candidates.append((shared, len(macs), parent_host, port))
+        if candidates:
+            *_, parent_host, port = min(candidates)
+            m = re.search(r"(\d+)$", port)
+            result[host] = {"host": parent_host, "port": m.group(1) if m else port}
+    _break_parent_cycles(result)
+    return result
+
+
+def _break_parent_cycles(parents: dict[str, dict[str, str]]) -> None:
+    """Drop edges until ``parents`` is a forest, in place.
+
+    The directional rule in ``resolve_infra_parents`` should already prevent
+    cycles, but it depends on the gateway's MAC being known and currently
+    learned. Without that anchor a stale or partial FDB could still produce
+    one, and every consumer walks these edges to the root — so guarantee
+    termination here rather than making each caller defend itself. The edge
+    that closes the cycle is the one dropped, leaving the rest of the chain
+    intact.
+    """
+    for start in list(parents):
+        seen = {start}
+        cur = parents.get(start, {}).get("host")
+        while cur:
+            if cur in seen:
+                parents.pop(cur, None)
+                break
+            seen.add(cur)
+            cur = parents.get(cur, {}).get("host")
 
 
 def get_ap_info(host: str) -> tuple[str, str]:
@@ -1476,10 +1702,14 @@ def compute_wg_rates(interfaces: list[dict[str, Any]]) -> None:
 def compute_device_rates(
     wifi_bytes: dict[str, dict[str, int]],
     wired_bytes: dict[str, dict[str, int]],
+    port_bytes: dict[str, dict[str, int]],
+    port_src: dict[str, str] | None = None,
 ) -> tuple[dict[str, dict[str, int | None]], dict[str, dict[str, int]]]:
     """Compute per-device bandwidth rates in bytes/s and accumulated totals.
     wifi_bytes:  {mac: {ul, dl}} — from AP station dump (ul=AP rx, dl=AP tx)
+    port_bytes:  {mac: {ul, dl}} — from switch access-port sysfs counters
     wired_bytes: {mac: {ul, dl}} — from conntrack, already IP→MAC resolved
+    port_src:    {mac: "host:port"} — which port backed each port_bytes entry
     Returns (rates, accum) where:
       rates: {mac: {rx_bps, tx_bps}} — current rate, bytes/s
       accum: {mac: {rx, tx, since}} — cumulative bytes since first seen"""
@@ -1492,35 +1722,29 @@ def compute_device_rates(
             pass
 
     prev_ts = float(prev.get("ts", 0.0))
-    prev_wifi = prev.get("wifi", {})
-    prev_wired = prev.get("wired", {})
     elapsed = now - prev_ts
 
     rates: dict[str, dict[str, int | None]] = {}
     deltas: dict[str, dict[str, int]] = {}  # valid byte deltas for accumulator
 
-    if BW_MIN_ELAPSED_S <= elapsed < BW_MAX_AGE_S:
-        for mac, curr in wifi_bytes.items():
-            p = prev_wifi.get(mac)
-            if not p:
-                continue
-            d_ul = curr["ul"] - p.get("ul", 0)
-            d_dl = curr["dl"] - p.get("dl", 0)
-            rx = max(0, int(d_dl / elapsed))
-            tx = max(0, int(d_ul / elapsed))
-            rates[mac] = {
-                "rx_bps": rx if rx <= BW_MAX_RATE_BPS else None,
-                "tx_bps": tx if tx <= BW_MAX_RATE_BPS else None,
-            }
-            deltas[mac] = {
-                "rx": max(0, d_dl) if rx <= BW_MAX_RATE_BPS else 0,
-                "tx": max(0, d_ul) if tx <= BW_MAX_RATE_BPS else 0,
-            }
-        for mac, curr in wired_bytes.items():
+    def _accumulate(
+        curr_bytes: dict[str, dict[str, int]],
+        prev_bytes: dict[str, dict[str, int]],
+        curr_src: dict[str, str] | None = None,
+        prev_src: dict[str, str] | None = None,
+    ) -> None:
+        # First source with both prev+curr for a MAC wins (priority order).
+        for mac, curr in curr_bytes.items():
             if mac in rates:
-                continue  # WiFi station dump takes priority
-            p = prev_wired.get(mac)
+                continue
+            p = prev_bytes.get(mac)
             if not p:
+                continue
+            # Same source, but a different physical port than last scan
+            # (recabled, FDB relearn): the two ports' lifetime counters are
+            # unrelated, so skip one interval rather than credit the
+            # difference between them as real traffic.
+            if curr_src is not None and curr_src.get(mac) != (prev_src or {}).get(mac):
                 continue
             d_ul = curr["ul"] - p.get("ul", 0)
             d_dl = curr["dl"] - p.get("dl", 0)
@@ -1534,6 +1758,15 @@ def compute_device_rates(
                 "rx": max(0, d_dl) if rx <= BW_MAX_RATE_BPS else 0,
                 "tx": max(0, d_ul) if tx <= BW_MAX_RATE_BPS else 0,
             }
+
+    if BW_MIN_ELAPSED_S <= elapsed < BW_MAX_AGE_S:
+        # Priority: WiFi station counters, then per-switch-port counters
+        # (accurate wired, captures intra-LAN), then gateway conntrack.
+        _accumulate(wifi_bytes, prev.get("wifi", {}))
+        _accumulate(
+            port_bytes, prev.get("port", {}), port_src or {}, prev.get("port_src", {})
+        )
+        _accumulate(wired_bytes, prev.get("wired", {}))
 
     # Update accumulator
     accum: dict[str, dict[str, int]] = {}
@@ -1550,7 +1783,15 @@ def compute_device_rates(
 
     _atomic_write(
         DEVICE_BW_STATE,
-        json.dumps({"ts": now, "wifi": wifi_bytes, "wired": wired_bytes}),
+        json.dumps(
+            {
+                "ts": now,
+                "wifi": wifi_bytes,
+                "wired": wired_bytes,
+                "port": port_bytes,
+                "port_src": port_src or {},
+            }
+        ),
     )
     _atomic_write(DEVICE_BW_ACCUM, json.dumps(accum))
     return rates, accum
@@ -1624,16 +1865,30 @@ def collect_all_wifi(
     dict[str, str],
     dict[str, list[str]],
     dict[str, dict[str, str]],
+    dict[str, str],
+    dict[str, dict[str, dict[str, int]]],
+    dict[str, str],
+    set[str],
 ]:
     """Collect WiFi from gateway + all APs in parallel.
-    Returns (wifi_entries, alive_ap_ips, ap_ip6_map, ap_hoststats, fdb_by_host)
-    where ap_hoststats is {ap_ip: [cpu_line, 'mem_total mem_avail']} and
-    fdb_by_host is {host_ip: {MAC: bridge_port}}."""
+    Returns (wifi_entries, alive_ap_ips, ap_ip6_map, ap_hoststats, fdb_by_host,
+    self_macs, port_bytes_by_host, host_display_names, wifi_hosts) where
+    ap_hoststats is {ap_ip: [cpu_line, 'mem_total mem_avail']}, fdb_by_host is
+    {host_ip: {MAC: bridge_port}}, self_macs is {host_ip: own_lan_bridge_mac}
+    for every host including the gateway (its MAC gives topology detection its
+    sense of direction), port_bytes_by_host is {host_ip: {port_netdev: {rx,
+    tx}}}, host_display_names is {host_ip: hostname}, and wifi_hosts is the set
+    of host IPs that reported any Wi-Fi capability (used to tell APs from
+    wired-only switches, which diagnose.py's flat CLI cannot express)."""
     all_wifi: list[dict] = []
     alive_ap_ips: list[str] = []
     ap_ip6_map: dict[str, str] = {}
     ap_hoststats: dict[str, list[str]] = {}
     fdb_by_host: dict[str, dict[str, str]] = {}
+    self_macs: dict[str, str] = {}
+    port_bytes_by_host: dict[str, dict[str, dict[str, int]]] = {}
+    host_display_names: dict[str, str] = {}
+    wifi_hosts: set[str] = set()
 
     # Phase 1: resolve AP hostnames + IPv6 in parallel
     name_map: dict[str, str] = {}
@@ -1645,6 +1900,8 @@ def collect_all_wifi(
                 hostname, ip6 = fut.result()
                 name_map[host] = hostname or host.split("@")[-1]
                 ap_ip = host.split("@")[-1]
+                if hostname:
+                    host_display_names[ap_ip] = hostname
                 if ip6:
                     ap_ip6_map[ap_ip] = ip6
             except Exception:
@@ -1664,13 +1921,25 @@ def collect_all_wifi(
         for wfut in concurrent.futures.as_completed(wifi_futs):
             ap_name, host = wifi_futs[wfut]
             try:
-                entries, hoststat, fdb = wfut.result()
+                entries, hoststat, fdb, self_mac, port_bytes = wfut.result()
                 all_wifi.extend(entries)
                 ip = host.split("@")[-1]
                 if hoststat:
                     ap_hoststats[ip] = hoststat
                 if fdb:
                     fdb_by_host[ip] = fdb
+                if port_bytes:
+                    port_bytes_by_host[ip] = port_bytes
+                # The gateway is included: its own MAC anchors the direction of
+                # every topology edge, and it must never be attributed per-port
+                # byte counters (it is alone on the switch's uplink port).
+                if self_mac:
+                    self_macs[ip] = self_mac
+                # Wi-Fi capability, used to tell APs from wired-only switches:
+                # associated stations, or a mac80211 vif (phyN-apM) enslaved to
+                # the bridge. A switch has neither.
+                if entries or any(p.startswith("phy") for p in fdb.values()):
+                    wifi_hosts.add(ip)
                 # An AP is considered alive if it returned hoststat (means SSH worked),
                 # even if no clients are currently associated.
                 if host != gw_host and (entries or hoststat):
@@ -1678,7 +1947,17 @@ def collect_all_wifi(
             except Exception:
                 pass
 
-    return all_wifi, alive_ap_ips, ap_ip6_map, ap_hoststats, fdb_by_host
+    return (
+        all_wifi,
+        alive_ap_ips,
+        ap_ip6_map,
+        ap_hoststats,
+        fdb_by_host,
+        self_macs,
+        port_bytes_by_host,
+        host_display_names,
+        wifi_hosts,
+    )
 
 
 # ------------------------- Build device list -------------------------
@@ -1701,11 +1980,13 @@ def build_devices(
     prev_state: dict[str, "StateEntry"] | None = None,
     rates: dict[str, dict[str, int | None]] | None = None,
     switch_ports: dict[str, dict[str, str]] | None = None,
+    wired_macs: set[str] | None = None,
 ) -> list[Device]:
     """Merge all data sources into a unified device list."""
     # Inject gateway as a lease
     ndp = dict(ndp or {})
     switch_ports = switch_ports or {}
+    wired_macs = wired_macs or set()
     if gw_mac and gw_ip:
         leases[gw_mac] = {"ip": gw_ip, "hostname": gw_hostname}
         if gw_ip6:
@@ -1769,6 +2050,11 @@ def build_devices(
             prev_state
             and mac in prev_state
             and (prev_state[mac].connection == "wifi" or prev_state[mac].ap)
+            # Fresh wired evidence beats last scan's Wi-Fi state: the device
+            # was unplugged from Wi-Fi and cabled up. Without this the restore
+            # is self-perpetuating — it re-saves connection="wifi" every scan,
+            # which also suppresses the switch-port lookup below.
+            and mac not in wired_macs
         ):
             # Offline WiFi device — restore last-known connection type so it
             # doesn't incorrectly show as wired while disconnected.
@@ -2306,10 +2592,45 @@ def main() -> None:
     arp_hostnames = {mac: dns_cache.get(arp_ips[mac], "") for mac in arp_only_macs}
 
     # Collect WiFi from all APs in parallel
-    wifi, alive_aps, ap_ip6_map, ap_hoststats, fdb_by_host = collect_all_wifi(
-        gw_host, ap_hosts, wifi_script
-    )
+    (
+        wifi,
+        alive_aps,
+        ap_ip6_map,
+        ap_hoststats,
+        fdb_by_host,
+        self_macs,
+        port_bytes_by_host,
+        host_display_names,
+        wifi_hosts,
+    ) = collect_all_wifi(gw_host, ap_hosts, wifi_script)
     switch_ports = resolve_switch_ports(fdb_by_host)
+    wired_macs = resolve_wired_macs(fdb_by_host, port_bytes_by_host)
+    gw_ip_only = gw_host.split("@")[-1]
+
+    # Split the flat host list into APs and wired-only switches so the topology
+    # card can render each with the right node type. The integration does real
+    # role autodetection; here it is inferred from Wi-Fi capability.
+    ap_role_ips = [h.split("@")[-1] for h in ap_hosts if h.split("@")[-1] in wifi_hosts]
+    switch_role_ips = [
+        h.split("@")[-1] for h in ap_hosts if h.split("@")[-1] not in wifi_hosts
+    ]
+
+    # host_topology maps each AP and switch to its resolved uplink parent
+    # (gateway, a switch, or another AP) for the topology map. Every host gets
+    # an entry, even when unresolved (older collector script, or genuinely the
+    # root) — None/None rather than omitted, so the topology card can fall
+    # back to attaching it directly under the gateway.
+    host_topology: dict[str, dict[str, str | None]] = {}
+    infra_parents = resolve_infra_parents(
+        fdb_by_host, self_macs, gateway_host=gw_ip_only
+    )
+    for ap_host in ap_hosts:
+        ap_ip = ap_host.split("@")[-1]
+        parent = infra_parents.get(ap_ip)
+        host_topology[ap_ip] = {
+            "parent_host": parent["host"] if parent else None,
+            "parent_port": parent["port"] if parent else None,
+        }
 
     # Inject AP IPv6 addresses into ndp (APs never appear in gateway's NDP with global addresses)
     for ap_ip, ap_ip6 in ap_ip6_map.items():
@@ -2356,7 +2677,24 @@ def main() -> None:
         wmac = ip_to_mac.get(ip)
         if wmac and wmac not in wifi_bytes:  # WiFi station dump takes priority
             wired_bytes[wmac] = bw
-    device_rates, device_accum = compute_device_rates(wifi_bytes, wired_bytes)
+    # Per-switch-port counters for directly-wired devices — captures intra-LAN
+    # traffic conntrack never sees, so it takes priority over wired_bytes.
+    port_bytes_by_mac = resolve_port_bytes(
+        fdb_by_host, port_bytes_by_host, exclude_macs=set(self_macs.values())
+    )
+    # Negotiated wired link speed per device, for the TX/RX (Mbit/s) columns.
+    port_links = resolve_port_links(fdb_by_host, port_bytes_by_host)
+    # Which (host, port) each attributed MAC won this cycle. A device that moves
+    # to a different port must not have the two ports' lifetime counters
+    # subtracted from one another.
+    port_src = {
+        mac: f"{sp['host']}:{sp['port']}"
+        for mac, sp in switch_ports.items()
+        if mac in port_bytes_by_mac
+    }
+    device_rates, device_accum = compute_device_rates(
+        wifi_bytes, wired_bytes, port_bytes_by_mac, port_src
+    )
 
     # Build unified device list
     devices = build_devices(
@@ -2376,7 +2714,18 @@ def main() -> None:
         prev_state=prev_state,
         rates=device_rates,
         switch_ports=switch_ports,
+        wired_macs=wired_macs,
     )
+
+    # Wired link speed fills the TX/RX (Mbit/s) columns (the wired analogue of
+    # the Wi-Fi PHY rate). Wi-Fi devices are left alone: a station with no PHY
+    # rate this cycle is missing data, not a wired device, and writing an
+    # Ethernet speed into tx_rate would make the cards read it back as
+    # confirmed Wi-Fi evidence.
+    for d in devices:
+        if d.connection != "wifi" and d.tx_rate is None and d.mac in port_links:
+            d.tx_rate = port_links[d.mac]
+            d.rx_rate = port_links[d.mac]
 
     # Aggregate client rates onto AP devices; inject WAN rates onto gateway device
     ap_rx: dict[str, int] = {}
@@ -2387,6 +2736,7 @@ def main() -> None:
                 ap_rx[d.ap] = ap_rx.get(d.ap, 0) + d.rx_bps
             if d.tx_bps is not None:
                 ap_tx[d.ap] = ap_tx.get(d.ap, 0) + d.tx_bps
+    wan_totals_macs: set[str] = set()
     for d in devices:
         if d.hostname and d.hostname in ap_rx:
             d.rx_bps = ap_rx[d.hostname]
@@ -2397,10 +2747,12 @@ def main() -> None:
             d.rx_total = wan_rx_total
             d.tx_total = wan_tx_total
             d.bw_since = wan_bw_since
+            wan_totals_macs.add(d.mac)
 
-    # Apply accumulated totals to all devices
+    # Apply accumulated totals to all devices. The gateway keeps its WAN totals
+    # from above — LAN-side counters measure a different thing entirely.
     for d in devices:
-        if d.mac in device_accum:
+        if d.mac in device_accum and d.mac not in wan_totals_macs:
             d.rx_total = device_accum[d.mac].get("rx")
             d.tx_total = device_accum[d.mac].get("tx")
             d.bw_since = device_accum[d.mac].get("since")
@@ -2516,6 +2868,15 @@ def main() -> None:
                         "error": f"probe failed: {exc}",
                     }
 
+    # Map infra host IP -> hostname so the table card can render the Port column
+    # as "<SwitchName> #<port>" (switch_host on a device is one of these IPs).
+    infra_ips = {gw_data["gw_ip"]} | {h.split("@")[-1] for h in ap_hosts}
+    host_names = {d.ip: d.hostname for d in devices if d.ip in infra_ips and d.hostname}
+    for hip, hname in host_display_names.items():
+        host_names.setdefault(hip, hname)
+    ap_names = {ip: host_names[ip] for ip in ap_role_ips if ip in host_names}
+    switch_names = {ip: host_names[ip] for ip in switch_role_ips if ip in host_names}
+
     # Output JSON for HA sensor
     output = {
         "device_count": sum(1 for d in devices if d.online),
@@ -2526,6 +2887,12 @@ def main() -> None:
         "wan_rx_rate": rx_rate,
         "wan_tx_rate": tx_rate,
         "host_stats": host_stats,
+        "host_names": host_names,
+        "ap_hosts": ap_role_ips,
+        "ap_names": ap_names,
+        "switch_hosts": switch_role_ips,
+        "switch_names": switch_names,
+        "host_topology": host_topology,
         "dns_stats": dns_stats,
         **({"wireguard": wireguard} if enable_wireguard else {}),
         **({"asu": asu} if enable_asu else {}),

@@ -5,7 +5,7 @@ import {
   nothing,
 } from "https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js";
 
-const CARD_VERSION = "2.4.0";
+const CARD_VERSION = "2.7.0";
 const CARD_TYPE = "network-table-card";
 const EDITOR_TYPE = `${CARD_TYPE}-editor`;
 
@@ -115,7 +115,12 @@ function colDisplayName(col) {
 function portApValue(d) {
   if (isUnknownPath(d)) return "Unknown";
   if (isConfirmedWifi(d) && d.ap) return d.ap;
-  if (d.switch_port) return `Port ${d.switch_port}`;
+  if (d.switch_port) {
+    return d._switchName ? `${d._switchName} #${d.switch_port}` : `Port ${d.switch_port}`;
+  }
+  if (d._topoPort) {
+    return d._topoName ? `${d._topoName} #${d._topoPort}` : `Port ${d._topoPort}`;
+  }
   return "";
 }
 
@@ -129,6 +134,11 @@ function isConfirmedWifi(d) {
 function isUnknownPath(d) {
   if (d.connection === "gateway") return false;
   if (d.switch_port || d.switch_host) return false;
+  // An AP or switch sits on a port that also relays everything behind it, so
+  // resolve_switch_ports discards that port as an uplink and leaves the host
+  // with no switch_port. host_topology resolves the same link without the
+  // MAC-count threshold, so a host with a parent there has a known path.
+  if (d._topoPort) return false;
   if (isConfirmedWifi(d)) return false;
   return d.connection === "wifi" || d.connection === "wired" || !!d.ap;
 }
@@ -291,6 +301,9 @@ class NetworkTableCard extends LitElement {
     .ic-red {
       color: var(--error-color);
     }
+    .ic-cyan {
+      color: var(--info-color, #4dd0e1);
+    }
     .msg {
       padding: 16px;
       color: var(--secondary-text-color);
@@ -365,11 +378,46 @@ class NetworkTableCard extends LitElement {
 
     // Infra hosts (gateway/AP/switch) whose SSH probe failed this cycle are
     // still listed in `devices` via stale ARP data — host_stats.available is
-    // the authoritative signal that the device itself is down.
+    // the authoritative signal for whether the device itself is up, in BOTH
+    // directions. Only falling through on available===false (and leaving
+    // available===true untouched) would let a stale ARP-derived d.online
+    // keep a row stuck offline after the host is confirmed back up, e.g.
+    // right after a reboot.
     const hostStats = state.attributes?.host_stats ?? {};
+    const switchNames = state.attributes?.switch_names ?? {};
+    const hostNames = state.attributes?.host_names ?? {};
+    const switchHosts = state.attributes?.switch_hosts ?? [];
+    const apNames = state.attributes?.ap_names ?? {};
+    const hostTopology = state.attributes?.host_topology ?? {};
+    // Friendly name for whichever infra host a topology edge points at — it
+    // may be a switch, an AP, or the gateway, so try every name map.
+    const infraName = (host) =>
+      switchNames[host] || apNames[host] || hostNames[host] || "";
+    // Resolve a wired device's owning switch to a friendly name, mirroring the
+    // topology card: switch_names → host_names → single-switch fallback.
+    const switchName = (d) => {
+      const key = d.switch_host;
+      if (!key) return "";
+      return (
+        switchNames[key] ||
+        hostNames[key] ||
+        (switchHosts.length === 1
+          ? switchNames[switchHosts[0]] || hostNames[switchHosts[0]]
+          : "") ||
+        ""
+      );
+    };
     const all = (state.attributes?.devices ?? []).map((d) => {
       const stats = d.ip ? hostStats[d.ip] : undefined;
-      return stats?.available === false ? { ...d, online: false } : d;
+      const _switchName = switchName(d);
+      // Configured APs/switches only: host_topology is keyed by their IP.
+      const topo = d.ip ? hostTopology[d.ip] : undefined;
+      const _topoPort = topo?.parent_port ?? "";
+      const _topoName = _topoPort ? infraName(topo.parent_host) : "";
+      const extra = { _switchName, _topoPort, _topoName };
+      if (stats?.available === true) return { ...d, ...extra, online: true };
+      if (stats?.available === false) return { ...d, ...extra, online: false };
+      return { ...d, ...extra };
     });
     const visible = all.filter(
       (d) =>
@@ -548,13 +596,7 @@ class NetworkTableCard extends LitElement {
             role="img"
             aria-label="Unknown connection path"
           ></ha-icon>`;
-        if (d.connection === "wired")
-          return html`<ha-icon
-            icon="mdi:ethernet"
-            title="Wired connection"
-            role="img"
-            aria-label="Wired connection"
-          ></ha-icon>`;
+        if (d.connection === "wired") return this._wiredIcon(d.tx_rate);
         return "—";
       case "ap":
         return portApValue(d) || "—";
@@ -642,6 +684,31 @@ class NetworkTableCard extends LitElement {
       title=${`Weak Wi-Fi signal (${s} dBm)`}
       role="img"
       aria-label=${`Weak Wi-Fi signal, ${s} dBm`}
+    ></ha-icon>`;
+  }
+
+  _wiredIcon(speed) {
+    // Colour the ethernet icon by negotiated link speed, mirroring how the
+    // Wi-Fi icon is coloured by signal: cyan = 2.5 Gbit/s+, green = gigabit,
+    // orange = 100 Mbit/s (Fast Ethernet), red = 10 Mbit/s. Speed is unknown
+    // for shared-port devices, which fall back to a plain (uncoloured) icon.
+    const s = Number(speed);
+    if (!Number.isFinite(s) || s <= 0)
+      return html`<ha-icon
+        icon="mdi:ethernet"
+        title="Wired connection"
+        role="img"
+        aria-label="Wired connection"
+      ></ha-icon>`;
+    const label = s >= 1000 ? `${s / 1000} Gbit/s` : `${s} Mbit/s`;
+    const cls =
+      s >= 2500 ? "ic-cyan" : s >= 1000 ? "ic-green" : s >= 100 ? "ic-orange" : "ic-red";
+    return html`<ha-icon
+      icon="mdi:ethernet"
+      class=${cls}
+      title=${`Wired link: ${label}`}
+      role="img"
+      aria-label=${`Wired link, ${label}`}
     ></ha-icon>`;
   }
 

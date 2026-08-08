@@ -134,9 +134,11 @@ def test_collector_script_runs_against_raw_fixtures(
     assert "ERROR" not in stat_lines[0], f"collector reported error: {stat_lines[0]}"
 
     # Every remaining line must be a pipe-delimited client entry starting with a
-    # MAC (BOARD|/FDB| metadata lines are not Wi-Fi stations).
+    # MAC (BOARD|/FDB|/SELFMAC|/PORTBYTES| metadata lines are not Wi-Fi stations).
     client_lines = [
-        line for line in lines if not line.startswith(("STAT|", "BOARD|", "FDB|"))
+        line
+        for line in lines
+        if not line.startswith(("STAT|", "BOARD|", "FDB|", "SELFMAC|", "PORTBYTES|"))
     ]
     mac_re = re.compile(r"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}\|")
     for line in client_lines:
@@ -145,3 +147,74 @@ def test_collector_script_runs_against_raw_fixtures(
         assert len(fields) == 12, f"expected 12 fields, got {len(fields)}: {line!r}"
         band = fields[1]
         assert band in {"2.4GHz", "5GHz", "6GHz", "unknown"}
+
+
+def _fake_netdir(tmp_path: Path) -> Path:
+    """A minimal sysfs netdev tree: one bridge with a wired and a wireless port."""
+    net = tmp_path / "net"
+    br = net / "br-lan"
+    (br / "bridge").mkdir(parents=True)
+    (br / "address").write_text("aa:bb:cc:dd:ee:ff\n")
+    (br / "brif").mkdir()
+    for port, wireless, speed in (("lan5", False, "1000"), ("phy1-ap1", True, None)):
+        (br / "brif" / port).mkdir()
+        dev = net / port
+        (dev / "statistics").mkdir(parents=True)
+        (dev / "statistics" / "rx_bytes").write_text("111\n")
+        (dev / "statistics" / "tx_bytes").write_text("222\n")
+        if speed:
+            (dev / "speed").write_text(f"{speed}\n")
+        if wireless:
+            (dev / "phy80211").mkdir()
+    return net
+
+
+def _run_collector(netdir: Path) -> list[str]:
+    env = dict(os.environ)
+    env["WRTSENSOR_NETDIR"] = str(netdir)
+    result = subprocess.run(
+        ["sh", str(COLLECTOR), "--no-host-metrics"],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=15,
+        check=False,
+        start_new_session=True,
+    )
+    return [line for line in result.stdout.splitlines() if line]
+
+
+def test_portbytes_skips_wireless_vifs(tmp_path: Path) -> None:
+    """A wireless vif's counters are radio-wide, so it must emit no PORTBYTES.
+
+    Otherwise a station alone on an SSID inherits the whole radio's traffic —
+    every other station's bytes plus flooded broadcast/multicast — whenever the
+    per-station Wi-Fi counters are unavailable for a cycle.
+    """
+    lines = _run_collector(_fake_netdir(tmp_path))
+    portbytes = [line for line in lines if line.startswith("PORTBYTES|")]
+    assert portbytes == ["PORTBYTES|lan5|111|222|1000"]
+
+
+def test_selfmac_read_from_bridge(tmp_path: Path) -> None:
+    lines = _run_collector(_fake_netdir(tmp_path))
+    assert "SELFMAC|AA:BB:CC:DD:EE:FF" in lines
+
+
+# diagnose.py passes the whole collector as the SSH *command argument*, and
+# dropbear (the SSH server on the Zyxel GS1900 switch) caps a command at 9000
+# bytes. Go over and the switch resets the connection: ssh_run swallows the
+# failure and returns "", so every FDB|/PORTBYTES|/SELFMAC| line silently
+# vanishes and the topology map and Port column just quietly go empty. Keep a
+# margin so this test trips before production does.
+DROPBEAR_MAX_CMD_LEN = 9000
+COLLECTOR_SIZE_LIMIT = 8900
+
+
+def test_collector_fits_in_ssh_command_argument() -> None:
+    size = COLLECTOR.stat().st_size
+    assert size < COLLECTOR_SIZE_LIMIT, (
+        f"openwrt_collector.sh is {size} bytes, over the {COLLECTOR_SIZE_LIMIT}-byte "
+        f"budget (dropbear MAX_CMD_LEN is {DROPBEAR_MAX_CMD_LEN}). Trim it, or switch "
+        "diagnose.py's ssh_run to pipe the script over stdin like the integration does."
+    )

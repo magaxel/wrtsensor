@@ -18,7 +18,13 @@ parse_dns_stats = coord.parse_dns_stats
 parse_board_info = parser.parse_board_info
 parse_board_model = parser.parse_board_model
 parse_fdb = parser.parse_fdb
+parse_port_bytes = parser.parse_port_bytes
+parse_self_mac = parser.parse_self_mac
 resolve_switch_ports = parser.resolve_switch_ports
+resolve_port_bytes = parser.resolve_port_bytes
+resolve_port_links = parser.resolve_port_links
+resolve_infra_parents = parser.resolve_infra_parents
+resolve_wired_macs = parser.resolve_wired_macs
 _is_random_mac = parser._is_random_mac
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -888,3 +894,316 @@ class TestResolveSwitchPorts:
     def test_non_numeric_port_falls_back_to_raw(self):
         ports = resolve_switch_ports({"sw": {"AA:BB:CC:DD:EE:01": "wan"}})
         assert ports == {"AA:BB:CC:DD:EE:01": {"port": "wan", "host": "sw"}}
+
+
+class TestParsePortBytes:
+    def test_extracts_counters_and_speed(self):
+        out = (
+            "STAT|cpu  1 2 3 4|1000|500|10\n"
+            "PORTBYTES|lan5|12345|67890|1000\n"  # gigabit
+            "PORTBYTES|lan6|1|2|100\n"  # 100 Mbit
+        )
+        assert parse_port_bytes(out) == {
+            "lan5": {"rx": 12345, "tx": 67890, "speed": 1000},
+            "lan6": {"rx": 1, "tx": 2, "speed": 100},
+        }
+
+    def test_speed_absent_or_down_is_none(self):
+        out = (
+            "PORTBYTES|lan5|12345|67890\n"  # older collector, no speed field
+            "PORTBYTES|lan6|1|2|-1\n"  # link down -> sysfs reports -1
+            "PORTBYTES|lan7|3|4|\n"  # empty speed field
+        )
+        assert parse_port_bytes(out) == {
+            "lan5": {"rx": 12345, "tx": 67890, "speed": None},
+            "lan6": {"rx": 1, "tx": 2, "speed": None},
+            "lan7": {"rx": 3, "tx": 4, "speed": None},
+        }
+
+    def test_ignores_malformed_and_non_portbytes_lines(self):
+        out = (
+            "PORTBYTES|lan5|12345\n"  # too few fields
+            "PORTBYTES||1|2\n"  # empty port
+            "PORTBYTES|lan6|x|2\n"  # non-integer rx
+            "random line\n"
+            "PORTBYTES|lan7|10|20|1000\n"
+        )
+        assert parse_port_bytes(out) == {"lan7": {"rx": 10, "tx": 20, "speed": 1000}}
+
+    def test_wifi_parser_skips_portbytes_lines(self):
+        # A PORTBYTES| line must never be mistaken for a Wi-Fi station entry.
+        entries, _ = parse_wifi_output("PORTBYTES|lan5|1|2|1000\n", "AP1")
+        assert entries == []
+
+
+class TestResolvePortLinks:
+    def test_single_device_port_gets_speed(self):
+        fdb = {"sw": {"AA:BB:CC:DD:EE:01": "lan5"}}
+        pbytes = {"sw": {"lan5": {"rx": 1, "tx": 2, "speed": 1000}}}
+        assert resolve_port_links(fdb, pbytes) == {"AA:BB:CC:DD:EE:01": 1000}
+
+    def test_shared_port_gets_no_speed(self):
+        fdb = {"sw": {"AA:BB:CC:DD:EE:01": "lan5", "AA:BB:CC:DD:EE:02": "lan5"}}
+        pbytes = {"sw": {"lan5": {"rx": 1, "tx": 2, "speed": 1000}}}
+        assert resolve_port_links(fdb, pbytes) == {}
+
+    def test_unknown_speed_skipped(self):
+        fdb = {"sw": {"AA:BB:CC:DD:EE:01": "lan5"}}
+        pbytes = {"sw": {"lan5": {"rx": 1, "tx": 2, "speed": None}}}
+        assert resolve_port_links(fdb, pbytes) == {}
+
+
+class TestResolvePortBytes:
+    def test_single_device_port_attributed_with_direction_swap(self):
+        # Device alone on the switch's lan5. Port rx (frames INTO the switch) is
+        # the device's upload (ul); port tx is its download (dl).
+        fdb = {"sw": {"AA:BB:CC:DD:EE:01": "lan5"}}
+        pbytes = {"sw": {"lan5": {"rx": 100, "tx": 900}}}
+        assert resolve_port_bytes(fdb, pbytes) == {
+            "AA:BB:CC:DD:EE:01": {"ul": 100, "dl": 900}
+        }
+
+    def test_shared_port_not_attributed(self):
+        # Two MACs learned on one port (a downstream dumb switch): the aggregate
+        # counters cannot be assigned to a single device.
+        fdb = {"sw": {"AA:BB:CC:DD:EE:01": "lan5", "AA:BB:CC:DD:EE:02": "lan5"}}
+        pbytes = {"sw": {"lan5": {"rx": 100, "tx": 900}}}
+        assert resolve_port_bytes(fdb, pbytes) == {}
+
+    def test_infra_self_mac_not_attributed(self):
+        # A router uplinked through the switch is the ONLY MAC learned on the
+        # switch's uplink port — every routed frame carries its rewritten
+        # source MAC — so it looks exactly like a lone access-port device and
+        # would inherit the whole downstream fan-out's counters. Observed on a
+        # live fleet: the gateway alone on the switch's lan9.
+        gw_mac = "FC:EC:DA:43:95:A2"
+        fdb = {"sw": {gw_mac: "lan9", "AA:BB:CC:DD:EE:01": "lan5"}}
+        pbytes = {
+            "sw": {
+                "lan9": {"rx": 10**12, "tx": 10**12},
+                "lan5": {"rx": 100, "tx": 900},
+            }
+        }
+        result = resolve_port_bytes(fdb, pbytes, exclude_macs={gw_mac})
+        assert gw_mac not in result
+        assert result == {"AA:BB:CC:DD:EE:01": {"ul": 100, "dl": 900}}
+
+    def test_uplink_winner_attribution_uses_access_port(self):
+        # The device's winning access port is its single-MAC switch port, not the
+        # crowded router uplink it is also learned on — bytes come from lan5.
+        switch = {"AA:BB:CC:DD:EE:01": "lan5"}
+        uplink = {f"AA:BB:CC:DD:EE:{i:02d}": "lan1" for i in range(1, 8)}
+        uplink["AA:BB:CC:DD:EE:01"] = "lan1"
+        fdb = {"switch": switch, "router": uplink}
+        pbytes = {
+            "switch": {"lan5": {"rx": 5, "tx": 6}},
+            "router": {"lan1": {"rx": 999, "tx": 999}},
+        }
+        assert resolve_port_bytes(fdb, pbytes, uplink_threshold=4) == {
+            "AA:BB:CC:DD:EE:01": {"ul": 5, "dl": 6}
+        }
+
+    def test_missing_port_counter_skipped(self):
+        # Winner resolved but no PORTBYTES for that port (older collector script).
+        fdb = {"sw": {"AA:BB:CC:DD:EE:01": "lan5"}}
+        assert resolve_port_bytes(fdb, {}) == {}
+
+
+class TestParseSelfMac:
+    def test_extracts_self_mac(self):
+        out = "BOARD|{}\nSTAT|cpu 1 2 3 4|1000|500|10\nSELFMAC|aa:bb:cc:dd:ee:01\n"
+        assert parse_self_mac(out) == "AA:BB:CC:DD:EE:01"
+
+    def test_missing_line_returns_empty(self):
+        out = "BOARD|{}\nSTAT|cpu 1 2 3 4|1000|500|10\n"
+        assert parse_self_mac(out) == ""
+
+    def test_wifi_parser_skips_selfmac_lines(self):
+        # A SELFMAC| line must never be mistaken for a Wi-Fi station entry.
+        entries, _ = parse_wifi_output("SELFMAC|AA:BB:CC:DD:EE:01\n", "AP1")
+        assert entries == []
+
+
+class TestResolveWiredMacs:
+    def test_wired_port_counts_as_wired_evidence(self):
+        # The collector emits PORTBYTES only for wired bridge members, so a
+        # winning port that has byte counters proves the device is cabled.
+        fdb = {"sw": {"AA:BB:CC:DD:EE:01": "lan5"}}
+        pbytes = {"sw": {"lan5": {"rx": 1, "tx": 2, "speed": 1000}}}
+        assert resolve_wired_macs(fdb, pbytes) == {"AA:BB:CC:DD:EE:01"}
+
+    def test_wireless_vif_is_not_wired_evidence(self):
+        # A Wi-Fi station is learned in the bridge FDB on the AP's wireless
+        # vif, but the collector emits no PORTBYTES for it — so it must not
+        # count as "this device is cabled" and override its Wi-Fi state.
+        fdb = {"ap": {"AA:BB:CC:DD:EE:01": "phy1-ap1"}}
+        assert resolve_wired_macs(fdb, {"ap": {}}) == set()
+
+    def test_older_collector_yields_no_evidence(self):
+        # A host emitting no PORTBYTES at all degrades to "no wired evidence"
+        # rather than a wrong answer.
+        fdb = {"sw": {"AA:BB:CC:DD:EE:01": "lan5"}}
+        assert resolve_wired_macs(fdb, {}) == set()
+
+
+def _assert_acyclic(parents):
+    """Walking parents from every host must terminate at a root."""
+    for start in parents:
+        seen = {start}
+        cur = parents.get(start, {}).get("host")
+        while cur:
+            assert cur not in seen, f"cycle reached from {start!r} via {cur!r}"
+            seen.add(cur)
+            cur = parents.get(cur, {}).get("host")
+
+
+class TestResolveInfraParents:
+    def test_uplink_found_on_switch_port(self):
+        # AP's own MAC learned on the switch's port, alongside several client
+        # MACs relayed through the same physical uplink port.
+        ap_mac = "AA:BB:CC:DD:EE:01"
+        switch_fdb = {
+            ap_mac: "lan5",
+            "11:11:11:11:11:11": "lan5",
+            "22:22:22:22:22:22": "lan5",
+        }
+        parents = resolve_infra_parents({"switch": switch_fdb}, {"ap": ap_mac})
+        assert parents == {"ap": {"host": "switch", "port": "5"}}
+
+    def test_no_uplink_threshold_applied(self):
+        # A real AP uplink port legitimately carries MANY relayed client MACs
+        # — that's the signature identifying it, not noise to discard. This
+        # is the key behavioral divergence from resolve_switch_ports, which
+        # would drop this exact port for exceeding FDB_UPLINK_MAC_THRESHOLD.
+        ap_mac = "AA:BB:CC:DD:EE:01"
+        switch_fdb = {ap_mac: "lan5"}
+        for i in range(20):
+            switch_fdb[f"33:33:33:33:33:{i:02x}"] = "lan5"
+        parents = resolve_infra_parents({"switch": switch_fdb}, {"ap": ap_mac})
+        assert parents == {"ap": {"host": "switch", "port": "5"}}
+
+    def test_fewest_macs_wins_on_tie(self):
+        ap_mac = "AA:BB:CC:DD:EE:01"
+        a = {
+            ap_mac: "lan2",
+            "11:11:11:11:11:11": "lan2",
+            "22:22:22:22:22:22": "lan2",
+        }
+        b = {ap_mac: "lan3", "11:11:11:11:11:11": "lan3"}
+        parents = resolve_infra_parents({"hostA": a, "hostB": b}, {"ap": ap_mac})
+        assert parents["ap"] == {"host": "hostB", "port": "3"}
+
+    def test_shared_uplink_port_not_treated_as_dedicated_link(self):
+        # A leaf AP's single wired port aggregates traffic from the ENTIRE
+        # rest of the LAN — it eventually sees every other infra device's
+        # MAC, not just whichever one is "closest." With no gateway MAC to
+        # establish direction there is no way to tell a relayed infra MAC
+        # from a genuinely downstream one, so such a port is rejected
+        # outright. Regression test for a real bug found against a live
+        # fleet: a switch's own MAC was relayed onto an AP's single uplink
+        # port alongside another AP's MAC and incorrectly resolved as "the
+        # switch is downstream of the AP."
+        switch_mac = "AA:BB:CC:DD:EE:01"
+        other_ap_mac = "AA:BB:CC:DD:EE:02"
+        leaf_ap_uplink = {
+            switch_mac: "eth0",
+            other_ap_mac: "eth0",
+            "11:11:11:11:11:11": "eth0",
+        }
+        parents = resolve_infra_parents(
+            {"leaf_ap": leaf_ap_uplink},
+            {"switch": switch_mac, "other_ap": other_ap_mac},
+        )
+        assert parents == {}
+
+    def test_gateway_mac_gives_direction_on_shared_port(self):
+        # Same shared uplink as above, but now the gateway is known. The leaf
+        # AP's uplink carries the gateway's MAC, which proves the port faces
+        # UPSTREAM — so the leaf AP is below the switch, not above it, and
+        # must not be offered as anyone's parent.
+        gw_mac = "AA:BB:CC:DD:EE:00"
+        switch_mac = "AA:BB:CC:DD:EE:01"
+        leaf_ap_mac = "AA:BB:CC:DD:EE:02"
+        fdb = {
+            # The leaf AP's only wired port sees everything upstream of it.
+            "leaf_ap": {gw_mac: "eth0", switch_mac: "eth0"},
+            # The switch's port toward the AP sees only what is below it.
+            "switch": {leaf_ap_mac: "lan7", "11:11:11:11:11:11": "lan7"},
+            # The gateway's port toward the switch sees the whole LAN.
+            "gw": {switch_mac: "eth1", leaf_ap_mac: "eth1"},
+        }
+        parents = resolve_infra_parents(
+            fdb,
+            {"gw": gw_mac, "switch": switch_mac, "leaf_ap": leaf_ap_mac},
+            switch_hosts={"switch"},
+            gateway_host="gw",
+        )
+        assert parents["leaf_ap"] == {"host": "switch", "port": "7"}
+        assert parents["switch"] == {"host": "gw", "port": "1"}
+        assert "gw" not in parents  # the gateway is the root
+
+    def test_switch_chain_resolves_without_cycle(self):
+        # gateway -> switchA -> switchB. switchA's port toward switchB carries
+        # switchB's MAC; switchB's uplink carries the gateway's MAC and so is
+        # correctly not offered as switchA's parent. Before the direction rule
+        # this produced a mutual switchA <-> switchB cycle.
+        gw_mac = "AA:BB:CC:DD:EE:00"
+        a_mac = "AA:BB:CC:DD:EE:0A"
+        b_mac = "AA:BB:CC:DD:EE:0B"
+        fdb = {
+            "gw": {a_mac: "eth1", b_mac: "eth1"},
+            "switchA": {gw_mac: "lan1", b_mac: "lan9"},
+            "switchB": {gw_mac: "lan1", a_mac: "lan1"},
+        }
+        parents = resolve_infra_parents(
+            fdb,
+            {"gw": gw_mac, "switchA": a_mac, "switchB": b_mac},
+            switch_hosts={"switchA", "switchB"},
+            gateway_host="gw",
+        )
+        assert parents["switchA"] == {"host": "gw", "port": "1"}
+        assert parents["switchB"] == {"host": "switchA", "port": "9"}
+        _assert_acyclic(parents)
+
+    def test_result_is_always_a_forest(self):
+        # Defense in depth: even if the direction rule is defeated by stale or
+        # partial FDB data, consumers walk these edges to the root, so the
+        # result must never contain a cycle.
+        a_mac = "AA:BB:CC:DD:EE:0A"
+        b_mac = "AA:BB:CC:DD:EE:0B"
+        # Each host sees the other alone on a port and no gateway is known,
+        # so both would otherwise claim the other as parent.
+        fdb = {"a": {b_mac: "lan1"}, "b": {a_mac: "lan2"}}
+        parents = resolve_infra_parents(fdb, {"a": a_mac, "b": b_mac})
+        _assert_acyclic(parents)
+
+    def test_switch_host_preferred_on_count_tie(self):
+        ap_mac = "AA:BB:CC:DD:EE:01"
+        a = {ap_mac: "lan2", "11:11:11:11:11:11": "lan2"}  # a plain AP relaying it
+        b = {ap_mac: "lan8", "11:11:11:11:11:11": "lan8"}  # the designated switch
+        parents = resolve_infra_parents(
+            {"plain": a, "sw": b}, {"ap": ap_mac}, switch_hosts={"sw"}
+        )
+        assert parents["ap"] == {"host": "sw", "port": "8"}
+
+    def test_own_hosts_fdb_table_excluded(self):
+        # A host's own MAC never appears in its own FDB dump by construction
+        # (the collector filters "self" entries), but assert the resolver
+        # explicitly guards against it too, as defense in depth.
+        ap_mac = "AA:BB:CC:DD:EE:01"
+        parents = resolve_infra_parents({"ap": {ap_mac: "lan5"}}, {"ap": ap_mac})
+        assert parents == {}
+
+    def test_missing_self_mac_omitted(self):
+        # A host still running an older collector script with no SELFMAC|
+        # line produces no entry, not a crash.
+        parents = resolve_infra_parents({"switch": {"XX": "lan5"}}, {"ap": ""})
+        assert parents == {}
+
+    def test_root_host_has_no_entry(self):
+        # Self-mac never found in any other host's FDB — the physical root.
+        parents = resolve_infra_parents(
+            {"switch": {"11:11:11:11:11:11": "lan5"}},
+            {"switch_top": "AA:BB:CC:DD:EE:01"},
+        )
+        assert parents == {}

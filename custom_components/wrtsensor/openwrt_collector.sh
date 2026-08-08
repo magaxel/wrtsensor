@@ -6,14 +6,27 @@
 #   STAT|<cpu_stat_line>|<mem_total_kB>|<mem_available_kB>|<root_disk_use_pct>
 # And one FDB| line per MAC learned on a bridged switch port (DSA):
 #   FDB|<MAC>|<port_netdev>
-# Called remotely over SSH by diagnose.py / coordinator.py.
+# And a SELFMAC| line with this host's own LAN bridge MAC (used to place
+# this host in the topology tree via other hosts' FDB tables):
+#   SELFMAC|<MAC>
+# And one PORTBYTES| line per enslaved WIRED bridge port with its cumulative
+# sysfs byte counters and negotiated link speed in Mbit/s (speed empty when the
+# link is down or unknown):
+#   PORTBYTES|<port_netdev>|<rx_bytes>|<tx_bytes>|<speed_mbit>
+# Called remotely over SSH by diagnose.py / coordinator.py. diagnose.py passes
+# this whole file as the SSH command argument, so it must stay well under
+# dropbear's 9000-byte MAX_CMD_LEN or the switch resets the connection and
+# every FDB/PORTBYTES line silently disappears (see tests).
 # Wi-Fi collection requires iwinfo; hosts without it (e.g. a managed switch)
-# still emit BOARD, STAT, and FDB lines and just skip the Wi-Fi section.
+# still emit BOARD, STAT, FDB, SELFMAC, and PORTBYTES lines.
 
 collect_host_metrics=1
 if [ "${1:-}" = "--no-host-metrics" ]; then
     collect_host_metrics=0
 fi
+
+# Overridable so the bridge/port scans below can be tested on a fixture tree.
+NETDIR="${WRTSENSOR_NETDIR:-/sys/class/net}"
 
 # Clean up leftover children only on interrupt/termination. Deliberately NOT on
 # EXIT: `kill 0` on normal completion also tears down the SSH session's process
@@ -52,12 +65,12 @@ elif command -v brctl >/dev/null 2>&1; then
     # netdev (lanN) via sysfs, where port_no is hex. Only non-local entries.
     # Uses shell builtins (read, parameter expansion) instead of cat/basename to
     # avoid dozens of fork/exec per run on RAM-constrained switches.
-    for brpath in /sys/class/net/*/bridge; do
+    for brpath in "$NETDIR"/*/bridge; do
         [ -d "$brpath" ] || continue
         br=${brpath%/bridge}
         br=${br##*/}
         {
-            for p in /sys/class/net/"$br"/brif/*; do
+            for p in "$NETDIR/$br"/brif/*; do
                 [ -e "$p/port_no" ] || continue
                 read -r pn < "$p/port_no" || continue
                 printf 'P|%d|%s\n' "$pn" "${p##*/}"
@@ -71,6 +84,55 @@ elif command -v brctl >/dev/null 2>&1; then
           }'
     done
 fi
+
+# This host's own LAN bridge MAC. Lets the coordinator find this AP/switch's
+# own uplink in some OTHER host's FDB table above (physical topology
+# detection) — a host's MAC never appears in its own FDB dump (filtered as
+# a "self" entry above), only in whichever host sees it arrive on the wire.
+# Prefer br-lan (the default LAN bridge name); fall back to the first bridge
+# found so non-default bridge names still work. Emits nothing if there's no
+# bridge at all.
+selfmac_path="$NETDIR/br-lan/address"
+if [ ! -r "$selfmac_path" ]; then
+    for brpath in "$NETDIR"/*/bridge; do
+        [ -d "$brpath" ] || continue
+        selfmac_path="${brpath%/bridge}/address"
+        break
+    done
+fi
+if [ -r "$selfmac_path" ]; then
+    read -r selfmac < "$selfmac_path"
+    echo "SELFMAC|$(echo "$selfmac" | tr '[:lower:]' '[:upper:]')"
+fi
+
+# Per-port byte counters for wired clients. The coordinator maps a port back to
+# the single MAC learned on it (via the FDB above) to derive that device's wired
+# Tx/Rx. Direction is from the switch's point of view: rx_bytes = frames it
+# received from the device (its upload); tx_bytes = frames it sent (download).
+# Wireless vifs are skipped — their counters are radio-wide, so a lone station
+# on an SSID would be charged every other station's traffic plus flooded
+# multicast; Wi-Fi clients get per-station counters from iwinfo below.
+# Shell builtins only (no fork/exec per port) for RAM-constrained switches.
+for brpath in "$NETDIR"/*/bridge; do
+    [ -d "$brpath" ] || continue
+    br=${brpath%/bridge}
+    br=${br##*/}
+    for p in "$NETDIR/$br"/brif/*; do
+        [ -e "$p" ] || continue
+        port=${p##*/}
+        [ -e "$NETDIR/${port}/phy80211" ] && continue
+        rxf="$NETDIR/${port}/statistics/rx_bytes"
+        txf="$NETDIR/${port}/statistics/tx_bytes"
+        [ -r "$rxf" ] && [ -r "$txf" ] || continue
+        read -r rxb < "$rxf" || continue
+        read -r txb < "$txf" || continue
+        # Negotiated link speed (Mbit/s). Reading it errors when the link is
+        # down; leave it empty in that case.
+        spd=""
+        read -r spd 2>/dev/null < "$NETDIR/${port}/speed" || spd=""
+        echo "PORTBYTES|${port}|${rxb}|${txb}|${spd}"
+    done
+done
 
 # Wi-Fi section needs iwinfo; switches and wired-only hosts stop here.
 command -v iwinfo >/dev/null 2>&1 || exit 0

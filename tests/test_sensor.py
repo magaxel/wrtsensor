@@ -137,6 +137,7 @@ _ALL_COMPAT_KEYS = (
     "switch_hosts",
     "switch_names",
     "host_stats",
+    "host_topology",
     "scan_duration",
     "partial",
 )

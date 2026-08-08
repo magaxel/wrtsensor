@@ -40,10 +40,16 @@ from .parser import (
     parse_hoststat,
     parse_leases,
     parse_ndp,
+    parse_port_bytes,
+    parse_self_mac,
     parse_wg_show_sections,
     parse_wg_uci,
     parse_wifi_output,
+    resolve_infra_parents,
+    resolve_port_bytes,
+    resolve_port_links,
     resolve_switch_ports,
+    resolve_wired_macs,
 )
 from .const import (
     ASU_PROBE_GAP_S,
@@ -176,10 +182,12 @@ def build_devices(
     rates: dict[str, dict[str, int | None]] | None = None,
     active_ap_names: set[str] | None = None,
     switch_ports: dict[str, dict[str, str]] | None = None,
+    wired_macs: set[str] | None = None,
 ) -> list[Device]:
     ndp = dict(ndp or {})
     active_ap_names = active_ap_names or set()
     switch_ports = switch_ports or {}
+    wired_macs = wired_macs or set()
     if gw_mac and gw_ip:
         leases[gw_mac] = {"ip": gw_ip, "hostname": gw_hostname}
         if gw_ip6:
@@ -233,6 +241,11 @@ def build_devices(
             prev_state
             and mac in prev_state
             and (prev_state[mac].connection == "wifi" or prev_state[mac].ap)
+            # Fresh wired evidence beats last scan's Wi-Fi state: the device
+            # was unplugged from Wi-Fi and cabled up. Without this the restore
+            # is self-perpetuating — it re-saves connection="wifi" every scan,
+            # which also suppresses the switch-port lookup below.
+            and mac not in wired_macs
             and (
                 not active_ap_names
                 or not prev_state[mac].ap
@@ -910,6 +923,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._wan_event_state: dict[str, str] = {}
         self._prev_state: dict[str, StateEntry] = {}
         self._ap_name_cache: dict[str, str] = {}
+        self._infra_parent_cache: dict[str, dict[str, str]] = {}
         self._host_names: dict[str, str] = {}
         self._host_models: dict[str, tuple[str, str]] = {}  # ip → (model, board_name)
         self._event_buffer: deque[dict[str, Any]] = deque(maxlen=self.EVENT_BUFFER_SIZE)
@@ -1302,7 +1316,9 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _collect_wifi(
         self, host: str, ap_name: str
-    ) -> tuple[list[dict[str, Any]], list[str], dict[str, str]]:
+    ) -> tuple[
+        list[dict[str, Any]], list[str], dict[str, str], str, dict[str, dict[str, int]]
+    ]:
         metrics_arg = "" if self._enable_host_metrics else " --no-host-metrics"
         out = await self._ssh_run(
             host, f"sh {COLLECTOR_REMOTE_PATH}{metrics_arg}", timeout=12
@@ -1316,7 +1332,13 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if hostname:
             self._host_names[host] = hostname
         entries, hoststat = parse_wifi_output(out, ap_name)
-        return entries, hoststat, parse_fdb(out)
+        return (
+            entries,
+            hoststat,
+            parse_fdb(out),
+            parse_self_mac(out),
+            parse_port_bytes(out),
+        )
 
     @staticmethod
     def _build_wireguard_command() -> str:
@@ -1741,37 +1763,40 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self,
         wifi_bytes: dict[str, dict[str, int]],
         wired_bytes: dict[str, dict[str, int]],
+        port_bytes: dict[str, dict[str, int]],
+        port_src: dict[str, str] | None = None,
     ) -> tuple[dict[str, dict[str, int | None]], dict[str, dict[str, int]]]:
         now = time.time()
         p = self._device_bw
         prev_ts = float(p.get("ts", 0.0))
-        prev_wifi = p.get("wifi", {})
-        prev_wired = p.get("wired", {})
         elapsed = now - prev_ts
         rates: dict[str, dict[str, int | None]] = {}
         deltas: dict[str, dict[str, int]] = {}
-        if BW_MIN_ELAPSED_S <= elapsed < BW_MAX_AGE_S:
-            for mac, curr in wifi_bytes.items():
-                prev_m = prev_wifi.get(mac)
-                if not prev_m:
-                    continue
-                d_ul = curr["ul"] - prev_m.get("ul", 0)
-                d_dl = curr["dl"] - prev_m.get("dl", 0)
-                rx = max(0, int(d_dl / elapsed))
-                tx = max(0, int(d_ul / elapsed))
-                rates[mac] = {
-                    "rx_bps": rx if rx <= BW_MAX_RATE_BPS else None,
-                    "tx_bps": tx if tx <= BW_MAX_RATE_BPS else None,
-                }
-                deltas[mac] = {
-                    "rx": max(0, d_dl) if rx <= BW_MAX_RATE_BPS else 0,
-                    "tx": max(0, d_ul) if tx <= BW_MAX_RATE_BPS else 0,
-                }
-            for mac, curr in wired_bytes.items():
+        port_src = port_src or {}
+
+        def _accumulate(
+            curr_bytes: dict[str, dict[str, int]],
+            prev_bytes: dict[str, dict[str, int]],
+            curr_src: dict[str, str] | None = None,
+            prev_src: dict[str, str] | None = None,
+        ) -> None:
+            # First source with both prev+curr for a MAC wins (priority order).
+            # Requiring a matching prev in the SAME source means a MAC switching
+            # sources between scans is skipped for one interval rather than
+            # producing a garbage delta from mismatched counters.
+            for mac, curr in curr_bytes.items():
                 if mac in rates:
                     continue
-                prev_m = prev_wired.get(mac)
+                prev_m = prev_bytes.get(mac)
                 if not prev_m:
+                    continue
+                # Same source, but a different physical port than last scan
+                # (recabled, FDB relearn): the two ports' lifetime counters are
+                # unrelated, so skip one interval rather than credit the
+                # difference between them as real traffic.
+                if curr_src is not None and curr_src.get(mac) != (prev_src or {}).get(
+                    mac
+                ):
                     continue
                 d_ul = curr["ul"] - prev_m.get("ul", 0)
                 d_dl = curr["dl"] - prev_m.get("dl", 0)
@@ -1785,7 +1810,20 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "rx": max(0, d_dl) if rx <= BW_MAX_RATE_BPS else 0,
                     "tx": max(0, d_ul) if tx <= BW_MAX_RATE_BPS else 0,
                 }
-        self._device_bw = {"ts": now, "wifi": wifi_bytes, "wired": wired_bytes}
+
+        if BW_MIN_ELAPSED_S <= elapsed < BW_MAX_AGE_S:
+            # Priority: Wi-Fi station counters, then per-switch-port counters
+            # (accurate wired, captures intra-LAN), then gateway conntrack.
+            _accumulate(wifi_bytes, p.get("wifi", {}))
+            _accumulate(port_bytes, p.get("port", {}), port_src, p.get("port_src", {}))
+            _accumulate(wired_bytes, p.get("wired", {}))
+        self._device_bw = {
+            "ts": now,
+            "wifi": wifi_bytes,
+            "wired": wired_bytes,
+            "port": port_bytes,
+            "port_src": port_src,
+        }
         accum = self._device_bw_accum
         for mac, delta in deltas.items():
             if mac not in accum:
@@ -2018,6 +2056,8 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         alive_ap_ips: list[str] = []
         ap_hoststats: dict[str, list[str]] = {}
         fdb_by_host: dict[str, dict[str, str]] = {}
+        port_bytes_by_host: dict[str, dict[str, dict[str, int | None]]] = {}
+        self_macs: dict[str, str] = {}
 
         if collect_host_bundle:
             # Collect WiFi stations, host metrics, and forwarding DB from the
@@ -2037,11 +2077,20 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 gw_wifi_result = wifi_results[idx]
                 idx += 1
                 if not isinstance(gw_wifi_result, Exception):
-                    entries, hoststat, fdb = gw_wifi_result
+                    entries, hoststat, fdb, gw_self_mac, port_bytes = gw_wifi_result
                     if self._enable_network_hosts:
                         all_wifi.extend(entries)
                         if fdb:
                             fdb_by_host[self._gateway_host] = fdb
+                        if port_bytes:
+                            port_bytes_by_host[self._gateway_host] = port_bytes
+                        # The gateway's own MAC anchors topology detection: a
+                        # candidate uplink port that also carries it faces the
+                        # gateway, so the host behind it sits below us, not
+                        # above. It also must never be attributed per-port
+                        # byte counters (it is alone on the switch's uplink).
+                        if gw_self_mac:
+                            self_macs[self._gateway_host] = gw_self_mac
                     if hoststat:
                         ap_hoststats[self._gateway_host] = hoststat
 
@@ -2050,11 +2099,15 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 idx += 1
                 if isinstance(result, Exception):
                     continue
-                entries, hoststat, fdb = result
+                entries, hoststat, fdb, self_mac, port_bytes = result
                 if self._enable_network_hosts:
                     all_wifi.extend(entries)
                     if fdb:
                         fdb_by_host[host] = fdb
+                    if port_bytes:
+                        port_bytes_by_host[host] = port_bytes
+                    if self_mac:
+                        self_macs[host] = self_mac
                 ip = host
                 if hoststat:
                     ap_hoststats[ip] = hoststat
@@ -2066,17 +2119,60 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 idx += 1
                 if isinstance(result, Exception):
                     continue
-                _entries, hoststat, fdb = result
-                if self._enable_network_hosts and fdb:
-                    fdb_by_host[host] = fdb
+                _entries, hoststat, fdb, self_mac, port_bytes = result
+                if self._enable_network_hosts:
+                    if fdb:
+                        fdb_by_host[host] = fdb
+                    if port_bytes:
+                        port_bytes_by_host[host] = port_bytes
+                    if self_mac:
+                        self_macs[host] = self_mac
                 if hoststat:
                     ap_hoststats[host] = hoststat
 
         switch_ports: dict[str, dict[str, str]] = {}
+        wired_macs: set[str] = set()
         if self._enable_network_hosts and fdb_by_host:
             switch_ports = resolve_switch_ports(
                 fdb_by_host, switch_hosts=set(self._switch_hosts)
             )
+            wired_macs = resolve_wired_macs(
+                fdb_by_host,
+                port_bytes_by_host,
+                switch_hosts=set(self._switch_hosts),
+            )
+
+        # host_topology maps each configured AP/switch to its resolved uplink
+        # parent (gateway, a switch, or another AP) for the topology map.
+        # Every configured host gets an entry, even when unresolved (older
+        # collector script not yet emitting SELFMAC|, or genuinely the root)
+        # — it reports None/None rather than being omitted, so the frontend
+        # can fall back to attaching it directly under the gateway (today's
+        # flat layout) instead of losing the host from the map entirely.
+        host_topology: dict[str, dict[str, str | None]] = {}
+        if self._enable_network_hosts:
+            infra_parents = (
+                resolve_infra_parents(
+                    fdb_by_host,
+                    self_macs,
+                    switch_hosts=set(self._switch_hosts),
+                    gateway_host=self._gateway_host,
+                )
+                if fdb_by_host
+                else {}
+            )
+            # A host whose SSH probe failed contributes no FDB this cycle, so
+            # everything behind it would resolve to no parent and the map would
+            # visibly collapse to flat and back. Fall back to the last known
+            # edge instead, same write-when-fresh pattern as _ap_name_cache.
+            for host, parent in infra_parents.items():
+                self._infra_parent_cache[host] = parent
+            for host in [*self._ap_hosts, *self._switch_hosts]:
+                parent = infra_parents.get(host) or self._infra_parent_cache.get(host)
+                host_topology[host] = {
+                    "parent_host": parent["host"] if parent else None,
+                    "parent_port": parent["port"] if parent else None,
+                }
 
         active_ap_names = set()
         if self._enable_network_hosts:
@@ -2155,8 +2251,32 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 wmac = ip_to_mac.get(ip)
                 if wmac and wmac not in wifi_bytes:
                     wired_bytes[wmac] = bw
+            # Per-switch-port byte counters for directly-wired devices. More
+            # accurate than conntrack (it captures intra-LAN traffic the gateway
+            # never routes), so it takes priority over wired_bytes below.
+            port_bytes_by_mac = resolve_port_bytes(
+                fdb_by_host,
+                port_bytes_by_host,
+                switch_hosts=set(self._switch_hosts),
+                exclude_macs=set(self_macs.values()),
+            )
+            # Which (host, port) each attributed MAC won this cycle. A device
+            # that moves to a different port must not have the two ports'
+            # lifetime counters subtracted from one another.
+            port_src = {
+                mac: f"{sp['host']}:{sp['port']}"
+                for mac, sp in switch_ports.items()
+                if mac in port_bytes_by_mac
+            }
+            # Negotiated wired link speed per device (100/1000/2500…), for the
+            # TX/RX (Mbit/s) columns — the wired analogue of the Wi-Fi PHY rate.
+            port_links = resolve_port_links(
+                fdb_by_host,
+                port_bytes_by_host,
+                switch_hosts=set(self._switch_hosts),
+            )
             device_rates, device_accum = self._compute_device_rates(
-                wifi_bytes, wired_bytes
+                wifi_bytes, wired_bytes, port_bytes_by_mac, port_src
             )
 
             # Build device list
@@ -2181,6 +2301,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 rates=device_rates,
                 active_ap_names=active_ap_names,
                 switch_ports=switch_ports,
+                wired_macs=wired_macs,
             )
 
             # Restore identity for devices that rotated their random MAC
@@ -2198,6 +2319,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         ap_rx[d.ap] = ap_rx.get(d.ap, 0) + d.rx_bps
                     if d.tx_bps is not None:
                         ap_tx[d.ap] = ap_tx.get(d.ap, 0) + d.tx_bps
+            wan_totals_macs: set[str] = set()
             for d in devices:
                 if d.hostname and d.hostname in ap_rx:
                     d.rx_bps = ap_rx[d.hostname]
@@ -2208,13 +2330,23 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     d.rx_total = wan_rx_total
                     d.tx_total = wan_tx_total
                     d.bw_since = wan_bw_since
+                    wan_totals_macs.add(d.mac)
 
-            # Apply accumulated totals
+            # Apply accumulated totals. The gateway keeps its WAN totals from
+            # above — LAN-side counters measure a different thing entirely.
             for d in devices:
-                if d.mac in device_accum:
+                if d.mac in device_accum and d.mac not in wan_totals_macs:
                     d.rx_total = device_accum[d.mac].get("rx")
                     d.tx_total = device_accum[d.mac].get("tx")
                     d.bw_since = device_accum[d.mac].get("since")
+                # Wired link speed fills the TX/RX (Mbit/s) columns (the wired
+                # analogue of the Wi-Fi PHY rate). Wi-Fi devices are left alone:
+                # a station with no PHY rate this cycle is missing data, not a
+                # wired device, and writing an Ethernet speed into tx_rate would
+                # make the cards read it back as confirmed Wi-Fi evidence.
+                if d.connection != "wifi" and d.tx_rate is None and d.mac in port_links:
+                    d.tx_rate = port_links[d.mac]
+                    d.rx_rate = port_links[d.mac]
 
             # Event detection
             ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -2333,6 +2465,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if name_map.get(host) and name_map[host] != host
             }
             result["switch_hosts"] = list(self._switch_hosts)
+            result["host_topology"] = host_topology
             configured_hosts = [
                 host
                 for host in [self._gateway_host, *self._ap_hosts, *self._switch_hosts]
