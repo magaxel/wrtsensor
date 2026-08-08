@@ -255,15 +255,15 @@ class NetworkTopologyCard extends HTMLElement {
       title: config.title ?? "Network Map",
       gateway_label: config.gateway_label ?? config.gateway_hostname ?? "gw",
       column_width: config.column_width ?? config.col_width ?? 200,
-      show_offline: config.show_offline ?? false,
+      show_offline: config.show_offline ?? true,
       show_unknown: config.show_unknown ?? true,
       show_hostnames: config.show_hostnames ?? true,
       show_ipv4: config.show_ipv4 ?? true,
       show_ipv6: config.show_ipv6 ?? false,
-      sort_wireless_by_signal: config.sort_wireless_by_signal ?? false,
-      sort_wired_by_speed: config.sort_wired_by_speed ?? false,
-      show_wireguard_peers: config.show_wireguard_peers ?? false,
-      show_offline_wireguard: config.show_offline_wireguard ?? true,
+      sort_wireless_by_signal: config.sort_wireless_by_signal ?? true,
+      sort_wired_by_speed: config.sort_wired_by_speed ?? true,
+      show_wireguard_peers: config.show_wireguard_peers ?? true,
+      show_offline_wireguard: config.show_offline_wireguard ?? false,
       wireguard_entity: config.wireguard_entity ?? null,
     };
     // Fix: reset so a config change always triggers a re-render
@@ -1544,11 +1544,14 @@ class NetworkTopologyCard extends HTMLElement {
       title: "Network Map",
       gateway_label: "gw",
       column_width: 200,
+      show_offline: true,
       show_hostnames: true,
       show_ipv4: true,
       show_ipv6: false,
-      sort_wireless_by_signal: false,
-      sort_wired_by_speed: false,
+      sort_wireless_by_signal: true,
+      sort_wired_by_speed: true,
+      show_wireguard_peers: true,
+      show_offline_wireguard: false,
     };
   }
 }
@@ -1681,7 +1684,7 @@ class NetworkTopologyCardEditor extends HTMLElement {
     });
 
     const offlineCb = this.shadowRoot.querySelector("#show_offline");
-    offlineCb.checked = c.show_offline ?? false;
+    offlineCb.checked = c.show_offline ?? true;
     offlineCb.addEventListener("change", () => {
       this._fire({ ...this._config, show_offline: offlineCb.checked });
     });
@@ -1711,13 +1714,13 @@ class NetworkTopologyCardEditor extends HTMLElement {
     });
 
     const sortSignalCb = this.shadowRoot.querySelector("#sort_wireless_by_signal");
-    sortSignalCb.checked = c.sort_wireless_by_signal ?? false;
+    sortSignalCb.checked = c.sort_wireless_by_signal ?? true;
     sortSignalCb.addEventListener("change", () => {
       this._fire({ ...this._config, sort_wireless_by_signal: sortSignalCb.checked });
     });
 
     const sortSpeedCb = this.shadowRoot.querySelector("#sort_wired_by_speed");
-    sortSpeedCb.checked = c.sort_wired_by_speed ?? false;
+    sortSpeedCb.checked = c.sort_wired_by_speed ?? true;
     sortSpeedCb.addEventListener("change", () => {
       this._fire({ ...this._config, sort_wired_by_speed: sortSpeedCb.checked });
     });
@@ -1747,8 +1750,8 @@ class NetworkTopologyCardEditor extends HTMLElement {
       const wgOffCb = wgSection.querySelector("#show_wg_off");
       const wgPicker = wgSection.querySelector("#wg_picker");
 
-      wgCb.checked = c.show_wireguard_peers ?? false;
-      wgOffCb.checked = c.show_offline_wireguard ?? true;
+      wgCb.checked = c.show_wireguard_peers ?? true;
+      wgOffCb.checked = c.show_offline_wireguard ?? false;
       wgOffRow.style.display = wgCb.checked ? "" : "none";
 
       wgCb.addEventListener("change", () => {

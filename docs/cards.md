@@ -17,19 +17,20 @@ Wide tabular device list — better for widescreen dashboards.
 type: custom:network-table-card
 entity: sensor.my_router_network_scanner
 title: Network
-show_offline: false
+show_offline: true
 show_unknown: true       # false = hide devices with no confirmed AP/switch path
-columns:
+columns:          # this list is also the default when `columns` is omitted
   - ip
   - ip6_enabled
   - hostname
   - vendor
-  - mac
   - connection
   - ap
   - band
   - tx_rate
-  - signal
+  - rx_rate
+  - rx_total
+  - tx_total
 ```
 
 The `ap` column is displayed as **Port/AP**. It shows the AP name for Wi-Fi clients
@@ -84,15 +85,15 @@ entity: sensor.my_router_network_scanner
 title: Network Map
 gateway_label: gw        # fallback label shown when gateway device is missing
 column_width: 200        # px between AP columns
-show_offline: false
+show_offline: true
 show_unknown: true            # false = hide devices with no confirmed AP/switch path
 show_hostnames: true          # show device hostnames; false leaves only selected address rows
 show_ipv4: true               # show IPv4 address rows and public IPv4 beside the gateway
 show_ipv6: false              # show IPv6 address rows and public IPv6 beside the gateway
-sort_wireless_by_signal: false   # true = order wireless clients by signal (strongest under the AP) instead of hostname
-sort_wired_by_speed: false       # true = order wired clients by link speed (fastest first); unresolved speeds sort last
-show_wireguard_peers: false      # true = draw WireGuard peers above Internet
-show_offline_wireguard: true     # include offline WireGuard peers dimmed
+sort_wireless_by_signal: true    # true = order wireless clients by signal (strongest under the AP) instead of hostname
+sort_wired_by_speed: true        # true = order wired clients by link speed (fastest first); unresolved speeds sort last
+show_wireguard_peers: true       # true = draw WireGuard peers above Internet
+show_offline_wireguard: false    # include offline WireGuard peers dimmed
 wireguard_entity: null           # optional sensor override if auto-detect is wrong
 ```
 

@@ -5,7 +5,7 @@ import {
   nothing,
 } from "https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js";
 
-const CARD_VERSION = "2.7.0";
+const CARD_VERSION = "2.8.0";
 const CARD_TYPE = "network-table-card";
 const EDITOR_TYPE = `${CARD_TYPE}-editor`;
 
@@ -76,12 +76,13 @@ const DEFAULT_COLS = [
   "ip6_enabled",
   "hostname",
   "vendor",
-  "mac",
   "connection",
   "ap",
   "band",
   "tx_rate",
-  "signal",
+  "rx_rate",
+  "rx_total",
+  "tx_total",
 ];
 
 const COL_DISPLAY_NAME = {
@@ -325,7 +326,7 @@ class NetworkTableCard extends LitElement {
     this._config = {
       entity: config.entity,
       title: config.title ?? "Network",
-      show_offline: config.show_offline ?? false,
+      show_offline: config.show_offline ?? true,
       show_unknown: config.show_unknown ?? true,
       columns: cols,
     };
@@ -893,7 +894,7 @@ class NetworkTableCardEditor extends LitElement {
     const data = {
       entity: this._config.entity ?? "",
       title: this._config.title ?? "Network",
-      show_offline: this._config.show_offline ?? false,
+      show_offline: this._config.show_offline ?? true,
       show_unknown: this._config.show_unknown ?? true,
       columns: this._config.columns?.length ? this._config.columns : DEFAULT_COLS,
     };
