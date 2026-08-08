@@ -2150,6 +2150,12 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # can fall back to attaching it directly under the gateway (today's
         # flat layout) instead of losing the host from the map entirely.
         host_topology: dict[str, dict[str, str | None]] = {}
+        # An AP or switch shares its uplink port with everything behind it, so
+        # resolve_port_links can't attribute that port's negotiated speed to
+        # it. Only one cable is in the port, so the topology's answer is that
+        # host's link speed — keyed by host IP, since infra rows are matched
+        # by address rather than MAC.
+        infra_link_speeds: dict[str, int] = {}
         if self._enable_network_hosts:
             infra_parents = (
                 resolve_infra_parents(
@@ -2157,6 +2163,7 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self_macs,
                     switch_hosts=set(self._switch_hosts),
                     gateway_host=self._gateway_host,
+                    port_bytes_by_host=port_bytes_by_host,
                 )
                 if fdb_by_host
                 else {}
@@ -2173,6 +2180,9 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "parent_host": parent["host"] if parent else None,
                     "parent_port": parent["port"] if parent else None,
                 }
+                speed = parent.get("link_speed") if parent else None
+                if speed:
+                    infra_link_speeds[host] = int(speed)
 
         active_ap_names = set()
         if self._enable_network_hosts:
@@ -2347,6 +2357,16 @@ class WrtsensorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if d.connection != "wifi" and d.tx_rate is None and d.mac in port_links:
                     d.tx_rate = port_links[d.mac]
                     d.rx_rate = port_links[d.mac]
+                elif (
+                    d.connection != "wifi"
+                    and d.tx_rate is None
+                    and d.ip in infra_link_speeds
+                ):
+                    # APs and switches never reach the branch above: their port
+                    # relays every device behind them, so it is never the lone
+                    # MAC resolve_port_links requires.
+                    d.tx_rate = infra_link_speeds[d.ip]
+                    d.rx_rate = infra_link_speeds[d.ip]
 
             # Event detection
             ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

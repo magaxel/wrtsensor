@@ -407,7 +407,8 @@ def resolve_infra_parents(
     self_macs: dict[str, str],
     switch_hosts: set[str] | None = None,
     gateway_host: str = "",
-) -> dict[str, dict[str, str]]:
+    port_bytes_by_host: dict[str, dict[str, dict[str, int | None]]] | None = None,
+) -> dict[str, dict[str, str | int]]:
     """Resolve each infra host's uplink parent from other hosts' FDB tables.
 
     A host's own MAC never appears in its own FDB dump (filtered as a "self"
@@ -444,6 +445,12 @@ def resolve_infra_parents(
     with no self-MAC. Callers must treat absence as "no resolvable parent,"
     not an error. The result is guaranteed acyclic: it is a forest, so walking
     parents from any host always terminates.
+
+    When ``port_bytes_by_host`` is supplied, each resolved entry also carries
+    ``link_speed`` (Mbit/s) for the parent port, where known. That port relays
+    everything behind this host, so ``resolve_port_links`` — which requires a
+    lone MAC — cannot attribute its negotiated speed. Only one cable is
+    plugged into it though, so the port's speed IS this host's link speed.
     """
     switch_hosts = switch_hosts or set()
     all_self_macs = {mac for mac in self_macs.values() if mac}
@@ -482,12 +489,21 @@ def resolve_infra_parents(
             )
         if candidates:
             *_, parent_host, port = min(candidates)
-            result[host] = {"host": parent_host, "port": _port_number(port)}
+            entry: dict[str, str | int] = {
+                "host": parent_host,
+                "port": _port_number(port),
+            }
+            if port_bytes_by_host:
+                pb = port_bytes_by_host.get(parent_host, {}).get(port)
+                speed = pb.get("speed") if pb else None
+                if speed:
+                    entry["link_speed"] = speed
+            result[host] = entry
     _break_parent_cycles(result)
     return result
 
 
-def _break_parent_cycles(parents: dict[str, dict[str, str]]) -> None:
+def _break_parent_cycles(parents: dict[str, dict[str, str | int]]) -> None:
     """Drop edges until ``parents`` is a forest, in place.
 
     The directional rule in ``resolve_infra_parents`` should already prevent

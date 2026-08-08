@@ -1165,6 +1165,33 @@ class TestResolveInfraParents:
         assert parents["switchB"] == {"host": "switchA", "port": "9"}
         _assert_acyclic(parents)
 
+    def test_link_speed_taken_from_parent_port(self):
+        # The AP's uplink relays its clients' MACs, so resolve_port_links —
+        # which only attributes a lone MAC — can never report that port's
+        # speed. Exactly one cable is in it, so the port speed IS the AP's.
+        ap_mac = "AA:BB:CC:DD:EE:01"
+        switch_fdb = {ap_mac: "lan19", "11:11:11:11:11:11": "lan19"}
+        pbytes = {"switch": {"lan19": {"rx": 1, "tx": 2, "speed": 1000}}}
+        parents = resolve_infra_parents(
+            {"switch": switch_fdb}, {"ap": ap_mac}, port_bytes_by_host=pbytes
+        )
+        assert parents["ap"] == {"host": "switch", "port": "19", "link_speed": 1000}
+
+    def test_link_speed_omitted_when_port_speed_unknown(self):
+        # Link down or an older collector: no speed key rather than a zero.
+        ap_mac = "AA:BB:CC:DD:EE:01"
+        pbytes = {"switch": {"lan19": {"rx": 1, "tx": 2, "speed": None}}}
+        parents = resolve_infra_parents(
+            {"switch": {ap_mac: "lan19"}}, {"ap": ap_mac}, port_bytes_by_host=pbytes
+        )
+        assert parents["ap"] == {"host": "switch", "port": "19"}
+
+    def test_entry_shape_unchanged_without_port_bytes(self):
+        # Callers that don't pass port data get exactly the previous shape.
+        ap_mac = "AA:BB:CC:DD:EE:01"
+        parents = resolve_infra_parents({"switch": {ap_mac: "lan5"}}, {"ap": ap_mac})
+        assert parents["ap"] == {"host": "switch", "port": "5"}
+
     def test_result_is_always_a_forest(self):
         # Defense in depth: even if the direction rule is defeated by stale or
         # partial FDB data, consumers walk these edges to the root, so the

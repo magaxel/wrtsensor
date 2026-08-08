@@ -790,7 +790,8 @@ def resolve_infra_parents(
     fdb_by_host: dict[str, dict[str, str]],
     self_macs: dict[str, str],
     gateway_host: str = "",
-) -> dict[str, dict[str, str]]:
+    port_bytes_by_host: dict[str, dict[str, dict[str, int | None]]] | None = None,
+) -> dict[str, dict[str, str | int]]:
     """Resolve each AP's uplink parent from other hosts' FDB tables.
 
     A host's own MAC never appears in its own FDB dump (filtered as a "self"
@@ -854,7 +855,20 @@ def resolve_infra_parents(
         if candidates:
             *_, parent_host, port = min(candidates)
             m = re.search(r"(\d+)$", port)
-            result[host] = {"host": parent_host, "port": m.group(1) if m else port}
+            entry: dict[str, str | int] = {
+                "host": parent_host,
+                "port": m.group(1) if m else port,
+            }
+            # The parent port relays everything behind this host, so
+            # resolve_port_links (which needs a lone MAC) can't attribute its
+            # negotiated speed. Only one cable is in it, so it IS this host's
+            # link speed.
+            if port_bytes_by_host:
+                pb = port_bytes_by_host.get(parent_host, {}).get(port)
+                speed = pb.get("speed") if pb else None
+                if speed:
+                    entry["link_speed"] = speed
+            result[host] = entry
     _break_parent_cycles(result)
     return result
 
@@ -2622,8 +2636,12 @@ def main() -> None:
     # back to attaching it directly under the gateway.
     host_topology: dict[str, dict[str, str | None]] = {}
     infra_parents = resolve_infra_parents(
-        fdb_by_host, self_macs, gateway_host=gw_ip_only
+        fdb_by_host,
+        self_macs,
+        gateway_host=gw_ip_only,
+        port_bytes_by_host=port_bytes_by_host,
     )
+    infra_link_speeds: dict[str, int] = {}
     for ap_host in ap_hosts:
         ap_ip = ap_host.split("@")[-1]
         parent = infra_parents.get(ap_ip)
@@ -2631,6 +2649,9 @@ def main() -> None:
             "parent_host": parent["host"] if parent else None,
             "parent_port": parent["port"] if parent else None,
         }
+        speed = parent.get("link_speed") if parent else None
+        if speed:
+            infra_link_speeds[ap_ip] = int(speed)
 
     # Inject AP IPv6 addresses into ndp (APs never appear in gateway's NDP with global addresses)
     for ap_ip, ap_ip6 in ap_ip6_map.items():
@@ -2726,6 +2747,12 @@ def main() -> None:
         if d.connection != "wifi" and d.tx_rate is None and d.mac in port_links:
             d.tx_rate = port_links[d.mac]
             d.rx_rate = port_links[d.mac]
+        elif d.connection != "wifi" and d.tx_rate is None and d.ip in infra_link_speeds:
+            # APs and switches never reach the branch above: their port relays
+            # every device behind them, so it is never the lone MAC that
+            # resolve_port_links requires.
+            d.tx_rate = infra_link_speeds[d.ip]
+            d.rx_rate = infra_link_speeds[d.ip]
 
     # Aggregate client rates onto AP devices; inject WAN rates onto gateway device
     ap_rx: dict[str, int] = {}
